@@ -58,7 +58,7 @@ def groupDeps(group, names, version) {
 ext {
     newaSrcJavaVersion = JavaVersion.toVersion(srcJavaVersion)
 
-    isRelease = !version.endsWith('-SNAPSHOT')
+    isRelease = !projectVersion.endsWith('-SNAPSHOT')
 
     sonatypeReleasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
     sonatypeSnapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
