@@ -1,9 +1,9 @@
 rootProject.name=projectName
 
 include (
-        'common',
-        'rest',
-        'websocket',
-        'all'
+        'newa-common',
+        'newa-rest',
+        'newa-websocket',
+        'newa-all'
 )
 

@@ -98,9 +98,10 @@ def projectPom = {
     }
 }
 
-def commonProject = project(':common')
-def restProject = project(':rest')
-def websocketProject = project(':websocket')
+def commonProject = project(':newa-common')
+def restProject = project(':newa-rest')
+def websocketProject = project(':newa-websocket')
+def allProject = project(':newa-all')
 
 subprojects {
     apply plugin: 'java-library'
@@ -196,7 +197,7 @@ configure([commonProject,
 
     publishing {
         publications {
-            common(MavenPublication) {
+            newaCommon(MavenPublication) {
                 from components.java
                 pom(projectPom)
             }
@@ -218,7 +219,7 @@ configure([commonProject,
         if (signingKey) {
             useInMemoryPgpKeys(signingKey, signingPassword)
         }
-        sign publishing.publications.common
+        sign publishing.publications.newa
     }
 
     tasks.withType(Sign) {
@@ -226,15 +227,15 @@ configure([commonProject,
     }
 }
 
-project(':common') {
+configure(commonProject) {
     dependencies {
         implementation "io.github.green4j:green-jelly:$greenJellyVersion"
     }
 }
 
-project(':rest') {
+configure(restProject) {
     dependencies {
-        implementation(project(':common'))
+        implementation(commonProject)
         implementation "io.github.green4j:green-jelly:$greenJellyVersion"
         implementation(groupDeps('io.netty', [
                 'netty-buffer',
@@ -249,9 +250,9 @@ project(':rest') {
     }
 }
 
-project(':websocket') {
+configure(websocketProject) {
     dependencies {
-        implementation(project(':common'))
+        implementation(commonProject)
         implementation(groupDeps('io.netty', [
                 'netty-buffer',
                 'netty-codec',
@@ -265,7 +266,7 @@ project(':websocket') {
     }
 }
 
-project(':all') {
+configure(allProject) {
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
     apply plugin: 'com.github.johnrengelman.shadow'
@@ -304,7 +305,7 @@ project(':all') {
 
     publishing {
         publications {
-            all(MavenPublication) {
+            newaAll(MavenPublication) {
                 artifact shadowJar
                 artifact sourcesJar
                 artifact javadocJar
@@ -328,7 +329,7 @@ project(':all') {
         if (signingKey) {
             useInMemoryPgpKeys(signingKey, signingPassword)
         }
-        sign publishing.publications.all
+        sign publishing.publications.newaAll
     }
 
     tasks.withType(Sign) {
