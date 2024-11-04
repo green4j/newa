@@ -123,8 +123,6 @@ subprojects {
     }
 
     jar {
-        archiveBaseName = projectName
-        archiveAppendix = project.name
         manifest {
             attributes 'Implementation-Title': projectName,
                     'Implementation-Version': projectVersion,
@@ -132,17 +130,6 @@ subprojects {
         }
         includeEmptyDirs = false
     }
-
-    sourcesJar {
-        archiveBaseName = projectName
-        archiveAppendix = project.name
-    }
-
-    javadocJar {
-        archiveBaseName = projectName
-        archiveAppendix = project.name
-    }
-
 }
 
 configure([commonProject,
