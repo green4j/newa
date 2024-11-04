@@ -2,11 +2,11 @@ name: Build CI
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     types: [opened, synchronize]
     branches:
-      - master
+      - main
 env:
   GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.java.installations.auto-detect=false -Dorg.gradle.warning.mode=fail"
 jobs:
