@@ -1,0 +1,9 @@
+rootProject.name=projectName
+
+include (
+        'common',
+        'rest',
+        'websocket',
+        'all'
+)
+

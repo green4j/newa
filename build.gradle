@@ -1,0 +1,350 @@
+/**
+ * MIT License
+ *
+ * Copyright (c) 2023-2024 Anatoly Gudkov and others.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+
+
+plugins {
+    id 'com.github.johnrengelman.shadow' version '7.1.2' apply false
+}
+
+defaultTasks 'clean', 'build'
+
+def getConfigProperty(final String propertyName) {
+    String value = project.findProperty(propertyName)
+    if (!value) {
+        value = System.getenv(propertyName)
+        if (!value) {
+            return null
+        }
+    }
+    return value.trim()
+}
+
+def groupDeps(group, names, version) {
+    def deps = []
+    names.each { it -> {
+        def nameAndClassifier = it.split(':')
+        if (nameAndClassifier.size() < 2) {
+            deps += [group: group, name: nameAndClassifier[0], version: version]
+        } else {
+            deps += [group: group, name: nameAndClassifier[0], version: version, classifier: nameAndClassifier[1]]
+        }
+    }
+    }
+    return deps
+}
+
+ext {
+    newaSrcJavaVersion = JavaVersion.toVersion(srcJavaVersion)
+
+    isRelease = !version.endsWith('-SNAPSHOT')
+
+    sonatypeReleasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
+    sonatypeSnapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+    sonatypeUsername = getConfigProperty('SONATYPE_USERNAME')
+    sonatypePassword = getConfigProperty('SONATYPE_PASSWORD')
+
+    signingKey = getConfigProperty('SIGNING_GPG_SECRET_KEY')    // ascii-armored secret key
+    signingPassword = getConfigProperty('SIGNING_GPG_PASSWORD') // plain text
+}
+
+def projectPom = {
+    name = projectName
+    // artifactId can be defined here optionally
+    description = 'A minimalistic, GC-free, stream-oriented JSON parser and generator.'
+    url = 'https://github.com/green4j/newa'
+
+    scm {
+        connection = 'scm:git:https://github.com/green4j/newa.git'
+        developerConnection = 'scm:git:https://github.com/green4j/newa.git'
+        url = 'https://github.com/green4j/newa.git'
+    }
+
+    licenses {
+        license {
+            name = 'MIT License'
+            url = 'https://opensource.org/licenses/MIT'
+        }
+    }
+
+    developers {
+        developer {
+            id = 'anatolygudkov'
+            name = 'Anatoly Gudkov'
+            email = 'gudkovanatoly@hotmail.com'
+            url = 'https://github.com/anatolygudkov'
+        }
+    }
+}
+
+def commonProject = project(':common')
+def restProject = project(':rest')
+def websocketProject = project(':websocket')
+
+subprojects {
+    apply plugin: 'java-library'
+
+    group = projectGroup
+    version = projectVersion
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+
+    java {
+        withSourcesJar()
+        withJavadocJar()
+    }
+
+    javadoc {
+        failOnError false
+    }
+
+    jar {
+        archiveBaseName = projectName
+        archiveAppendix = project.name
+        manifest {
+            attributes 'Implementation-Title': projectName,
+                    'Implementation-Version': projectVersion,
+                    'Implementation-Vendor': projectAuthor
+        }
+        includeEmptyDirs = false
+    }
+
+    sourcesJar {
+        archiveBaseName = projectName
+        archiveAppendix = project.name
+    }
+
+    javadocJar {
+        archiveBaseName = projectName
+        archiveAppendix = project.name
+    }
+
+}
+
+configure([commonProject,
+           restProject,
+           websocketProject]) {
+    apply plugin: 'checkstyle'
+    apply plugin: 'jacoco'
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+
+    dependencies {
+        testImplementation "org.junit.jupiter:junit-jupiter:${jupiterVersion}"
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+        checkstyle "com.puppycrawl.tools:checkstyle:${checkstyleVersion}"
+    }
+
+    compileJava {
+        sourceCompatibility = newaSrcJavaVersion
+        targetCompatibility = newaSrcJavaVersion
+
+        options.compilerArgs.addAll(['-Xlint:all', '-Werror']) // enable all warnings and treat them as errors
+        options.encoding = 'UTF-8'
+        options.deprecation = true
+    }
+
+    checkstyle {
+        toolVersion = "${checkstyleVersion}"
+    }
+
+    test {
+        useJUnitPlatform()
+
+        testLogging {
+            events 'skipped', 'failed'
+            showStandardStreams = true
+            exceptionFormat = 'full'
+            afterSuite { desc, result ->
+                if (!desc.parent) {
+                    println "Results: ${result.resultType} (${result.testCount} tests, " +
+                            "${result.successfulTestCount} successes, " +
+                            "${result.failedTestCount} failures, " +
+                            "${result.skippedTestCount} skipped)"
+                }
+            }
+        }
+    }
+
+    check {
+        dependsOn jacocoTestReport
+    }
+
+    javadoc {
+        title = "<h1>${projectName}</h1>"
+        options.bottom = "<i>Copyright &#169; 2023-2024 ${projectAuthor}. All Rights Reserved.</i>"
+        options.encoding = 'UTF-8'
+        options.docEncoding = 'UTF-8'
+        options.charSet = 'UTF-8'
+        if (JavaVersion.current().isJava10Compatible()) {
+            options.addBooleanOption 'html5', true
+        }
+        options.addStringOption('Xdoclint:all,-missing', '-quiet')
+    }
+
+    publishing {
+        publications {
+            common(MavenPublication) {
+                from components.java
+                pom(projectPom)
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'MavenCentral'
+                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                credentials {
+                    username = sonatypeUsername
+                    password = sonatypePassword
+                }
+            }
+        }
+    }
+
+    signing {
+        if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications.common
+    }
+
+    tasks.withType(Sign) {
+        onlyIf { isRelease }
+    }
+}
+
+project(':common') {
+    dependencies {
+        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
+    }
+}
+
+project(':rest') {
+    dependencies {
+        implementation(project(':common'))
+        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
+        implementation(groupDeps('io.netty', [
+                'netty-buffer',
+                'netty-codec',
+                'netty-codec-http',
+                'netty-transport',
+                'netty-transport-classes-epoll',
+                'netty-transport-native-epoll:linux-x86_64',
+                'netty-transport-native-epoll:linux-aarch_64',
+                'netty-transport-classes-epoll',
+        ], nettyVersion))
+    }
+}
+
+project(':websocket') {
+    dependencies {
+        implementation(project(':common'))
+        implementation(groupDeps('io.netty', [
+                'netty-buffer',
+                'netty-codec',
+                'netty-codec-http',
+                'netty-transport',
+                'netty-transport-classes-epoll',
+                'netty-transport-native-epoll:linux-x86_64',
+                'netty-transport-native-epoll:linux-aarch_64',
+                'netty-transport-classes-epoll',
+        ], nettyVersion))
+    }
+}
+
+project(':all') {
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+    apply plugin: 'com.github.johnrengelman.shadow'
+
+    dependencies {
+        implementation commonProject
+        implementation restProject
+        implementation websocketProject
+    }
+
+    shadowJar {
+        archiveBaseName = jar.archiveBaseName
+        archiveAppendix = jar.archiveAppendix
+        archiveClassifier = ''
+        manifest.attributes(
+                'Implementation-Title': projectName,
+                'Implementation-Version': projectVersion,
+                'Implementation-Vendor': projectAuthor,
+                'Automatic-Module-Name': 'io.github.green4j.newa.all')
+    }
+
+    jar.finalizedBy shadowJar
+
+    sourcesJar {
+        from files(
+                commonProject.sourceSets.main.allSource,
+                restProject.sourceSets.main.allSource,
+                websocketProject.sourceSets.main.allSource)
+    }
+
+    javadoc {
+        source += commonProject.sourceSets.main.allJava
+        source += restProject.sourceSets.main.allJava
+        source += websocketProject.sourceSets.main.allJava
+    }
+
+    publishing {
+        publications {
+            all(MavenPublication) {
+                artifact shadowJar
+                artifact sourcesJar
+                artifact javadocJar
+                pom(projectPom)
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'MavenCentral'
+                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                credentials {
+                    username = sonatypeUsername
+                    password = sonatypePassword
+                }
+            }
+        }
+    }
+
+    signing {
+        if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications.all
+    }
+
+    tasks.withType(Sign) {
+        onlyIf { isRelease }
+    }
+}
