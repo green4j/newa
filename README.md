@@ -1,5 +1,7 @@
 ## Netty-based Web API (NeWA)
 
+Netty-based minimalistic REST and Websocket server framework.
+
 ### REST Server
 ```
 public class HelloRestServer extends DefaultRestServerStarter {

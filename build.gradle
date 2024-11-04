@@ -72,7 +72,7 @@ ext {
 def projectPom = {
     name = projectName
     // artifactId can be defined here optionally
-    description = 'A minimalistic, GC-free, stream-oriented JSON parser and generator.'
+    description = 'Netty-based minimalistic REST and Websocket server framework.'
     url = 'https://github.com/green4j/newa'
 
     scm {
@@ -130,6 +130,12 @@ subprojects {
                     'Implementation-Vendor': projectAuthor
         }
         includeEmptyDirs = false
+    }
+
+    tasks.withType(Sign).configureEach {
+        onlyIf {
+            isRelease && gradle.taskGraph.hasTask(tasks.publish)
+        }
     }
 }
 
@@ -227,10 +233,6 @@ configure(commonProject) {
         }
         sign publishing.publications.newaCommon
     }
-
-    tasks.withType(Sign) {
-        onlyIf { isRelease }
-    }
 }
 
 configure(restProject) {
@@ -275,10 +277,6 @@ configure(restProject) {
         }
         sign publishing.publications.newaRest
     }
-
-    tasks.withType(Sign) {
-        onlyIf { isRelease }
-    }
 }
 
 configure(websocketProject) {
@@ -322,10 +320,6 @@ configure(websocketProject) {
         }
         sign publishing.publications.newaWebsocket
     }
-
-    tasks.withType(Sign) {
-        onlyIf { isRelease }
-    }
 }
 
 configure(allProject) {
@@ -368,6 +362,7 @@ configure(allProject) {
     publishing {
         publications {
             newaAll(MavenPublication) {
+                //artifactId = project.name
                 artifact shadowJar
                 artifact sourcesJar
                 artifact javadocJar
@@ -392,9 +387,5 @@ configure(allProject) {
             useInMemoryPgpKeys(signingKey, signingPassword)
         }
         sign publishing.publications.newaAll
-    }
-
-    tasks.withType(Sign) {
-        onlyIf { isRelease }
     }
 }
