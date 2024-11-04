@@ -60,14 +60,20 @@ ext {
 
     isRelease = !projectVersion.endsWith('-SNAPSHOT')
 
-    sonatypeReleasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
-    sonatypeSnapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+    sonatypeReleasesRepoUrl = isRelease
+            ? 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
+            : 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+
     sonatypeUsername = getConfigProperty('SONATYPE_USERNAME')
     sonatypePassword = getConfigProperty('SONATYPE_PASSWORD')
 
     signingKey = getConfigProperty('SIGNING_GPG_SECRET_KEY')    // ascii-armored secret key
     signingPassword = getConfigProperty('SIGNING_GPG_PASSWORD') // plain text
 }
+
+println "VERSION: $projectVersion"
+println "RELEASE: $isRelease"
+println "SONATYPE REPOSITORY: $sonatypeReleasesRepoUrl"
 
 def projectPom = {
     name = projectName
@@ -218,7 +224,7 @@ configure(commonProject) {
         repositories {
             maven {
                 name = 'MavenCentral'
-                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                url(sonatypeReleasesRepoUrl)
                 credentials {
                     username = sonatypeUsername
                     password = sonatypePassword
@@ -262,7 +268,7 @@ configure(restProject) {
         repositories {
             maven {
                 name = 'MavenCentral'
-                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                url(sonatypeReleasesRepoUrl)
                 credentials {
                     username = sonatypeUsername
                     password = sonatypePassword
@@ -305,7 +311,7 @@ configure(websocketProject) {
         repositories {
             maven {
                 name = 'MavenCentral'
-                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                url(sonatypeReleasesRepoUrl)
                 credentials {
                     username = sonatypeUsername
                     password = sonatypePassword
@@ -373,7 +379,7 @@ configure(allProject) {
         repositories {
             maven {
                 name = 'MavenCentral'
-                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                url(sonatypeReleasesRepoUrl)
                 credentials {
                     username = sonatypeUsername
                     password = sonatypePassword
