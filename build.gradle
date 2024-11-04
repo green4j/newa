@@ -194,6 +194,12 @@ configure([commonProject,
         }
         options.addStringOption('Xdoclint:all,-missing', '-quiet')
     }
+}
+
+configure(commonProject) {
+    dependencies {
+        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
+    }
 
     publishing {
         publications {
@@ -219,17 +225,11 @@ configure([commonProject,
         if (signingKey) {
             useInMemoryPgpKeys(signingKey, signingPassword)
         }
-        sign publishing.publications.newa
+        sign publishing.publications.newaCommon
     }
 
     tasks.withType(Sign) {
         onlyIf { isRelease }
-    }
-}
-
-configure(commonProject) {
-    dependencies {
-        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
     }
 }
 
@@ -248,6 +248,37 @@ configure(restProject) {
                 'netty-transport-classes-epoll',
         ], nettyVersion))
     }
+
+    publishing {
+        publications {
+            newaRest(MavenPublication) {
+                from components.java
+                pom(projectPom)
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'MavenCentral'
+                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                credentials {
+                    username = sonatypeUsername
+                    password = sonatypePassword
+                }
+            }
+        }
+    }
+
+    signing {
+        if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications.newaRest
+    }
+
+    tasks.withType(Sign) {
+        onlyIf { isRelease }
+    }
 }
 
 configure(websocketProject) {
@@ -263,6 +294,37 @@ configure(websocketProject) {
                 'netty-transport-native-epoll:linux-aarch_64',
                 'netty-transport-classes-epoll',
         ], nettyVersion))
+    }
+
+    publishing {
+        publications {
+            newaWebsocket(MavenPublication) {
+                from components.java
+                pom(projectPom)
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'MavenCentral'
+                url(isRelease ? sonatypeReleasesRepoUrl : sonatypeSnapshotsRepoUrl)
+                credentials {
+                    username = sonatypeUsername
+                    password = sonatypePassword
+                }
+            }
+        }
+    }
+
+    signing {
+        if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications.newaWebsocket
+    }
+
+    tasks.withType(Sign) {
+        onlyIf { isRelease }
     }
 }
 
