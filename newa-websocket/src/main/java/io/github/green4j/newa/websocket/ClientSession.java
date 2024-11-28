@@ -1,5 +1,6 @@
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.newa.lang.Executor;
 import io.github.green4j.newa.lang.Sender;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
@@ -10,6 +11,8 @@ public class ClientSession implements Sender, Closeable {
 
     private final ClientSessions owner;
     private final ClientSessionContext context;
+
+    private volatile boolean closed;
 
     public ClientSession(final ClientSessions owner,
                          final ClientSessionContext context) {
@@ -39,6 +42,14 @@ public class ClientSession implements Sender, Closeable {
         context.receiver().receive(frame, this);
     }
 
+    public Executor executor() {
+        return work -> context.channel().eventLoop().execute(work);
+    }
+
+    public boolean isClosed() {
+        return closed;
+    }
+
     @Override
     public final void close() {
         try {
@@ -47,6 +58,8 @@ public class ClientSession implements Sender, Closeable {
                 c.close();
             }
         } finally {
+            closed = true;
+
             owner.closeClientSession(this);
         }
     }

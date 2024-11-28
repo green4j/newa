@@ -1,7 +1,7 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ByteArray;
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineBuilder;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 public class TxtRestHandler extends TextPlainRestHandler {
@@ -15,7 +15,7 @@ public class TxtRestHandler extends TextPlainRestHandler {
     protected final ByteArray doHandle(final FullHttpRequest request,
                                        final PathParameters pathParameters) {
         // to get rid of mem alloc?
-        final LineFormatter output = new LineFormatter(); // TODO: another appendable + thread local
+        final LineBuilder output = new LineBuilder(); // TODO: another appendable + thread local
         handle.doHandle(request, pathParameters, output);
         final String txt = output.toString();
         final byte[] txtBytes = txt.getBytes();

@@ -165,16 +165,18 @@ public final class WsApiServer implements
         });
 
         final ServerBootstrap bootstrap = new ServerBootstrap();
+
+        final WsApiServerInitializer serverInit = new WsApiServerInitializer(
+                "/websocket/v" + parameters.apiVersion,
+                sslCtx,
+                sessionManager,
+                sendingResult,
+                channels);
+
         bootstrap.group(bossGroup, workerGroup)
                 .option(ChannelOption.SO_BACKLOG, 1024)
                 .channel(USE_EPOLL ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
-                .childHandler(new WsApiServerInitializer(
-                        "/websocket/v" + parameters.apiVersion,
-                        sslCtx,
-                        sessionManager,
-                        sendingResult,
-                        channels)
-                );
+                .childHandler(serverInit);
 
         final ChannelFuture bindFuture;
         final String listenTo;
@@ -193,7 +195,8 @@ public final class WsApiServer implements
 
         final ChannelFuture closeFuture = ch.closeFuture();
 
-        System.out.println("WebSocket server is listening to " + listenTo + "...");
+        System.out.println("WebSocket server is listening to " + listenTo
+                + serverInit.websocketPath() + "...");
 
         return closeFuture;
     }

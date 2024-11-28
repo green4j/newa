@@ -1,7 +1,7 @@
 package io.github.green4j.newa.rest;
 
 import com.sun.management.ThreadMXBean;
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineAppendable;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.lang.management.LockInfo;
@@ -19,7 +19,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
     @Override
     public void doHandle(final FullHttpRequest request,
                          final PathParameters pathParameters,
-                         final LineFormatter output) {
+                         final LineAppendable output) {
 
         final ThreadMXBean threadMXBean =
                 (ThreadMXBean) ManagementFactory.getThreadMXBean(); // unchecked
@@ -111,7 +111,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
         }
     }
 
-    private static void addStackTrace(final LineFormatter to,
+    private static void addStackTrace(final LineAppendable to,
                                       final ThreadInfo threadInfo,
                                       final StringBuilder sb) {
         final Thread.State ts = threadInfo.getThreadState();

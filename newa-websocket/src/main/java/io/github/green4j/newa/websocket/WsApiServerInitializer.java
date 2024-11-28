@@ -30,6 +30,10 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
         this.receiver = receiver;
     }
 
+    public String websocketPath() {
+        return websocketPath;
+    }
+
     @Override
     public void initChannel(final SocketChannel ch) throws Exception {
         final ChannelPipeline pipeline = ch.pipeline();

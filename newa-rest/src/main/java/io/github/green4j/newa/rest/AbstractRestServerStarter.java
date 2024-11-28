@@ -2,7 +2,7 @@ package io.github.green4j.newa.rest;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public abstract class DefaultRestServerStarter implements AutoCloseable {
+public abstract class AbstractRestServerStarter {
     protected final String apiName;
     protected final int apiVersion;
     protected final String componentName;
@@ -12,12 +12,12 @@ public abstract class DefaultRestServerStarter implements AutoCloseable {
 
     private Switch aSwitch;
 
-    public DefaultRestServerStarter(final String apiName,
-                                    final int apiVersion,
-                                    final String componentName,
-                                    final String componentBuildVersion,
-                                    final String localIfc,
-                                    final int port) {
+    protected AbstractRestServerStarter(final String apiName,
+                                        final int apiVersion,
+                                        final String componentName,
+                                        final String componentBuildVersion,
+                                        final String localIfc,
+                                        final int port) {
         this.apiName = apiName;
         this.apiVersion = apiVersion;
         this.componentName = componentName;
@@ -62,19 +62,18 @@ public abstract class DefaultRestServerStarter implements AutoCloseable {
             }
         } finally {
             try {
-                close();
+                release();
             } finally {
                 System.out.println("Server stopped.");
             }
         }
     }
 
-    final Switch aSwitch() {
+    public final Switch aSwitch() {
         return aSwitch;
     }
 
-    @Override
-    public void close() {
+    public void release() {
     }
 
     protected abstract RestApi buildRestApi(RestApi.Builder builder);

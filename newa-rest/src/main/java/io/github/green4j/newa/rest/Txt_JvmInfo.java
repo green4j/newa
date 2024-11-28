@@ -1,7 +1,7 @@
 package io.github.green4j.newa.rest;
 
 import com.sun.management.OperatingSystemMXBean;
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineAppendable;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.lang.management.GarbageCollectorMXBean;
@@ -24,7 +24,7 @@ public class Txt_JvmInfo implements TxtRestHandle {
     @Override
     public void doHandle(final FullHttpRequest request,
                          final PathParameters pathParameters,
-                         final LineFormatter output) {
+                         final LineAppendable output) {
         final RuntimeMXBean runtimeMXBean =
                 ManagementFactory.getRuntimeMXBean();
         final MemoryMXBean memoryMXBean =
@@ -68,7 +68,7 @@ public class Txt_JvmInfo implements TxtRestHandle {
         dumpGcInfo(output, garbageCollectorMXBeans);
     }
 
-    private static void dumpCpuInfo(final LineFormatter output,
+    private static void dumpCpuInfo(final LineAppendable output,
                                     final OperatingSystemMXBean operatingSystemMXBean) {
         output.append("\n    number: ");
         output.append(Integer.toString(operatingSystemMXBean.getAvailableProcessors()));
@@ -78,7 +78,7 @@ public class Txt_JvmInfo implements TxtRestHandle {
         output.append(String.format("\n%.1f%%", getCpuLoad(operatingSystemMXBean)));
     }
 
-    private static void dumpMemoryInfo(final LineFormatter output,
+    private static void dumpMemoryInfo(final LineAppendable output,
                                        final OperatingSystemMXBean operatingSystemMXBean,
                                        final MemoryUsage heapUsage,
                                        final MemoryUsage nonHeapUsage) {
@@ -107,7 +107,7 @@ public class Txt_JvmInfo implements TxtRestHandle {
         output.append(toMemorySize(nonHeapUsage.getCommitted()));
     }
 
-    private static void dumpGcInfo(final LineFormatter output,
+    private static void dumpGcInfo(final LineAppendable output,
                                    final List<GarbageCollectorMXBean> garbageCollectorMXBeans) {
         output.append("    collectors [")
                 .append(Integer.toString(garbageCollectorMXBeans.size())).append("]\n");

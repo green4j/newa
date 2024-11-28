@@ -1,7 +1,7 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ByteArray;
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineBuilder;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 import static io.netty.handler.codec.http.HttpHeaderValues.TEXT_PLAIN;
@@ -20,7 +20,7 @@ public abstract class TextPlainRestHandler implements RestHandle {
                     content.length()
             );
         } catch (final Exception e) {
-            final LineFormatter errorText = new LineFormatter();
+            final LineBuilder errorText = new LineBuilder();
             errorText.appendln("Internal Server Error");
             errorText.append("Message: ").appendln(e.getMessage());
             errorText.appendln("Stack Trace:");

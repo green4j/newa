@@ -1,7 +1,8 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ByteArray;
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineAppendable;
+import io.github.green4j.newa.text.LineBuilder;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.nio.charset.StandardCharsets;
@@ -20,7 +21,7 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
             synchronized (this) {
                 if (content == null) {
                     // to get rid of mem alloc?
-                    final LineFormatter output = new LineFormatter(); // TODO: another appendable + thread local
+                    final LineBuilder output = new LineBuilder(); // TODO: another appendable + thread local
                     doHandle(output);
                     final String txt = output.toString();
                     final byte[] bytes = txt.getBytes(StandardCharsets.UTF_8);
@@ -47,5 +48,5 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
         return content;
     }
 
-    protected abstract void doHandle(LineFormatter output);
+    protected abstract void doHandle(LineAppendable output);
 }

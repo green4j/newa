@@ -1,6 +1,6 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.newa.text.LineFormatter;
+import io.github.green4j.newa.text.LineAppendable;
 
 import java.util.List;
 
@@ -16,7 +16,7 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
     }
 
     @Override
-    protected void doHandle(final LineFormatter output) {
+    protected void doHandle(final LineAppendable output) {
         final String componentName = builder.componentName();
 
         final boolean hasMetaInfo = componentName != null && !componentName.isBlank();
