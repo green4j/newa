@@ -16,6 +16,7 @@ public abstract class MapBase implements Cloneable {
         this(16);
     }
 
+    @SuppressWarnings("this-escape")
     protected MapBase(final int capacity) {
         int cap = capacity;
         if (cap < MIN_CAPACITY) {

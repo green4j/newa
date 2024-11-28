@@ -5,7 +5,7 @@ import java.util.HashMap;
 public class CharSequenceToObjectMap<T> extends HashMap<String, T> {
     static final long serialVersionUID = -5687516993124229947L;
 
-    private final KeyBuffer buffer = new KeyBuffer();
+    private final transient KeyBuffer buffer = new KeyBuffer();
 
     public CharSequenceToObjectMap() {
         super();

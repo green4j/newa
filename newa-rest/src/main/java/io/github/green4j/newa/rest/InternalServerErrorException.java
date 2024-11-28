@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 public class InternalServerErrorException extends RestException {
     static final long serialVersionUID = -2387516993124229947L;
 
-    private final AsciiString contentType;
+    private final transient AsciiString contentType;
     private final byte[] content;
     private final int offset;
     private final int length;
