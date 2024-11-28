@@ -46,9 +46,7 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
                     continue; // unknown entity?
                 }
 
-                if (subscriptions.add(session)) {
-                    onClientSessionSubscribed(session, subscriptions);
-                }
+                subscriptions.add(session);
             }
         } catch (final Exception e) {
             e.printStackTrace(); // TODO: logging
@@ -68,9 +66,7 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
                     continue; // unknown entity?
                 }
 
-                if (subscriptions.remove(session)) {
-                    onClientSessionUnsubscribed(session, subscriptions);
-                }
+                subscriptions.remove(session);
             }
         } catch (final Exception e) {
             e.printStackTrace(); // TODO: logging
@@ -84,10 +80,7 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
             final List<S> currentSubscriptions = allSubscriptions;
             for (int i = 0; i < currentSubscriptions.size(); i++) {
                 final S subscriptions = currentSubscriptions.get(i);
-
-                if (subscriptions.remove(session)) {
-                    onClientSessionUnsubscribed(session, subscriptions);
-                }
+                subscriptions.remove(session);
             }
         });
     }
@@ -140,12 +133,6 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
     protected abstract void doStart();
 
     protected abstract S makeEntitySubscriptions(String id);
-
-    protected abstract void onClientSessionSubscribed(ClientSession clientSession,
-                                                      S entitySubscriptions);
-
-    protected abstract void onClientSessionUnsubscribed(ClientSession clientSession,
-                                                        S entitySubscriptions);
 
     protected abstract void doClose();
 }
