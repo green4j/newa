@@ -1,18 +1,22 @@
 package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.lang.Executor;
+import io.github.green4j.newa.lang.Scheduler;
 import io.github.green4j.newa.lang.Sender;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.util.concurrent.ScheduledFuture;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 
 public class ClientSession implements Sender, Closeable {
-
     private final ClientSessions owner;
     private final ClientSessionContext context;
 
     private volatile boolean closed;
+
+    private Object cookie; // supposed to be used in one single Channel EventLoop's thread
 
     public ClientSession(final ClientSessions owner,
                          final ClientSessionContext context) {
@@ -44,6 +48,16 @@ public class ClientSession implements Sender, Closeable {
 
     public Executor executor() {
         return work -> context.channel().eventLoop().execute(work);
+    }
+
+    public Scheduler scheduler() {
+        return (work, initialDelayMillis, delayMillis) -> {
+            final ScheduledFuture<?> future = context.channel().eventLoop().scheduleWithFixedDelay(work,
+                    initialDelayMillis,
+                    delayMillis,
+                    TimeUnit.MILLISECONDS);
+            return () -> future.cancel(true);
+        };
     }
 
     public boolean isClosed() {
