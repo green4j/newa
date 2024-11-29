@@ -1,11 +1,13 @@
 package io.github.green4j.newa.websocket;
 
+import io.netty.buffer.ByteBuf;
+
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 
 // TODO: Make a closable?
 public class ClientSessions implements ClientSessionsStatistics {
-
     private volatile List<ClientSession> sessions = new ArrayList<>(); // guarded by this
 
     private final ClientSessionsListener listener;
@@ -47,6 +49,22 @@ public class ClientSessions implements ClientSessionsStatistics {
     }
 
     public void send(final CharSequence text) {
+        // TODO: check Thread.currentThread().isInterrupted() while iterating?
+        final List<ClientSession> currentSessions = sessions;
+        for (int i = 0; i < currentSessions.size(); i++) {
+            currentSessions.get(i).send(text); // TODO: wrap with try/catch?
+        }
+    }
+
+    public void send(final CharSequence text, final Charset charset) {
+        // TODO: check Thread.currentThread().isInterrupted() while iterating?
+        final List<ClientSession> currentSessions = sessions;
+        for (int i = 0; i < currentSessions.size(); i++) {
+            currentSessions.get(i).send(text, charset); // TODO: wrap with try/catch?
+        }
+    }
+
+    public void send(final ByteBuf text) {
         // TODO: check Thread.currentThread().isInterrupted() while iterating?
         final List<ClientSession> currentSessions = sessions;
         for (int i = 0; i < currentSessions.size(); i++) {

@@ -196,7 +196,9 @@ public final class WsApiServer implements
         final ChannelFuture closeFuture = ch.closeFuture();
 
         System.out.println("WebSocket server is listening to " + listenTo
-                + serverInit.websocketPath() + "...");
+                + " to work on "
+                + (sslCtx == null ? "ws:" : "wss:")
+                + listenTo + serverInit.websocketPath() + "...");
 
         return closeFuture;
     }
