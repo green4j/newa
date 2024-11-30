@@ -28,6 +28,10 @@ public class ClientSession implements Sender, Closeable {
         this.context = context;
     }
 
+    public io.netty.channel.Channel channel() {
+        return context.channel();
+    }
+
     public void send(final ByteBuf frame) {
         final io.netty.channel.Channel channel = context.channel();
         if (!channel.isWritable()) {

@@ -3,9 +3,12 @@ package io.github.green4j.newa.websocket;
 import io.github.green4j.newa.collections.CharSequenceToObjectMap;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public abstract class Channel<S extends EntitySubscriptions> implements AutoCloseable {
+    private static final List<String> EMPTY_LIST = Collections.emptyList();
+
     private final CharSequenceToObjectMap<S> entitySubscriptionsMap =
             new CharSequenceToObjectMap<>(); // guarded by this
 
@@ -42,7 +45,26 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
                 final String id = ids.get(i);
 
                 final S subscriptions = getOrCreateEntitySubscriptions(id);
+                subscriptions.add(session);
+            }
+        } catch (final Exception e) {
+            e.printStackTrace(); // TODO: logging
+        }
+    }
+
+    public final List<String> subscribeKnown(final ClientSession session,
+                                             final List<String> ids) {
+        List<String> unknown = null;
+        try {
+            for (int i = 0; i < ids.size(); i++) {
+                final String id = ids.get(i);
+
+                final S subscriptions = getEntitySubscriptions(id);
                 if (subscriptions == null) {
+                    if (unknown == null) {
+                        unknown = new ArrayList<>();
+                    }
+                    unknown.add(id);
                     continue; // unknown entity?
                 }
 
@@ -51,6 +73,7 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
         } catch (final Exception e) {
             e.printStackTrace(); // TODO: logging
         }
+        return unknown == null ? EMPTY_LIST : unknown;
     }
 
     // subscribe and unsubscribe for one session must be called from one single thread
@@ -116,11 +139,11 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
                 }
 
                 entitySubscriptionsMap.put(sid, result);
-            }
 
-            final List<S> newEntitySubscriptions = new ArrayList<>(allSubscriptions);
-            newEntitySubscriptions.add(result);
-            allSubscriptions = newEntitySubscriptions;
+                final List<S> newEntitySubscriptions = new ArrayList<>(allSubscriptions);
+                newEntitySubscriptions.add(result);
+                allSubscriptions = newEntitySubscriptions;
+            }
         }
 
         return result;

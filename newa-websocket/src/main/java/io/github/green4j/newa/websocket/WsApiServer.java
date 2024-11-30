@@ -129,6 +129,10 @@ public final class WsApiServer implements
     }
 
     public ChannelFuture start(final Channels channels) throws Exception {
+        return start(channels, null);
+    }
+
+    public ChannelFuture start(final Channels channels, final WsApiServerListener listener) throws Exception {
         final SslContext sslCtx;
         if (parameters.useSsl) {
             final SelfSignedCertificate ssc = new SelfSignedCertificate();
@@ -144,7 +148,9 @@ public final class WsApiServer implements
 
             @Override
             public void onBackPressure(final ClientSession session) {
-                //System.out.println("Slow consumer");
+                if (listener != null) {
+                    listener.onBackPressure(session);
+                }
             }
 
             @Override
@@ -156,11 +162,17 @@ public final class WsApiServer implements
         sessionManager = new ClientSessions(new ClientSessionsListener() {
             @Override
             public void onSessionOpened(final ClientSession session) {
+                if (listener != null) {
+                    listener.onSessionOpened(session);
+                }
             }
 
             @Override
             public void onSessionClosed(final ClientSession session) {
                 channels.unsubscribeAll(session);
+                if (listener != null) {
+                    listener.onSessionClosed(session);
+                }
             }
         });
 
@@ -196,9 +208,9 @@ public final class WsApiServer implements
         final ChannelFuture closeFuture = ch.closeFuture();
 
         System.out.println("WebSocket server is listening to " + listenTo
-                + " to work on "
-                + (sslCtx == null ? "ws:" : "wss:")
-                + listenTo + serverInit.websocketPath() + "...");
+                + "... Websocket URL: "
+                + (sslCtx == null ? "ws://" : "wss://")
+                + listenTo + serverInit.websocketPath());
 
         return closeFuture;
     }
