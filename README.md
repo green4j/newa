@@ -4,7 +4,7 @@ Netty-based minimalistic REST and Websocket server framework.
 
 ### REST Server
 ```
-public class HelloRestServer extends DefaultRestServerStarter {
+public class HelloRestServer extends AbstractRestServerStarter {
 
     public HelloRestServer() {
         super("Hello API",

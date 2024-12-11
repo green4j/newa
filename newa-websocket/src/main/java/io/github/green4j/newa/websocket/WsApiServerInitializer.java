@@ -11,6 +11,7 @@ import io.netty.handler.ssl.SslContext;
 class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
     private final String websocketPath;
     private final SslContext sslCtx;
+    private final boolean withCompression;
     private final int maxRequestContentLength;
     private final ClientSessions sessionManager;
     private final SendingResult sendingResult;
@@ -18,12 +19,14 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
 
     WsApiServerInitializer(final String websocketPath,
                            final SslContext sslCtx,
+                           final boolean withCompression,
                            final int maxRequestContentLength,
                            final ClientSessions sessionManager,
                            final SendingResult sendingResult,
                            final Receiver receiver) {
         this.websocketPath = websocketPath;
         this.sslCtx = sslCtx;
+        this.withCompression = withCompression;
         this.maxRequestContentLength = maxRequestContentLength;
         this.sessionManager = sessionManager;
         this.sendingResult = sendingResult;
@@ -46,7 +49,9 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
 
         pipeline.addLast(new HttpServerCodec());
         pipeline.addLast(new HttpObjectAggregator(maxRequestContentLength));
-        pipeline.addLast(new WebSocketServerCompressionHandler());
+        if (withCompression) {
+            pipeline.addLast(new WebSocketServerCompressionHandler());
+        }
         pipeline.addLast(wsProtocolHandler);
         pipeline.addLast(new WsFrameHandler(wsProtocolHandler));
     }

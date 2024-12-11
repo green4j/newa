@@ -3,26 +3,29 @@ package io.github.green4j.newa.rest;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http.HttpServerExpectContinueHandler;
 import io.netty.handler.codec.http.cors.CorsConfig;
 import io.netty.handler.codec.http.cors.CorsHandler;
 import io.netty.handler.ssl.SslContext;
 
 public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> {
     private final SslContext sslCtx;
+    private final boolean withCompression;
     private final HttpHandler apiHandler;
     private final ErrorHandler errorHandler;
     private final int maxRequestContentLength;
     private final CorsConfig corsConfig;
 
     public RestApiServerInitializer(final SslContext sslCtx,
+                                    final boolean withCompression,
                                     final HttpHandler apiHandler,
                                     final ErrorHandler errorHandler,
                                     final int maxRequestContentLength,
                                     final CorsConfig corsConfig) {
         this.sslCtx = sslCtx;
+        this.withCompression = withCompression;
         this.apiHandler = apiHandler;
         this.errorHandler = errorHandler;
         this.maxRequestContentLength = maxRequestContentLength;
@@ -37,7 +40,9 @@ public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> 
         }
 
         pipeline.addLast(new HttpServerCodec());
-        pipeline.addLast(new HttpServerExpectContinueHandler());
+        if (withCompression) {
+            pipeline.addLast(new HttpContentCompressor());
+        }
         pipeline.addLast(new HttpObjectAggregator(maxRequestContentLength, true));
         if (corsConfig != null) {
             pipeline.addLast(new CorsHandler(corsConfig));

@@ -49,6 +49,8 @@ public final class WsApiServer implements
         private int numberOfWorkers = 0;
         private int soBacklog = 1024;
 
+        private boolean withCompression;
+
         private String pathPrefix = "websocket";
 
         private Builder() {
@@ -94,6 +96,11 @@ public final class WsApiServer implements
 
         public Builder withSoBacklog(final int soBacklog) {
             this.soBacklog = soBacklog;
+            return this;
+        }
+
+        public Builder withCompression() {
+            this.withCompression = true;
             return this;
         }
 
@@ -215,6 +222,7 @@ public final class WsApiServer implements
         final WsApiServerInitializer serverInit = new WsApiServerInitializer(
                 parameters.rootPath(),
                 sslCtx,
+                parameters.withCompression,
                 parameters.maxRequestContentLength,
                 sessionManager,
                 sendingResult,

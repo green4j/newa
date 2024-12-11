@@ -26,7 +26,9 @@ public final class RestApiServer implements AutoCloseable {
                                           final String localIfc,
                                           final int port) {
         return builder(localIfc, port)
-                .withName(name).build();
+                .withName(name)
+                .withCompression()
+                .build();
     }
 
     public static Builder builder(final String localIfc, final int port) {
@@ -52,6 +54,8 @@ public final class RestApiServer implements AutoCloseable {
 
         private int numberOfWorkers = 1;
         private int soBacklog = 1024;
+
+        private boolean withCompression;
 
         private ErrorHandler errorHandler = new TextErrorHandler();
 
@@ -93,6 +97,11 @@ public final class RestApiServer implements AutoCloseable {
 
         public Builder withSoBacklog(final int soBacklog) {
             this.soBacklog = soBacklog;
+            return this;
+        }
+
+        public Builder withCompression() {
+            this.withCompression = true;
             return this;
         }
 
@@ -156,6 +165,7 @@ public final class RestApiServer implements AutoCloseable {
                 .childHandler(
                         new RestApiServerInitializer(
                                 sslCtx,
+                                parameters.withCompression,
                                 restApi,
                                 parameters.errorHandler,
                                 parameters.maxRequestContentLength,
