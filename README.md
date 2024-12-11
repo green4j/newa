@@ -7,9 +7,9 @@ Netty-based minimalistic REST and Websocket server framework.
 public class HelloRestServer extends DefaultRestServerStarter {
 
     public HelloRestServer() {
-        super("HelloAPI",
+        super("Hello API",
                 1,
-                "My HelloAPI Server",
+                "My Hello API Server",
                 "0.0.1",
                 "127.0.0.1",
                 9009);

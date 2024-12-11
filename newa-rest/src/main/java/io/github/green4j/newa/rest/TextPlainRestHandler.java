@@ -1,24 +1,40 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.newa.lang.ByteArray;
-import io.github.green4j.newa.text.LineBuilder;
+import io.github.green4j.jelly.ByteArray;
+import io.github.green4j.newa.lang.Charset;
 import io.netty.handler.codec.http.FullHttpRequest;
 
-import static io.netty.handler.codec.http.HttpHeaderValues.TEXT_PLAIN;
+public abstract class TextPlainRestHandler
+        extends AbstractTextPlainHandler implements RestHandle {
 
-public abstract class TextPlainRestHandler implements RestHandle {
+    protected TextPlainRestHandler() {
+    }
+
+    protected TextPlainRestHandler(final Charset responseCharset) {
+        super(responseCharset);
+    }
+
     @Override
     public final void handle(final FullHttpRequest request,
                              final PathParameters pathParameters,
-                             final FullHttpResponse responseWriter) throws InternalServerErrorException {
+                             final FullHttpResponse responseWriter)
+            throws PathNotFoundException, InternalServerErrorException {
         try {
             final ByteArray content = doHandle(request, pathParameters);
             responseWriter.setContent(
-                    TEXT_PLAIN,
+                    contentType,
                     content.array(),
                     content.start(),
                     content.length()
             );
+        } catch (final PathNotFoundException | InternalServerErrorException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new InternalServerErrorException(e);
+        }
+        /*
+        try {
+
         } catch (final Exception e) {
             final LineBuilder errorText = new LineBuilder();
             errorText.appendln("Internal Server Error");
@@ -32,9 +48,10 @@ public abstract class TextPlainRestHandler implements RestHandle {
                     TEXT_PLAIN,
                     errorText.toString()
             );
-        }
+        }*/
     }
 
     protected abstract ByteArray doHandle(FullHttpRequest request,
-                                          PathParameters pathParameters) throws InternalServerErrorException;
+                                          PathParameters pathParameters)
+            throws PathNotFoundException, InternalServerErrorException;
 }

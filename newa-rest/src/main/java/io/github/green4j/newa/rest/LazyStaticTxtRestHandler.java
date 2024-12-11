@@ -1,14 +1,13 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.newa.lang.ByteArray;
+import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.text.LineAppendable;
-import io.github.green4j.newa.text.LineBuilder;
+import io.github.green4j.newa.text.ByteArrayLineBuilder;
 import io.netty.handler.codec.http.FullHttpRequest;
 
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
-
     private volatile ByteArray content;
 
     protected LazyStaticTxtRestHandler() {
@@ -16,20 +15,23 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
 
     @Override
     protected final ByteArray doHandle(final FullHttpRequest request,
-                                       final PathParameters pathParameters) {
+                                       final PathParameters pathParameters)
+            throws PathNotFoundException, InternalServerErrorException {
         if (content == null) {
             synchronized (this) {
                 if (content == null) {
-                    // to get rid of mem alloc?
-                    final LineBuilder output = new LineBuilder(); // TODO: another appendable + thread local
+                    final ByteArrayLineBuilder output = lineBuilder();
                     doHandle(output);
-                    final String txt = output.toString();
-                    final byte[] bytes = txt.getBytes(StandardCharsets.UTF_8);
-
+                    final ByteArray result = output.array();
+                    final byte[] arrayCopy = Arrays.copyOfRange(
+                            result.array(),
+                            result.start(),
+                            result.start() + result.length()
+                    );
                     content = new ByteArray() {
                         @Override
                         public byte[] array() {
-                            return bytes;
+                            return arrayCopy;
                         }
 
                         @Override
@@ -39,7 +41,7 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
 
                         @Override
                         public int length() {
-                            return bytes.length;
+                            return arrayCopy.length;
                         }
                     };
                 }
@@ -48,5 +50,5 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
         return content;
     }
 
-    protected abstract void doHandle(LineAppendable output);
+    protected abstract void doHandle(LineAppendable output) throws InternalServerErrorException;
 }

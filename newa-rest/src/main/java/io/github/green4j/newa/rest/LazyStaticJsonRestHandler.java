@@ -1,17 +1,21 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.AppendableWriter;
+import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.jelly.JsonGenerator;
-import io.github.green4j.newa.json.AppendableWritingJsonGenerator;
-import io.github.green4j.newa.lang.ByteArray;
+import io.github.green4j.newa.json.ByteArrayJsonGenerator;
+import io.github.green4j.newa.lang.Charset;
 import io.netty.handler.codec.http.FullHttpRequest;
 
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public abstract class LazyStaticJsonRestHandler extends ApplicationJsonRestHandler {
     private volatile ByteArray content;
 
     protected LazyStaticJsonRestHandler() {
+    }
+
+    protected LazyStaticJsonRestHandler(final Charset responseCharset) {
+        super(responseCharset);
     }
 
     @Override
@@ -20,18 +24,18 @@ public abstract class LazyStaticJsonRestHandler extends ApplicationJsonRestHandl
         if (content == null) {
             synchronized (this) {
                 if (content == null) {
-                    final AppendableWritingJsonGenerator writingGenerator =
-                            WRITING_GENERATOR.get();
-                    doHandle(writingGenerator.start());
-                    final AppendableWriter<StringBuilder> contentWriter = writingGenerator.finish();
-
-                    // make a copy of mutable array
-                    final byte[] bytes = contentWriter.output().toString().getBytes(StandardCharsets.UTF_8);
-
+                    final ByteArrayJsonGenerator generator = jsonGenerator();
+                    doHandle(generator.start());
+                    final ByteArray result = generator.finish();
+                    final byte[] arrayCopy = Arrays.copyOfRange(
+                            result.array(),
+                            result.start(),
+                            result.start() + result.length()
+                    );
                     content = new ByteArray() {
                         @Override
                         public byte[] array() {
-                            return bytes;
+                            return arrayCopy;
                         }
 
                         @Override
@@ -41,7 +45,7 @@ public abstract class LazyStaticJsonRestHandler extends ApplicationJsonRestHandl
 
                         @Override
                         public int length() {
-                            return bytes.length;
+                            return arrayCopy.length;
                         }
                     };
                 }

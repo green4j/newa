@@ -25,15 +25,17 @@ public class RestApiProtocolHandler
         implements io.github.green4j.newa.rest.FullHttpResponse {
 
     private final HttpHandler api;
+    private final ErrorHandler errorHandler;
 
     private AsciiString contentType;
     private byte[] content;
     private int offset;
     private int length;
 
-
-    public RestApiProtocolHandler(final HttpHandler restApi) {
+    public RestApiProtocolHandler(final HttpHandler restApi,
+                                  final ErrorHandler errorHandler) {
         this.api = restApi;
+        this.errorHandler = errorHandler;
     }
 
     @Override
@@ -66,12 +68,19 @@ public class RestApiProtocolHandler
         resetContent();
         try {
             api.handle(request, this);
-        } catch (final RestException e) {
+        } catch (final MethodNotAllowedException e) {
             status = e.status();
-
-            if (e instanceof InternalServerErrorException) {
-                ((InternalServerErrorException) e).set(this); // unchecked
-            }
+            errorHandler.handle(e, this);
+        } catch (final PathNotFoundException e) {
+            status = e.status();
+            errorHandler.handle(e, this);
+        } catch (final InternalServerErrorException e) {
+            status = e.status();
+            errorHandler.handle(e, this);
+        } catch (final Exception e) {
+            final InternalServerErrorException ie = new InternalServerErrorException(e);
+            status = ie.status();
+            errorHandler.handle(ie, this);
         }
 
         final boolean keepAlive = HttpUtil.isKeepAlive(request);

@@ -6,6 +6,6 @@ public interface RestHandle {
 
     void handle(FullHttpRequest request,
                 PathParameters pathParameters,
-                FullHttpResponse responseWriter) throws InternalServerErrorException;
+                FullHttpResponse responseWriter) throws PathNotFoundException, InternalServerErrorException;
 
 }

@@ -247,7 +247,6 @@ public final class RestApi implements HttpHandler {
             return version;
         }
 
-
         List<Endpoint> endpoints() {
             return Arrays.stream(methods)
                     .map(m -> m.endpoints())
@@ -298,38 +297,42 @@ public final class RestApi implements HttpHandler {
             throws MethodNotAllowedException,
             PathNotFoundException,
             InternalServerErrorException {
+        try {
+            final String method = request.method().name();
+            final PathMatcher<RestHandle> pathMatcher = getMethodPathMatcher(method);
+            if (pathMatcher == null) {
+                throw new MethodNotAllowedException(method);
+            }
 
-        final String method = request.method().name();
-        final PathMatcher<RestHandle> matcher;
+            final QueryStringDecoder qsd = new QueryStringDecoder(request.uri());
+            final PathMatcher<RestHandle>.Result match = pathMatcher.match(qsd.path());
+            if (match == null) {
+                throw new PathNotFoundException(qsd.path());
+            }
+
+            match.handler().handle(request, match, responseWriter);
+        } catch (final RestException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new InternalServerErrorException(e);
+        }
+    }
+
+    private PathMatcher<RestHandle> getMethodPathMatcher(final String method)
+            throws MethodNotAllowedException {
         switch (method) {
             case "GET":
-                matcher = get;
-                break;
+                return get;
             case "POST":
-                matcher = post;
-                break;
+                return post;
             case "PUT":
-                matcher = put;
-                break;
+                return put;
             case "DELETE":
-                matcher = delete;
-                break;
+                return delete;
             default:
-                matcher = null;
                 break;
         }
-
-        if (matcher == null) {
-            throw new MethodNotAllowedException();
-        }
-
-        final QueryStringDecoder qsd = new QueryStringDecoder(request.uri());
-        final PathMatcher<RestHandle>.Result match = matcher.match(qsd.path());
-        if (match == null) {
-            throw new PathNotFoundException();
-        }
-
-        match.handler().handle(request, match, responseWriter);
+        return null;
     }
 
     private static String joinPaths(final String p1, final String p2) {

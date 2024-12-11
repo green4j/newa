@@ -11,7 +11,7 @@ import java.util.stream.Collectors;
 
 public final class PathMatcher<T> {
     private static final int INITIAL_STATE = 0;
-    private static final int FOLDER_STATE = 1;
+    private static final int STATIC_STATE = 1;
     private static final int PARAM_STATE = 2;
 
     public static <T> Builder<T> builder() {
@@ -48,29 +48,19 @@ public final class PathMatcher<T> {
                 if (stateCmp != 0) {
                     return stateCmp;
                 }
-                if (isParameter || o.isParameter) { // a parameter is equal to any other segment, see equals()
-                    return 0;
-                }
-                return CharSequence.compare(segment, o.segment);
-            }
 
-            @Override
-            @SuppressWarnings("unchecked")
-            public boolean equals(final Object o) {
-                if (this == o) {
-                    return true;
+                if (!isParameter) { // this is a static
+                    if (!o.isParameter) { // o is a static as well
+                        return CharSequence.compare(segment, o.segment); // statics are equals by their names
+                    }
+                    return -1; // a static if preferred over a parameter (the static should be earlier than a parameter)
                 }
-                if (o == null || getClass() != o.getClass()) {
-                    return false;
-                }
-                final Jump jump = (Jump) o; // unchecked
-                return from == jump.from
-                        && (isParameter || jump.isParameter ? true : segment.equals(jump.segment));
-            }
 
-            @Override
-            public int hashCode() {
-                return Objects.hash(from, segment);
+                // this is a parameter
+                if (o.isParameter) { // o also is parameter
+                    return 0; // two parameters with any names are equal
+                }
+                return 1; // a static if preferred (the parameter should be after than a static)
             }
 
             @Override
@@ -89,7 +79,8 @@ public final class PathMatcher<T> {
         private Builder() {
         }
 
-        public String[] withPath(final String pathExpression, final T handler) {
+        public String[] withPath(final String pathExpression,
+                                 final T handler) {
             final Jump jump = new Jump();
             final var addedJump = new Object() {
                 Jump jump;
@@ -116,13 +107,14 @@ public final class PathMatcher<T> {
                     jump.from = jump.to;
                 } else {
                     if (contains.size() > 1) {
-                        throw new IllegalArgumentException("Ambiguous pathExpression: " + pathExpression
-                                + " because of the parameter: " + jump.segment);
+                        throw new IllegalStateException();
                     }
                     lastFound.jump = contains.first();
-                    if (lastFound.jump.isLeaf()) {
-                        throw new IllegalArgumentException("Ambiguous pathExpression: " + pathExpression
-                                + " comparing to a previous one");
+                    if (jump.isParameter) {
+                        if (!lastFound.jump.segment.equals(jump.segment)) {
+                            throw new IllegalArgumentException("Ambiguous parameter " + jump.segment
+                                    + " in the path expression: " + pathExpression);
+                        }
                     }
                     jump.from = lastFound.jump.to;
                 }
@@ -130,10 +122,22 @@ public final class PathMatcher<T> {
 
             if (addedJump.jump == null) {
                 if (lastFound.jump == null) {
-                    throw new IllegalArgumentException("Empty pathExpression: " + pathExpression);
+                    throw new IllegalArgumentException("Empty path expression: " + pathExpression);
                 }
                 addedJump.jump = lastFound.jump;
             }
+
+            // check if there is a jump fo a final state/handler with the same segment
+            // already (current new jump is a duplication)
+            if (jumps.stream().filter(j ->
+                    j.from == addedJump.jump.from
+                            && j.isParameter == addedJump.jump.isParameter
+                            && j.segment.equals(addedJump.jump.segment)
+                            && j.isLeaf()
+            ).count() > 0) {
+                throw new IllegalArgumentException("Ambiguous path expression: " + pathExpression);
+            }
+
             addedJump.jump.routeIndex = handlers.size();
             handlers.add(handler);
 
@@ -197,9 +201,11 @@ public final class PathMatcher<T> {
         }
     }
 
-    private final int[] stateJumps; // stores a table of state jumps 'from' (odd index) -> 'to' (even index).
-    // For leaf nodes 'to' is -(index of a handler in the 'handlers' array + 1)
-    private final String[] folderSegments;
+    private final int[] stateJumps; // Stores a table of state jumps "from" (odd index) -> "to" (even index).
+    // For leaf nodes "to" is "-(index of a handler in the 'handlers' array + 1) << 16 | to".
+    // It is required to have "to" information stored in addition to a handler's index
+    // to continue matching if new segment parsed after a route has been resolved.
+    private final String[] staticSegments;
     private final String[] parameterSegments;
     private final T[] handlers;
     private final String[] parameterNames;
@@ -241,9 +247,8 @@ public final class PathMatcher<T> {
 
         @Override
         public Appendable onSegmentStarted() {
-            if (isIndex(currentState)) { // last segment was a leaf, but parsing continues
-                currentState = INITIAL_STATE;
-                return null;
+            if (isRouteIndex(currentState)) { // last segment was a leaf/handler was found, but parsing continues
+                currentState = toTo(currentState);
             }
             currentFromStateIndex = findFirstFromIndex(currentState);
             if (currentFromStateIndex < 0) {
@@ -257,22 +262,25 @@ public final class PathMatcher<T> {
         @Override
         public boolean onSegmentFinished() {
             final StringBuilder bufferToParseSegment = parameterValues[numberOfParameters];
-            for (int i = currentFromStateIndex; i < folderSegments.length; i++) {
-                if (stateJumps[i << 1] != currentState) {
+            for (int i = currentFromStateIndex; i < staticSegments.length; i++) {
+                if (stateJumps[i << 1] != currentState) { // another "from" found
                     break;
                 }
 
-                final String jumpSegment = folderSegments[i];
+                final String jumpSegment = staticSegments[i];
 
-                if (jumpSegment == null) { // a parameter
+                if (jumpSegment != null) { // try to match a static
+                    // we have statics and one parameter ordered, all static first
+                    if (jumpSegment.contentEquals(bufferToParseSegment)) {
+                        currentState = stateJumps[(i << 1) + 1];
+                        return true;
+                    }
+                } else {
+                    // match a parameter
+                    // there is only one parameter for a given "from" state
                     parameterNames[numberOfParameters] = parameterSegments[i];
                     assert parameterNames[numberOfParameters] != null;
                     numberOfParameters++;
-                    currentState = stateJumps[(i << 1) + 1];
-                    return true;
-                }
-
-                if (jumpSegment.contentEquals(bufferToParseSegment)) { // a folder
                     currentState = stateJumps[(i << 1) + 1];
                     return true;
                 }
@@ -286,26 +294,25 @@ public final class PathMatcher<T> {
                         final List<T> handlers,
                         final int maxNumberOfParametersInPath) {
         stateJumps = new int[jumps.size() << 1];
-        folderSegments = new String[jumps.size()];
+        staticSegments = new String[jumps.size()];
         parameterSegments = new String[jumps.size()];
 
         for (int i = 0, len = jumps.size(); i < len; i++) {
             final Builder.Jump jump = jumps.pollFirst();
             stateJumps[i << 1] = jump.from;
-            stateJumps[(i << 1) + 1] = jump.isLeaf() ? indexToTo(jump.routeIndex) : jump.to;
+            stateJumps[(i << 1) + 1] = jump.isLeaf() ? routeIndexToTo(jump.routeIndex, jump.to) : jump.to;
 
             if (jump.isParameter) {
-                folderSegments[i] = null;
                 parameterSegments[i] = jump.segment;
             } else {
-                folderSegments[i] = jump.segment;
+                staticSegments[i] = jump.segment;
             }
         }
 
         this.handlers = (T[]) handlers.toArray(new Object[0]); // unchecked
 
         parameterNames = new String[maxNumberOfParametersInPath];
-        parameterValues = new StringBuilder[maxNumberOfParametersInPath + 1]; // to parse folder segment as well
+        parameterValues = new StringBuilder[maxNumberOfParametersInPath + 1]; // to parse static as well
         for (int i = 0; i < parameterValues.length; i++) {
             parameterValues[i] = new StringBuilder();
         }
@@ -318,26 +325,35 @@ public final class PathMatcher<T> {
 
         parsePath(path, pathMatchingListener);
 
-        if (!isIndex(currentState)) {
+        if (!isRouteIndex(currentState)) {
             return null;
         }
 
-        final int index = toToIndex(currentState);
+        final int index = toRouteIndex(currentState);
         handler = handlers[index];
         return result;
     }
 
-    private static int indexToTo(final int routeIndex) {
-        return -(routeIndex + 1); // from -1
+    private static int routeIndexToTo(final int routeIndex,
+                                      final int to) {
+        assert routeIndex > -1;
+        assert to > -1;
+        final int r = -(routeIndex + 1); // from -1 to present the 0 index
+        return r << 16 | to;
     }
 
-    private static boolean isIndex(final int to) {
+    private static boolean isRouteIndex(final int to) {
         return to < 0;
     }
 
-    private static int toToIndex(final int to) {
+    private static int toRouteIndex(final int to) {
         assert to < 0;
-        return -to - 1;
+        return -(to >> 16) - 1;
+    }
+
+    private static int toTo(final int to) {
+        assert to < 0;
+        return to & 0xFFFF;
     }
 
     private interface PathExpressionParsingListener {
@@ -361,23 +377,23 @@ public final class PathMatcher<T> {
                             state = PARAM_STATE;
                             break;
                         default:
-                            if (isFolderNameChar(c)) {
+                            if (isStaticNameChar(c)) {
                                 name.setLength(0);
                                 name.append(c);
-                                state = FOLDER_STATE;
+                                state = STATIC_STATE;
                                 break;
                             }
                             fireUnexpectedCharException(i, c);
                     }
                     break;
-                case FOLDER_STATE:
+                case STATIC_STATE:
                     switch (c) {
                         case '/':
                             listener.onSegment(name.toString(), false);
                             state = INITIAL_STATE;
                             break;
                         default:
-                            if (isFolderNameChar(c)) {
+                            if (isStaticNameChar(c)) {
                                 name.append(c);
                                 break;
                             }
@@ -391,7 +407,7 @@ public final class PathMatcher<T> {
                             state = INITIAL_STATE;
                             break;
                         default:
-                            if (isFolderNameChar(c)) {
+                            if (isStaticNameChar(c)) {
                                 name.append(c);
                                 break;
                             }
@@ -402,7 +418,7 @@ public final class PathMatcher<T> {
         }
         // check and process EOL
         switch (state) {
-            case FOLDER_STATE:
+            case STATIC_STATE:
                 listener.onSegment(name.toString(), false);
                 break;
             case PARAM_STATE:
@@ -412,12 +428,13 @@ public final class PathMatcher<T> {
         }
     }
 
-    private static void fireUnexpectedCharException(final int i, final char c) {
+    private static void fireUnexpectedCharException(final int i,
+                                                    final char c) {
         throw new IllegalArgumentException("Unexpected char '" + c + "' at pos: " + i);
     }
 
     // TODO: add sub-delims and ':', '@'?
-    private static boolean isFolderNameChar(final char c) {
+    private static boolean isStaticNameChar(final char c) {
         if (Character.isLetterOrDigit(c)) {
             return true;
         }
@@ -441,7 +458,8 @@ public final class PathMatcher<T> {
 
     }
 
-    private static void parsePath(final CharSequence path, final PathParsingListener listener) {
+    private static void parsePath(final CharSequence path,
+                                  final PathParsingListener listener) {
         int state = INITIAL_STATE;
         Appendable currentSegmentAppendable = null;
         for (int i = 0; i < path.length(); i++) {
@@ -452,7 +470,7 @@ public final class PathMatcher<T> {
                     if (c == '/') {
                         break;
                     }
-                    state = FOLDER_STATE;
+                    state = STATIC_STATE;
                     if ((currentSegmentAppendable = listener.onSegmentStarted()) == null) {
                         return;
                     }
@@ -462,7 +480,7 @@ public final class PathMatcher<T> {
                         throw new UncheckedIOException(e);
                     }
                     break;
-                case FOLDER_STATE:
+                case STATIC_STATE:
                     if (c == '/') {
                         state = INITIAL_STATE;
                         if (!listener.onSegmentFinished()) {
@@ -480,7 +498,7 @@ public final class PathMatcher<T> {
                     throw new IllegalStateException();
             }
         }
-        if (state == FOLDER_STATE) {
+        if (state == STATIC_STATE) {
             listener.onSegmentFinished();
         }
     }

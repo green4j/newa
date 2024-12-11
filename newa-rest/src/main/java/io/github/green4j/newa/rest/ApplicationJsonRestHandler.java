@@ -1,32 +1,44 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.newa.json.AppendableWritingJsonGenerator;
-import io.github.green4j.newa.lang.ByteArray;
-import io.github.green4j.jelly.AppendableWriter;
-import io.github.green4j.jelly.JsonGenerator;
+import io.github.green4j.jelly.ByteArray;
+import io.github.green4j.newa.lang.Charset;
 import io.netty.handler.codec.http.FullHttpRequest;
 
-import static io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_JSON;
+public abstract class ApplicationJsonRestHandler
+        extends AbstractApplicationJsonHandler implements RestHandle {
 
-public abstract class ApplicationJsonRestHandler implements RestHandle {
-    protected static final ThreadLocal<AppendableWritingJsonGenerator> WRITING_GENERATOR =
-            ThreadLocal.withInitial(() -> new AppendableWritingJsonGenerator());
+    protected ApplicationJsonRestHandler() {
+    }
+
+    protected ApplicationJsonRestHandler(final Charset responseCharset) {
+        super(responseCharset);
+    }
 
     @Override
     public final void handle(final FullHttpRequest request,
                              final PathParameters pathParameters,
-                             final FullHttpResponse responseWriter) throws InternalServerErrorException {
+                             final FullHttpResponse responseWriter)
+            throws PathNotFoundException, InternalServerErrorException {
         try {
             final ByteArray content = doHandle(request, pathParameters);
             responseWriter.setContent(
-                    APPLICATION_JSON,
+                    contentType,
                     content.array(),
                     content.start(),
                     content.length()
             );
+        } catch (final PathNotFoundException | InternalServerErrorException e) {
+            throw e;
+        } catch (final Exception e) {
+            throw new InternalServerErrorException(e);
+        }
+
+        /*
+        try {
+
         } catch (final Exception e) {
             final AppendableWritingJsonGenerator writingGenerator =
-                    WRITING_GENERATOR.get();
+                    ASCII_WRITING_GENERATOR.get();
             final JsonGenerator output = writingGenerator.start(); // reset just in case
             output.startObject();
             output.objectMember("error");
@@ -50,9 +62,10 @@ public abstract class ApplicationJsonRestHandler implements RestHandle {
                     APPLICATION_JSON,
                     content.output()
             );
-        }
+         */
     }
 
     protected abstract ByteArray doHandle(FullHttpRequest request,
-                                          PathParameters pathParameters) throws InternalServerErrorException;
+                                          PathParameters pathParameters)
+            throws PathNotFoundException, InternalServerErrorException;
 }

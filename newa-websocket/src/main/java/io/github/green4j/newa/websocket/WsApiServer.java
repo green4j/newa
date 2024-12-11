@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 public final class WsApiServer implements
         ClientSessionsStatistics,
         AutoCloseable {
-
     private static final boolean USE_EPOLL = Epoll.isAvailable();
 
     public static Builder builder(final String localIfc, final int port) {
@@ -44,7 +43,13 @@ public final class WsApiServer implements
         private String localIfc;
         private int port;
         private boolean useSsl;
+
+        private int maxRequestContentLength = 64 * 1024;
+
         private int numberOfWorkers = 0;
+        private int soBacklog = 1024;
+
+        private String pathPrefix = "websocket";
 
         private Builder() {
         }
@@ -74,6 +79,11 @@ public final class WsApiServer implements
             return this;
         }
 
+        public Builder withMaxRequestContentLength(final int maxRequestContentLength) {
+            this.maxRequestContentLength = maxRequestContentLength;
+            return this;
+        }
+
         public Builder withNumberOfWorkers(final int numberOfWorkers) {
             if (numberOfWorkers > 1_000) {
                 throw new IllegalArgumentException("Too many workers: " + numberOfWorkers);
@@ -82,8 +92,32 @@ public final class WsApiServer implements
             return this;
         }
 
+        public Builder withSoBacklog(final int soBacklog) {
+            this.soBacklog = soBacklog;
+            return this;
+        }
+
+        public Builder withPathPrefix(final String pathPrefix) {
+            this.pathPrefix = pathPrefix;
+            return this;
+        }
+
         public WsApiServer build() {
             return new WsApiServer(this);
+        }
+
+        private String rootPath() {
+            final StringBuilder result = new StringBuilder("/v").append(apiVersion);
+            if (pathPrefix != null) {
+                final String pp = pathPrefix.trim();
+                if (!pp.isEmpty()) {
+                    result.insert(0, pp);
+                    if (!pp.startsWith("/")) {
+                        result.insert(0, "/");
+                    }
+                }
+            }
+            return result.toString();
         }
     }
 
@@ -179,14 +213,15 @@ public final class WsApiServer implements
         final ServerBootstrap bootstrap = new ServerBootstrap();
 
         final WsApiServerInitializer serverInit = new WsApiServerInitializer(
-                "/websocket/v" + parameters.apiVersion,
+                parameters.rootPath(),
                 sslCtx,
+                parameters.maxRequestContentLength,
                 sessionManager,
                 sendingResult,
                 channels);
 
         bootstrap.group(bossGroup, workerGroup)
-                .option(ChannelOption.SO_BACKLOG, 1024)
+                .option(ChannelOption.SO_BACKLOG, parameters.soBacklog)
                 .channel(USE_EPOLL ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
                 .childHandler(serverInit);
 

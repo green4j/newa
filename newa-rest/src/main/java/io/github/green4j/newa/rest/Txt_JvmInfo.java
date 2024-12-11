@@ -35,76 +35,76 @@ public class Txt_JvmInfo implements TxtRestHandle {
                 ManagementFactory.getGarbageCollectorMXBeans();
 
         output.append("jvm: ");
-        output.append(runtimeMXBean.getVmName());
-        output.append("\nversion: ");
-        output.append(runtimeMXBean.getVmVersion());
-        output.append("\nvendor: ");
-        output.append(runtimeMXBean.getVmVendor());
-        output.append("\npid: ");
-        output.append(Long.toString(runtimeMXBean.getPid()));
-        output.append("\nstartedAt: ");
+        output.appendln(runtimeMXBean.getVmName());
+        output.append("version: ");
+        output.appendln(runtimeMXBean.getVmVersion());
+        output.append("vendor: ");
+        output.appendln(runtimeMXBean.getVmVendor());
+        output.append("pid: ");
+        output.appendln(Long.toString(runtimeMXBean.getPid()));
+        output.append("startedAt: ");
         output.append(formatUtcToIso8601(runtimeMXBean.getStartTime()));
-        output.append("\nuptime: ");
-        output.append(toDuration(runtimeMXBean.getUptime()));
+        output.append("uptime: ");
+        output.appendln(toDuration(runtimeMXBean.getUptime()));
 
-        output.append("os");
-        output.append("\n    name: ");
-        output.append(operatingSystemMXBean.getName());
-        output.append(" \n   version: ");
-        output.append(operatingSystemMXBean.getVersion());
-        output.append("\n    arch: ");
-        output.append(operatingSystemMXBean.getArch());
+        output.appendln("os");
+        output.append("    name: ");
+        output.appendln(operatingSystemMXBean.getName());
+        output.append("    version: ");
+        output.appendln(operatingSystemMXBean.getVersion());
+        output.append("    arch: ");
+        output.appendln(operatingSystemMXBean.getArch());
 
         final MemoryUsage heapUsage = memoryMXBean.getHeapMemoryUsage();
         final MemoryUsage nonHeapUsage = memoryMXBean.getNonHeapMemoryUsage();
 
-        output.append("\ncpu");
+        output.appendln("cpu");
         dumpCpuInfo(output, operatingSystemMXBean);
 
-        output.append("\nmemory");
+        output.appendln("memory");
         dumpMemoryInfo(output, operatingSystemMXBean, heapUsage, nonHeapUsage);
 
-        output.append("\ngc");
+        output.appendln("gc");
         dumpGcInfo(output, garbageCollectorMXBeans);
     }
 
     private static void dumpCpuInfo(final LineAppendable output,
                                     final OperatingSystemMXBean operatingSystemMXBean) {
-        output.append("\n    number: ");
-        output.append(Integer.toString(operatingSystemMXBean.getAvailableProcessors()));
-        output.append("\n    process: ");
-        output.append(String.format("%.1f%%", operatingSystemMXBean.getProcessCpuLoad()));
-        output.append("\n    system: ");
-        output.append(String.format("\n%.1f%%", getCpuLoad(operatingSystemMXBean)));
+        output.append("    number: ");
+        output.appendln(Integer.toString(operatingSystemMXBean.getAvailableProcessors()));
+        output.append("    process: ");
+        output.appendln(String.format("%.1f%%", operatingSystemMXBean.getProcessCpuLoad()));
+        output.append("    system: ");
+        output.appendln(String.format("%.1f%%", getCpuLoad(operatingSystemMXBean)));
     }
 
     private static void dumpMemoryInfo(final LineAppendable output,
                                        final OperatingSystemMXBean operatingSystemMXBean,
                                        final MemoryUsage heapUsage,
                                        final MemoryUsage nonHeapUsage) {
-        output.append("\n    physical");
-        output.append("\n        free: ");
-        output.append(toMemorySize(getFreeMemorySize(operatingSystemMXBean)));
-        output.append("\n        total: ");
-        output.append(toMemorySize(getTotalMemorySize(operatingSystemMXBean)));
+        output.appendln("    physical");
+        output.append("        free: ");
+        output.appendln(toMemorySize(getFreeMemorySize(operatingSystemMXBean)));
+        output.append("        total: ");
+        output.appendln(toMemorySize(getTotalMemorySize(operatingSystemMXBean)));
 
-        output.append("\n    heap");
-        output.append("\n        init: ");
-        output.append(toMemorySize(heapUsage.getInit()));
-        output.append("\n        used: ");
-        output.append(toMemorySize(heapUsage.getUsed()));
-        output.append("\n        committed: ");
-        output.append(toMemorySize(heapUsage.getCommitted()));
-        output.append("\n        max: ");
-        output.append(toMemorySize(heapUsage.getMax()));
+        output.appendln("    heap");
+        output.append("        init: ");
+        output.appendln(toMemorySize(heapUsage.getInit()));
+        output.append("        used: ");
+        output.appendln(toMemorySize(heapUsage.getUsed()));
+        output.append("        committed: ");
+        output.appendln(toMemorySize(heapUsage.getCommitted()));
+        output.append("        max: ");
+        output.appendln(toMemorySize(heapUsage.getMax()));
 
-        output.append("\n    nonHeap");
-        output.append("\n        init: ");
-        output.append(toMemorySize(nonHeapUsage.getInit()));
-        output.append("\n        used: ");
-        output.append(toMemorySize(nonHeapUsage.getUsed()));
-        output.append("\n        committed: ");
-        output.append(toMemorySize(nonHeapUsage.getCommitted()));
+        output.appendln("    nonHeap");
+        output.append("        init: ");
+        output.appendln(toMemorySize(nonHeapUsage.getInit()));
+        output.append("        used: ");
+        output.appendln(toMemorySize(nonHeapUsage.getUsed()));
+        output.append("        committed: ");
+        output.appendln(toMemorySize(nonHeapUsage.getCommitted()));
     }
 
     private static void dumpGcInfo(final LineAppendable output,

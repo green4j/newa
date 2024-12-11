@@ -26,7 +26,7 @@ public final class RestApiServer implements AutoCloseable {
                                           final String localIfc,
                                           final int port) {
         return builder(localIfc, port)
-                        .withName(name).build();
+                .withName(name).build();
     }
 
     public static Builder builder(final String localIfc, final int port) {
@@ -46,11 +46,14 @@ public final class RestApiServer implements AutoCloseable {
         private int port = 8080;
         private boolean useSsl;
 
-        private int maxRequestContentSize = 64 * 1024;
+        private int maxRequestContentLength = 64 * 1024;
 
         private CorsConfig corsConfig;
 
         private int numberOfWorkers = 1;
+        private int soBacklog = 1024;
+
+        private ErrorHandler errorHandler = new TextErrorHandler();
 
         private Builder() {
         }
@@ -75,6 +78,11 @@ public final class RestApiServer implements AutoCloseable {
             return this;
         }
 
+        public Builder withMaxRequestContentLength(final int maxRequestContentLength) {
+            this.maxRequestContentLength = maxRequestContentLength;
+            return this;
+        }
+
         public Builder withNumberOfWorkers(final int numberOfWorkers) {
             if (numberOfWorkers > 1_000) {
                 throw new IllegalArgumentException("Too many workers: " + numberOfWorkers);
@@ -83,13 +91,18 @@ public final class RestApiServer implements AutoCloseable {
             return this;
         }
 
-        public Builder withMaxRequestContentSize(final int maxRequestContentSize) {
-            this.maxRequestContentSize = maxRequestContentSize;
+        public Builder withSoBacklog(final int soBacklog) {
+            this.soBacklog = soBacklog;
             return this;
         }
 
         public Builder withCorsConfig(final CorsConfig corsConfig) {
             this.corsConfig = corsConfig;
+            return this;
+        }
+
+        public Builder withErrorHandler(final ErrorHandler errorHandler) {
+            this.errorHandler = errorHandler;
             return this;
         }
 
@@ -138,13 +151,14 @@ public final class RestApiServer implements AutoCloseable {
 
         final ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(bossGroup, workerGroup)
-                .option(ChannelOption.SO_BACKLOG, 1024)
+                .option(ChannelOption.SO_BACKLOG, parameters.soBacklog)
                 .channel(USE_EPOLL ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
                 .childHandler(
                         new RestApiServerInitializer(
                                 sslCtx,
                                 restApi,
-                                parameters.maxRequestContentSize,
+                                parameters.errorHandler,
+                                parameters.maxRequestContentLength,
                                 parameters.corsConfig
                         )
                 );
