@@ -32,23 +32,6 @@ public abstract class TextPlainRestHandler
         } catch (final Exception e) {
             throw new InternalServerErrorException(e);
         }
-        /*
-        try {
-
-        } catch (final Exception e) {
-            final LineBuilder errorText = new LineBuilder();
-            errorText.appendln("Internal Server Error");
-            errorText.append("Message: ").appendln(e.getMessage());
-            errorText.appendln("Stack Trace:");
-            final StackTraceElement[] ste = e.getStackTrace();
-            for (int i = 0; i < ste.length; i++) {
-                errorText.append("  ").appendln(ste[i].toString());
-            }
-            throw new InternalServerErrorException(
-                    TEXT_PLAIN,
-                    errorText.toString()
-            );
-        }*/
     }
 
     protected abstract ByteArray doHandle(FullHttpRequest request,

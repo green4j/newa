@@ -37,10 +37,11 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
                        final FullHttpResponse response) {
         final ByteArrayLineBuilder builder = lineBuilder()
                 .append("An error happened: ")
-                .appendln(error.getLocalizedMessage());
-        builder.appendln("Stacktrace:");
-        for (final StackTraceElement ste : error.getStackTrace()) {
-            builder.append("    ").append(ste.toString());
+                .appendln(error.getMessage());
+        builder.appendln("stacktrace:");
+        final StackTraceElement[] ste = error.getStackTrace();
+        for (int i = 0; i < ste.length; i++) {
+            builder.append("    ").append(ste[i].toString());
         }
         writeToResponse(builder, response);
     }
