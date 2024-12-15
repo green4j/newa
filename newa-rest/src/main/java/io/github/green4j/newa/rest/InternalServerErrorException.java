@@ -5,25 +5,30 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 public class InternalServerErrorException extends RestException {
     static final long serialVersionUID = -2387516993124229947L;
 
-    private final Exception error;
     private final HttpResponseStatus status;
 
     public InternalServerErrorException(final Exception error) {
         this(error, HttpResponseStatus.INTERNAL_SERVER_ERROR);
     }
 
+    public InternalServerErrorException(final String message) {
+        this(message, HttpResponseStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    public InternalServerErrorException(final String message,
+                                        final HttpResponseStatus status) {
+        super(message);
+        this.status = status;
+    }
+
     public InternalServerErrorException(final Exception error,
                                         final HttpResponseStatus status) {
-        this.error = error;
+        super(error);
         this.status = status;
     }
 
     @Override
     public HttpResponseStatus status() {
         return status;
-    }
-
-    public Exception error() {
-        return error;
     }
 }

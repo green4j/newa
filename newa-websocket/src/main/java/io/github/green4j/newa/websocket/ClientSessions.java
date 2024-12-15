@@ -6,7 +6,7 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 
-// TODO: Make a closable?
+// TODO: Make it a closable?
 public class ClientSessions implements ClientSessionsStatistics {
     private volatile List<ClientSession> sessions = new ArrayList<>(); // guarded by this
 
@@ -85,7 +85,7 @@ public class ClientSessions implements ClientSessionsStatistics {
         }
 
         try {
-            listener.onSessionClosed(session); // unchecked
+            listener.onSessionClosed(session);
         } catch (final Throwable t) {
             t.printStackTrace(); // TODO: logging
         }

@@ -105,6 +105,11 @@ public final class RestApiServer implements AutoCloseable {
             return this;
         }
 
+        public Builder withoutCompression() {
+            this.withCompression = false;
+            return this;
+        }
+
         public Builder withCorsConfig(final CorsConfig corsConfig) {
             this.corsConfig = corsConfig;
             return this;

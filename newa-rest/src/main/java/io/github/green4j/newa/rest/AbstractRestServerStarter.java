@@ -35,8 +35,14 @@ public abstract class AbstractRestServerStarter {
         final AtomicBoolean srvClosed = new AtomicBoolean();
 
         try {
-            try (RestApiServer srv = RestApiServer.newServer(
-                    componentName, localIfc, port)) {
+            final RestApiServer.Builder srvBuilder = RestApiServer.builder();
+            srvBuilder.withName(componentName)
+                    .withLocalIfc(localIfc)
+                    .withPort(port);
+
+            tuneUpRestServer(srvBuilder);
+
+            try (RestApiServer srv = srvBuilder.build()) {
                 aSwitch = (cause) -> {
                     if (!srvClosed.compareAndExchange(false, true)) {
                         System.out.println(cause + ". Server is stopping...");
@@ -74,6 +80,9 @@ public abstract class AbstractRestServerStarter {
     }
 
     public void release() {
+    }
+
+    protected void tuneUpRestServer(final RestApiServer.Builder builder) {
     }
 
     protected abstract RestApi buildRestApi(RestApi.Builder builder);

@@ -8,5 +8,17 @@ public abstract class RestException extends Exception {
     protected RestException() {
     }
 
+    protected RestException(final String message) {
+        super(message);
+    }
+
+    protected RestException(final Throwable cause) {
+        super(cause);
+    }
+
+    protected RestException(final String message, final Throwable cause) {
+        super(message, cause);
+    }
+
     public abstract HttpResponseStatus status();
 }

@@ -104,6 +104,11 @@ public final class WsApiServer implements
             return this;
         }
 
+        public Builder withoutCompression() {
+            this.withCompression = false;
+            return this;
+        }
+
         public Builder withPathPrefix(final String pathPrefix) {
             this.pathPrefix = pathPrefix;
             return this;

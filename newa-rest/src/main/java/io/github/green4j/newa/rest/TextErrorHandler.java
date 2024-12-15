@@ -19,7 +19,8 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
                 lineBuilder()
                         .append("Method not allowed: ")
                         .appendln(error.method()),
-                response);
+                response
+        );
     }
 
     @Override
@@ -29,16 +30,27 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
                 lineBuilder()
                         .append("Path not found: ")
                         .appendln(error.path()),
-                response);
+                response
+        );
     }
 
     @Override
     public void handle(final InternalServerErrorException error,
                        final FullHttpResponse response) {
         final ByteArrayLineBuilder builder = lineBuilder()
-                .append("An error happened: ")
-                .appendln(error.getMessage());
-        builder.appendln("stacktrace:");
+                .append("An error happened: ");
+        final String message = error.getMessage();
+        if (message != null) {
+            builder.appendln(message);
+        } else {
+            final Throwable cause = error.getCause();
+            if (cause != null) {
+                builder.appendln(cause.toString());
+            } else {
+                builder.appendln(error.toString());
+            }
+        }
+        builder.appendln("Stacktrace:");
         final StackTraceElement[] ste = error.getStackTrace();
         for (int i = 0; i < ste.length; i++) {
             builder.append("    ").append(ste[i].toString());
