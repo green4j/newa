@@ -1,5 +1,6 @@
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -26,6 +27,7 @@ public class RestApiProtocolHandler
 
     private final HttpHandler api;
     private final ErrorHandler errorHandler;
+    private final ChannelErrorHandler channelErrorHandler;
 
     private AsciiString contentType;
     private byte[] content;
@@ -33,9 +35,11 @@ public class RestApiProtocolHandler
     private int length;
 
     public RestApiProtocolHandler(final HttpHandler restApi,
-                                  final ErrorHandler errorHandler) {
+                                  final ErrorHandler errorHandler,
+                                  final ChannelErrorHandler channelErrorHandler) {
         this.api = restApi;
         this.errorHandler = errorHandler;
+        this.channelErrorHandler = channelErrorHandler;
     }
 
     @Override
@@ -119,7 +123,12 @@ public class RestApiProtocolHandler
 
     @Override
     public void exceptionCaught(final ChannelHandlerContext ctx, final Throwable cause) {
-        // cause.printStackTrace(); TODO: logging?
-        ctx.close();
+        try {
+            if (channelErrorHandler != null) {
+                channelErrorHandler.onError(ctx.channel(), cause);
+            }
+        } finally {
+            ctx.close();
+        }
     }
 }

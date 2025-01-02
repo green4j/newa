@@ -1,5 +1,6 @@
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -58,6 +59,14 @@ public final class RestApiServer implements AutoCloseable {
         private boolean withCompression;
 
         private ErrorHandler errorHandler = new TextErrorHandler();
+
+        private ChannelErrorHandler channelErrorHandler = new ChannelErrorHandler() {
+            @Override
+            public void onError(final Channel channel, final Throwable cause) {
+                System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
+                cause.printStackTrace(System.err);
+            }
+        };
 
         private Builder() {
         }
@@ -120,6 +129,11 @@ public final class RestApiServer implements AutoCloseable {
             return this;
         }
 
+        public Builder withChannelErrorHandler(final ChannelErrorHandler channelErrorHandler) {
+            this.channelErrorHandler = channelErrorHandler;
+            return this;
+        }
+
         public RestApiServer build() {
             return new RestApiServer(this);
         }
@@ -174,7 +188,8 @@ public final class RestApiServer implements AutoCloseable {
                                 restApi,
                                 parameters.errorHandler,
                                 parameters.maxRequestContentLength,
-                                parameters.corsConfig
+                                parameters.corsConfig,
+                                parameters.channelErrorHandler
                         )
                 );
 

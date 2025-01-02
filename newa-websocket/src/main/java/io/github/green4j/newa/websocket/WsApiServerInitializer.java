@@ -1,5 +1,6 @@
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
@@ -16,6 +17,7 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
     private final ClientSessions sessionManager;
     private final SendingResult sendingResult;
     private final Receiver receiver;
+    private final ChannelErrorHandler channelErrorHandler;
 
     WsApiServerInitializer(final String websocketPath,
                            final SslContext sslCtx,
@@ -23,7 +25,8 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
                            final int maxRequestContentLength,
                            final ClientSessions sessionManager,
                            final SendingResult sendingResult,
-                           final Receiver receiver) {
+                           final Receiver receiver,
+                           final ChannelErrorHandler channelErrorHandler) {
         this.websocketPath = websocketPath;
         this.sslCtx = sslCtx;
         this.withCompression = withCompression;
@@ -31,6 +34,7 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
         this.sessionManager = sessionManager;
         this.sendingResult = sendingResult;
         this.receiver = receiver;
+        this.channelErrorHandler = channelErrorHandler;
     }
 
     public String websocketPath() {
@@ -53,6 +57,6 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
             pipeline.addLast(new WebSocketServerCompressionHandler());
         }
         pipeline.addLast(wsProtocolHandler);
-        pipeline.addLast(new WsFrameHandler(wsProtocolHandler));
+        pipeline.addLast(new WsFrameHandler(wsProtocolHandler, channelErrorHandler));
     }
 }

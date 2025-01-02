@@ -1,5 +1,6 @@
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
@@ -17,19 +18,22 @@ public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> 
     private final ErrorHandler errorHandler;
     private final int maxRequestContentLength;
     private final CorsConfig corsConfig;
+    private final ChannelErrorHandler channelErrorHandler;
 
     public RestApiServerInitializer(final SslContext sslCtx,
                                     final boolean withCompression,
                                     final HttpHandler apiHandler,
                                     final ErrorHandler errorHandler,
                                     final int maxRequestContentLength,
-                                    final CorsConfig corsConfig) {
+                                    final CorsConfig corsConfig,
+                                    final ChannelErrorHandler channelErrorHandler) {
         this.sslCtx = sslCtx;
         this.withCompression = withCompression;
         this.apiHandler = apiHandler;
         this.errorHandler = errorHandler;
         this.maxRequestContentLength = maxRequestContentLength;
         this.corsConfig = corsConfig;
+        this.channelErrorHandler = channelErrorHandler;
     }
 
     @Override
@@ -47,6 +51,6 @@ public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> 
         if (corsConfig != null) {
             pipeline.addLast(new CorsHandler(corsConfig));
         }
-        pipeline.addLast(new RestApiProtocolHandler(apiHandler, errorHandler));
+        pipeline.addLast(new RestApiProtocolHandler(apiHandler, errorHandler, channelErrorHandler));
     }
 }

@@ -1,7 +1,9 @@
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Scheduler;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -52,6 +54,14 @@ public final class WsApiServer implements
         private boolean withCompression;
 
         private String pathPrefix = "websocket";
+
+        private ChannelErrorHandler channelErrorHandler = new ChannelErrorHandler() {
+            @Override
+            public void onError(final Channel channel, final Throwable cause) {
+                System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
+                cause.printStackTrace(System.err);
+            }
+        };
 
         private Builder() {
         }
@@ -111,6 +121,11 @@ public final class WsApiServer implements
 
         public Builder withPathPrefix(final String pathPrefix) {
             this.pathPrefix = pathPrefix;
+            return this;
+        }
+
+        public Builder withChannelErrorHandler(final ChannelErrorHandler channelErrorHandler) {
+            this.channelErrorHandler = channelErrorHandler;
             return this;
         }
 
@@ -231,7 +246,8 @@ public final class WsApiServer implements
                 parameters.maxRequestContentLength,
                 sessionManager,
                 sendingResult,
-                channels);
+                channels,
+                parameters.channelErrorHandler);
 
         bootstrap.group(bossGroup, workerGroup)
                 .option(ChannelOption.SO_BACKLOG, parameters.soBacklog)
