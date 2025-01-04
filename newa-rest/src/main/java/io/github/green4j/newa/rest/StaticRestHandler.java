@@ -1,5 +1,6 @@
 package io.github.green4j.newa.rest;
 
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.util.AsciiString;
 
@@ -30,14 +31,17 @@ public class StaticRestHandler implements RestHandle {
     }
 
     @Override
-    public void handle(final FullHttpRequest request,
+    public void handle(final ChannelHandlerContext ctx,
+                       final FullHttpRequest request,
                        final PathParameters pathParameters,
-                       final FullHttpResponse responseWriter) {
-        responseWriter.setContent(
+                       final FullHttpResponseContent responseContent,
+                       final Result result) {
+        responseContent.set(
                 contentType,
                 content,
                 0,
                 content.length
         );
+        result.ok();
     }
 }

@@ -2,12 +2,10 @@ package io.github.green4j.newa.rest;
 
 import io.netty.handler.codec.http.FullHttpRequest;
 
-public interface HttpHandler {
+public interface RestRouter {
 
-    void handle(FullHttpRequest request,
-                FullHttpResponse responseWriter) throws
+    RestHandling resolve(FullHttpRequest request) throws
             MethodNotAllowedException,
             PathNotFoundException,
             InternalServerErrorException;
-
 }

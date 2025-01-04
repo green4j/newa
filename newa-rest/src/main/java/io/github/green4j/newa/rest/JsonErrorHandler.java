@@ -8,19 +8,19 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
 
     @Override
     public void handle(final MethodNotAllowedException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         fireExceptionNoStacktrace(error, response);
     }
 
     @Override
     public void handle(final PathNotFoundException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         fireExceptionNoStacktrace(error, response);
     }
 
     @Override
     public void handle(final InternalServerErrorException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
         output.startObject();
@@ -44,7 +44,7 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
     }
 
     private void fireExceptionNoStacktrace(final Exception error,
-                                           final FullHttpResponse response) {
+                                           final FullHttpResponseContent response) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
         output.startObject();
@@ -60,8 +60,8 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
     }
 
     private void writeToResponse(final ByteArray content,
-                                 final FullHttpResponse response) {
-        response.setContent(contentType,
+                                 final FullHttpResponseContent response) {
+        response.set(contentType,
                 content.array(),
                 content.start(),
                 content.length());

@@ -8,8 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
-public final class RestApi implements HttpHandler {
-
+public final class RestApi implements RestRouter {
     public static final char SLASH_CHAR = '/';
     public static final String SLASH = "" + SLASH_CHAR;
 
@@ -128,7 +127,10 @@ public final class RestApi implements HttpHandler {
             private PathMatcher<RestHandle> prepareMatcher() {
                 final PathMatcher.Builder<RestHandle> pmBuilder = PathMatcher.builder();
                 for (final Endpoint e : endpoints) {
-                    final String[] parameters = pmBuilder.withPath(e.pathExpressionWithoutQuery(), e.handler);
+                    final String[] parameters = pmBuilder.withPath(
+                            e.pathExpressionWithoutQuery(),
+                            e.handler
+                    );
                     final String[] parameterDescriptions = e.pathParameterDescriptions;
                     if (parameters.length > 0
                             && (parameterDescriptions != null
@@ -292,9 +294,8 @@ public final class RestApi implements HttpHandler {
         return builder.helpEndpoint.pathExpression();
     }
 
-    public void handle(final FullHttpRequest request,
-                       final FullHttpResponse responseWriter)
-            throws MethodNotAllowedException,
+    public RestHandling resolve(final FullHttpRequest request) throws
+            MethodNotAllowedException,
             PathNotFoundException,
             InternalServerErrorException {
         try {
@@ -310,7 +311,7 @@ public final class RestApi implements HttpHandler {
                 throw new PathNotFoundException(qsd.path());
             }
 
-            match.handler().handle(request, match, responseWriter);
+            return new RestHandling(match.handler(), match);
         } catch (final RestException e) {
             throw e;
         } catch (final Exception e) {

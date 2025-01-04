@@ -14,7 +14,7 @@ import io.netty.handler.ssl.SslContext;
 public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> {
     private final SslContext sslCtx;
     private final boolean withCompression;
-    private final HttpHandler apiHandler;
+    private final RestRouter apiHandler;
     private final ErrorHandler errorHandler;
     private final int maxRequestContentLength;
     private final CorsConfig corsConfig;
@@ -22,7 +22,7 @@ public class RestApiServerInitializer extends ChannelInitializer<SocketChannel> 
 
     public RestApiServerInitializer(final SslContext sslCtx,
                                     final boolean withCompression,
-                                    final HttpHandler apiHandler,
+                                    final RestRouter apiHandler,
                                     final ErrorHandler errorHandler,
                                     final int maxRequestContentLength,
                                     final CorsConfig corsConfig,

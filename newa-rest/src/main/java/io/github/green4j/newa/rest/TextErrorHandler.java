@@ -14,7 +14,7 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
 
     @Override
     public void handle(final MethodNotAllowedException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         writeToResponse(
                 lineBuilder()
                         .append("Method not allowed: ")
@@ -25,7 +25,7 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
 
     @Override
     public void handle(final PathNotFoundException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         writeToResponse(
                 lineBuilder()
                         .append("Path not found: ")
@@ -36,7 +36,7 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
 
     @Override
     public void handle(final InternalServerErrorException error,
-                       final FullHttpResponse response) {
+                       final FullHttpResponseContent response) {
         final ByteArrayLineBuilder builder = lineBuilder()
                 .append("An error happened: ");
         final String message = error.getMessage();
@@ -53,15 +53,15 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
         builder.appendln("Stacktrace:");
         final StackTraceElement[] ste = error.getStackTrace();
         for (int i = 0; i < ste.length; i++) {
-            builder.append("    ").append(ste[i].toString());
+            builder.append("    ").appendln(ste[i].toString());
         }
         writeToResponse(builder, response);
     }
 
     private void writeToResponse(final ByteArrayLineBuilder builder,
-                                 final FullHttpResponse response) {
+                                 final FullHttpResponseContent response) {
         final ByteArray content = builder.array();
-        response.setContent(contentType,
+        response.set(contentType,
                 content.array(),
                 content.start(),
                 content.length());

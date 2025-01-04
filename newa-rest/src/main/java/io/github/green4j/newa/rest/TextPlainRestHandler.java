@@ -2,6 +2,7 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.lang.Charset;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 public abstract class TextPlainRestHandler
@@ -15,22 +16,23 @@ public abstract class TextPlainRestHandler
     }
 
     @Override
-    public final void handle(final FullHttpRequest request,
+    public final void handle(final ChannelHandlerContext ctx,
+                             final FullHttpRequest request,
                              final PathParameters pathParameters,
-                             final FullHttpResponse responseWriter)
+                             final FullHttpResponseContent responseContent,
+                             final Result result)
             throws PathNotFoundException, InternalServerErrorException {
         try {
             final ByteArray content = doHandle(request, pathParameters);
-            responseWriter.setContent(
+            responseContent.set(
                     contentType,
                     content.array(),
                     content.start(),
                     content.length()
             );
-        } catch (final PathNotFoundException | InternalServerErrorException e) {
-            throw e;
+            result.ok();
         } catch (final Exception e) {
-            throw new InternalServerErrorException(e);
+            result.error(e);
         }
     }
 
