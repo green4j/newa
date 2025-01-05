@@ -1,11 +1,57 @@
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.jelly.ByteArray;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.util.AsciiString;
+
+import java.nio.ByteBuffer;
 
 public interface RestHandle {
     interface Result {
+        interface Content {
+            Content append(byte[] array, int offset, int length);
+
+            Content append(ByteBuffer buffer);
+
+            Content append(ByteBuf buffer);
+
+            void done();
+
+            void doneAndClose();
+        }
+
+        RestHandle.Result addHeader(AsciiString header, AsciiString value);
+
         void ok();
+
+        void ok(byte[] array, int offset, int length);
+
+        void ok(ByteBuffer buffer);
+
+        void ok(ByteBuf buffer);
+
+        void ok(FullHttpResponseContent content);
+
+        void ok(AsciiString contentType,
+                ByteArray content);
+
+        void ok(AsciiString contentType,
+                byte[] array, int offset, int length);
+
+        void ok(AsciiString contentType,
+                ByteBuffer buffer);
+
+        void ok(AsciiString contentType,
+                ByteBuf buffer);
+
+        Content ok(AsciiString contentEncoding,
+                   AsciiString contentType,
+                   int contentLength);
+
+        Content ok(AsciiString contentType,
+                   int contentLength);
 
         void okAndClose();
 
@@ -17,9 +63,7 @@ public interface RestHandle {
     void handle(ChannelHandlerContext ctx,
                 FullHttpRequest request,
                 PathParameters pathParameters,
-                FullHttpResponseContent responseContent,
-                Result result) throws
-            PathNotFoundException,
-            InternalServerErrorException;
+                Result result)
+            throws PathNotFoundException, InternalServerErrorException;
 
 }

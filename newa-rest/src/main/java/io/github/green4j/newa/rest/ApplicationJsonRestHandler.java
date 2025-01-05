@@ -19,18 +19,11 @@ public abstract class ApplicationJsonRestHandler
     public final void handle(final ChannelHandlerContext ctx,
                              final FullHttpRequest request,
                              final PathParameters pathParameters,
-                             final FullHttpResponseContent responseContent,
                              final Result result)
             throws PathNotFoundException, InternalServerErrorException {
         try {
             final ByteArray content = doHandle(request, pathParameters);
-            responseContent.set(
-                    contentType,
-                    content.array(),
-                    content.start(),
-                    content.length()
-            );
-            result.ok();
+            result.ok(new DefaultFullHttpResponseContent(contentType, content));
         } catch (final Exception e) {
             result.error(e);
         }

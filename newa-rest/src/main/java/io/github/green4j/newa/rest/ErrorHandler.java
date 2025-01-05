@@ -2,10 +2,10 @@ package io.github.green4j.newa.rest;
 
 public interface ErrorHandler {
 
-    void handle(MethodNotAllowedException error, FullHttpResponseContent response);
+    FullHttpResponseContent handle(MethodNotAllowedException error);
 
-    void handle(PathNotFoundException error, FullHttpResponseContent response);
+    FullHttpResponseContent handle(PathNotFoundException error);
 
-    void handle(InternalServerErrorException error, FullHttpResponseContent response);
+    FullHttpResponseContent handle(InternalServerErrorException error);
 
 }

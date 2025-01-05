@@ -1,12 +1,13 @@
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.AsciiString;
 
 import java.nio.ByteBuffer;
 
-class DefaultFullHttpResponseContent implements FullHttpResponseContent {
+public class DefaultFullHttpResponseContent implements FullHttpResponseContent {
     private AsciiString contentEncoding;
     private AsciiString contentType;
 
@@ -16,7 +17,31 @@ class DefaultFullHttpResponseContent implements FullHttpResponseContent {
 
     private ByteBuffer byteBuffer;
 
-    DefaultFullHttpResponseContent() {
+    public DefaultFullHttpResponseContent() {
+    }
+
+    public DefaultFullHttpResponseContent(final AsciiString contentType,
+                                          final ByteArray byteArray) {
+        this.contentType = contentType;
+        this.array = byteArray.array();
+        this.arrayOffset = byteArray.start();
+        this.arrayLength = byteArray.length();
+    }
+
+    public DefaultFullHttpResponseContent(final AsciiString contentType,
+                                          final byte[] array,
+                                          final int arrayOffset,
+                                          final int arrayLength) {
+        this.contentType = contentType;
+        this.array = array;
+        this.arrayOffset = arrayOffset;
+        this.arrayLength = arrayLength;
+    }
+
+    public DefaultFullHttpResponseContent(final AsciiString contentType,
+                                          final ByteBuffer byteBuffer) {
+        this.contentType = contentType;
+        this.byteBuffer = byteBuffer;
     }
 
     @Override
@@ -101,13 +126,13 @@ class DefaultFullHttpResponseContent implements FullHttpResponseContent {
             if (arrayLength == 0) {
                 return Unpooled.EMPTY_BUFFER;
             }
-            return Unpooled.wrappedBuffer(
+            return Unpooled.copiedBuffer(
                     array,
                     arrayOffset,
                     arrayLength);
         }
         if (byteBuffer != null) {
-            return Unpooled.wrappedBuffer(byteBuffer);
+            return Unpooled.copiedBuffer(byteBuffer);
         }
         return Unpooled.EMPTY_BUFFER;
     }

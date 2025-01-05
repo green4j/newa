@@ -1,26 +1,22 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
 
 public class JsonErrorHandler extends AbstractApplicationJsonHandler implements ErrorHandler {
 
     @Override
-    public void handle(final MethodNotAllowedException error,
-                       final FullHttpResponseContent response) {
-        fireExceptionNoStacktrace(error, response);
+    public FullHttpResponseContent handle(final MethodNotAllowedException error) {
+        return fireExceptionNoStacktrace(error);
     }
 
     @Override
-    public void handle(final PathNotFoundException error,
-                       final FullHttpResponseContent response) {
-        fireExceptionNoStacktrace(error, response);
+    public FullHttpResponseContent handle(final PathNotFoundException error) {
+        return fireExceptionNoStacktrace(error);
     }
 
     @Override
-    public void handle(final InternalServerErrorException error,
-                       final FullHttpResponseContent response) {
+    public FullHttpResponseContent handle(final InternalServerErrorException error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
         output.startObject();
@@ -40,11 +36,10 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
         output.endArray();
         output.endObject();
 
-        writeToResponse(generator.finish(), response);
+        return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }
 
-    private void fireExceptionNoStacktrace(final Exception error,
-                                           final FullHttpResponseContent response) {
+    private FullHttpResponseContent fireExceptionNoStacktrace(final Exception error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
         output.startObject();
@@ -56,14 +51,6 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
             output.stringValue(message, true);
         }
         output.endObject();
-        writeToResponse(generator.finish(), response);
-    }
-
-    private void writeToResponse(final ByteArray content,
-                                 final FullHttpResponseContent response) {
-        response.set(contentType,
-                content.array(),
-                content.start(),
-                content.length());
+        return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }
 }

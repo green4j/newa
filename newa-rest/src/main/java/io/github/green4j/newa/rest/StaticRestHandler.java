@@ -16,8 +16,7 @@ public class StaticRestHandler implements RestHandle {
         return new StaticRestHandler(TEXT_PLAIN, content);
     }
 
-    private final AsciiString contentType;
-    private final byte[] content;
+    private final FullHttpResponseContent content;
 
     public StaticRestHandler(final AsciiString contentType,
                              final CharSequence content) {
@@ -26,22 +25,19 @@ public class StaticRestHandler implements RestHandle {
 
     public StaticRestHandler(final AsciiString contentType,
                              final byte[] content) {
-        this.contentType = contentType;
-        this.content = content;
+        this.content = new DefaultFullHttpResponseContent(
+                contentType,
+                content,
+                0,
+                content.length
+        );
     }
 
     @Override
     public void handle(final ChannelHandlerContext ctx,
                        final FullHttpRequest request,
                        final PathParameters pathParameters,
-                       final FullHttpResponseContent responseContent,
                        final Result result) {
-        responseContent.set(
-                contentType,
-                content,
-                0,
-                content.length
-        );
-        result.ok();
+        result.ok(content);
     }
 }

@@ -1,6 +1,5 @@
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.lang.Charset;
 import io.github.green4j.newa.text.ByteArrayLineBuilder;
 
@@ -13,30 +12,29 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
     }
 
     @Override
-    public void handle(final MethodNotAllowedException error,
-                       final FullHttpResponseContent response) {
-        writeToResponse(
+    public FullHttpResponseContent handle(final MethodNotAllowedException error) {
+        return new DefaultFullHttpResponseContent(
+                contentType,
                 lineBuilder()
                         .append("Method not allowed: ")
-                        .appendln(error.method()),
-                response
+                        .appendln(error.method())
+                        .array()
         );
     }
 
     @Override
-    public void handle(final PathNotFoundException error,
-                       final FullHttpResponseContent response) {
-        writeToResponse(
+    public FullHttpResponseContent handle(final PathNotFoundException error) {
+        return new DefaultFullHttpResponseContent(
+                contentType,
                 lineBuilder()
                         .append("Path not found: ")
-                        .appendln(error.path()),
-                response
+                        .appendln(error.path())
+                        .array()
         );
     }
 
     @Override
-    public void handle(final InternalServerErrorException error,
-                       final FullHttpResponseContent response) {
+    public FullHttpResponseContent handle(final InternalServerErrorException error) {
         final ByteArrayLineBuilder builder = lineBuilder()
                 .append("An error happened: ");
         final String message = error.getMessage();
@@ -55,15 +53,9 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
         for (int i = 0; i < ste.length; i++) {
             builder.append("    ").appendln(ste[i].toString());
         }
-        writeToResponse(builder, response);
-    }
-
-    private void writeToResponse(final ByteArrayLineBuilder builder,
-                                 final FullHttpResponseContent response) {
-        final ByteArray content = builder.array();
-        response.set(contentType,
-                content.array(),
-                content.start(),
-                content.length());
+        return new DefaultFullHttpResponseContent(
+                contentType,
+                builder.array()
+        );
     }
 }
