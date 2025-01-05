@@ -16,10 +16,10 @@ public abstract class TextPlainRestHandler
     }
 
     @Override
-    public final void handle(ChannelHandlerContext ctx,
-                             FullHttpRequest request,
-                             PathParameters pathParameters,
-                             Result result)
+    public final void handle(final ChannelHandlerContext ctx,
+                             final FullHttpRequest request,
+                             final PathParameters pathParameters,
+                             final Result result)
             throws PathNotFoundException, InternalServerErrorException {
         try {
             final ByteArray content = doHandle(request, pathParameters);

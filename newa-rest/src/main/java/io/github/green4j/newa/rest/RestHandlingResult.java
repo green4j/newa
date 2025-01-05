@@ -36,7 +36,7 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
 
     private FullHttpResponse response;
 
-    public RestHandlingResult(final ChannelHandlerContext ctx,
+    RestHandlingResult(final ChannelHandlerContext ctx,
                               final HttpMessage request,
                               final ErrorHandler errorHandler) {
         this.ctx = ctx;
@@ -296,8 +296,8 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
         final HttpHeaders headers = response.headers();
         final int contentLengthHeader = headers.getInt(CONTENT_LENGTH, 0);
         if (contentLength != contentLengthHeader) {
-            throw new IllegalStateException("Expected content length: " +
-                    contentLengthHeader + ", in fact: " + contentLength);
+            throw new IllegalStateException("Expected content length: "
+                    + contentLengthHeader + ", in fact: " + contentLength);
         }
     }
 
