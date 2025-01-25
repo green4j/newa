@@ -21,8 +21,7 @@ public class TxtRestHandler extends TextPlainRestHandler {
     @Override
     protected final ByteArray doHandle(final FullHttpRequest request,
                                        final PathParameters pathParameters) throws
-            PathNotFoundException,
-            InternalServerErrorException {
+            PathNotFoundException, BadRequestException {
         final ByteArrayLineBuilder lineBuilder = lineBuilder();
         handle.doHandle(request, pathParameters, lineBuilder);
         return lineBuilder.array();

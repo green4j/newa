@@ -15,8 +15,7 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
 
     @Override
     protected final ByteArray doHandle(final FullHttpRequest request,
-                                       final PathParameters pathParameters)
-            throws PathNotFoundException, InternalServerErrorException {
+                                       final PathParameters pathParameters) {
         if (content == null) {
             synchronized (this) {
                 if (content == null) {
@@ -50,5 +49,5 @@ public abstract class LazyStaticTxtRestHandler extends TextPlainRestHandler {
         return content;
     }
 
-    protected abstract void doHandle(LineAppendable output) throws InternalServerErrorException;
+    protected abstract void doHandle(LineAppendable output);
 }

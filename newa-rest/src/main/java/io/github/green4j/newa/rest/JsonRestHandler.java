@@ -21,7 +21,7 @@ public class JsonRestHandler extends ApplicationJsonRestHandler {
     @Override
     protected ByteArray doHandle(final FullHttpRequest request,
                                  final PathParameters pathParameters)
-            throws PathNotFoundException, InternalServerErrorException {
+            throws PathNotFoundException, BadRequestException {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         handle.doHandle(request, pathParameters, generator.start());
         return generator.finish();

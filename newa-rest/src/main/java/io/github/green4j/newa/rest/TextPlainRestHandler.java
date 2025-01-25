@@ -20,7 +20,7 @@ public abstract class TextPlainRestHandler
                              final FullHttpRequest request,
                              final PathParameters pathParameters,
                              final Result result)
-            throws PathNotFoundException, InternalServerErrorException {
+            throws PathNotFoundException, BadRequestException {
         try {
             final ByteArray content = doHandle(request, pathParameters);
             result.ok(contentType, content);
@@ -31,5 +31,5 @@ public abstract class TextPlainRestHandler
 
     protected abstract ByteArray doHandle(FullHttpRequest request,
                                           PathParameters pathParameters)
-            throws PathNotFoundException, InternalServerErrorException;
+            throws PathNotFoundException, BadRequestException;
 }

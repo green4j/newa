@@ -6,6 +6,5 @@ public interface RestRouter {
 
     RestHandling resolve(FullHttpRequest request) throws
             MethodNotAllowedException,
-            PathNotFoundException,
-            InternalServerErrorException;
+            PathNotFoundException;
 }

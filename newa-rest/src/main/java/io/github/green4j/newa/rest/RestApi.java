@@ -296,8 +296,7 @@ public final class RestApi implements RestRouter {
 
     public RestHandling resolve(final FullHttpRequest request) throws
             MethodNotAllowedException,
-            PathNotFoundException,
-            InternalServerErrorException {
+            PathNotFoundException {
         try {
             final String method = request.method().name();
             final PathMatcher<RestHandle> pathMatcher = getMethodPathMatcher(method);
@@ -314,8 +313,6 @@ public final class RestApi implements RestRouter {
             return new RestHandling(match.handler(), match);
         } catch (final RestException e) {
             throw e;
-        } catch (final Exception e) {
-            throw new InternalServerErrorException(e);
         }
     }
 

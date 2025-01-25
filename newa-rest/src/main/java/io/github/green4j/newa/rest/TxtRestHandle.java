@@ -7,6 +7,6 @@ public interface TxtRestHandle {
 
     void doHandle(FullHttpRequest request,
                   PathParameters pathParameters,
-                  LineAppendable output) throws PathNotFoundException, InternalServerErrorException;
+                  LineAppendable output) throws PathNotFoundException, BadRequestException;
 
 }

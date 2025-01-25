@@ -7,6 +7,6 @@ public interface JsonRestHandle {
 
     void doHandle(FullHttpRequest request,
                   PathParameters pathParameters,
-                  JsonGenerator output) throws PathNotFoundException, InternalServerErrorException;
+                  JsonGenerator output) throws PathNotFoundException, BadRequestException;
 
 }

@@ -79,6 +79,6 @@ public interface RestHandle {
                 FullHttpRequest request,
                 PathParameters pathParameters,
                 Result result)
-            throws PathNotFoundException, InternalServerErrorException;
+            throws PathNotFoundException, BadRequestException;
 
 }
