@@ -12,4 +12,8 @@ public interface LineAppendable extends Appendable {
     LineAppendable appendln(char c);
 
     LineAppendable appendln();
+
+    LineAppendable tab(int level);
+
+    LineAppendable tab(int level, int size);
 }

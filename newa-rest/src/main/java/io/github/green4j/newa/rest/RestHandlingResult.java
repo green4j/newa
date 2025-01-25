@@ -37,8 +37,8 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
     private FullHttpResponse response;
 
     RestHandlingResult(final ChannelHandlerContext ctx,
-                              final HttpMessage request,
-                              final ErrorHandler errorHandler) {
+                       final HttpMessage request,
+                       final ErrorHandler errorHandler) {
         this.ctx = ctx;
 
         httpVersion = request.protocolVersion();
@@ -49,20 +49,71 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
 
     @Override
     public RestHandle.Result addHeader(final AsciiString header,
-                          final AsciiString value) {
+                                       final AsciiString value) {
         userHeaders.set(header, value);
         return this;
     }
 
     @Override
-    public void ok() {
+    public void respond(final HttpResponseStatus statusCode) {
         response = new DefaultFullHttpResponse(
                 httpVersion,
-                HttpResponseStatus.OK);
+                statusCode);
 
         setContentLengthHeader();
 
         doDone(false);
+    }
+
+    @Override
+    public void respond(final HttpResponseStatus statusCode,
+                        final FullHttpResponseContent content) {
+        response = new DefaultFullHttpResponse(
+                httpVersion,
+                statusCode,
+                content.toByteBuf());
+
+        setUserHandlers();
+
+        setContentHeaders(
+                content.contentEncoding(),
+                content.contentType(),
+                response.content().readableBytes()
+        );
+
+        doDone(false);
+    }
+
+    @Override
+    public void respond(final HttpResponseStatus statusCode,
+                        final AsciiString contentType,
+                        final ByteArray content) {
+        respond(statusCode, new DefaultFullHttpResponseContent(contentType, content));
+    }
+
+    @Override
+    public RestHandle.Result.Content respond(final HttpResponseStatus statusCode,
+                                             final AsciiString contentEncoding,
+                                             final AsciiString contentType,
+                                             final int contentLength) {
+        response = new DefaultFullHttpResponse(
+                httpVersion,
+                statusCode);
+
+        setUserHandlers();
+
+        setContentHeaders(
+                contentEncoding,
+                contentType,
+                contentLength
+        );
+
+        return this;
+    }
+
+    @Override
+    public void ok() {
+        respond(HttpResponseStatus.OK);
     }
 
     @Override
@@ -111,26 +162,13 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
 
     @Override
     public void ok(final FullHttpResponseContent content) {
-        response = new DefaultFullHttpResponse(
-                httpVersion,
-                HttpResponseStatus.OK,
-                content.toByteBuf());
-
-        setUserHandlers();
-
-        setContentHeaders(
-                content.contentEncoding(),
-                content.contentType(),
-                response.content().readableBytes()
-        );
-
-        doDone(false);
+        respond(HttpResponseStatus.OK, content);
     }
 
     @Override
     public void ok(final AsciiString contentType,
                    final ByteArray content) {
-        ok(new DefaultFullHttpResponseContent(contentType, content));
+        respond(HttpResponseStatus.OK, contentType, content);
     }
 
     @Override
@@ -197,19 +235,12 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
     public RestHandle.Result.Content ok(final AsciiString contentEncoding,
                                         final AsciiString contentType,
                                         final int contentLength) {
-        response = new DefaultFullHttpResponse(
-                httpVersion,
-                HttpResponseStatus.OK);
-
-        setUserHandlers();
-
-        setContentHeaders(
+        return respond(
+                HttpResponseStatus.OK,
                 contentEncoding,
                 contentType,
                 contentLength
         );
-
-        return this;
     }
 
     @Override
@@ -262,6 +293,11 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
         } else if (error instanceof PathNotFoundException) {
             final PathNotFoundException e =
                     (PathNotFoundException) error;
+            status = e.status();
+            content = errorHandler.handle(e);
+        } else if (error instanceof BadRequestException) {
+            final BadRequestException e =
+                    (BadRequestException) error;
             status = e.status();
             content = errorHandler.handle(e);
         } else if (error instanceof InternalServerErrorException) {

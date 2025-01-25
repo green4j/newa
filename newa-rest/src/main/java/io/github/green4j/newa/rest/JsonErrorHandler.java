@@ -7,20 +7,47 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
 
     @Override
     public FullHttpResponseContent handle(final MethodNotAllowedException error) {
-        return fireExceptionNoStacktrace(error);
+        return dumpThrowableNoStacktrace(error);
     }
 
     @Override
     public FullHttpResponseContent handle(final PathNotFoundException error) {
-        return fireExceptionNoStacktrace(error);
+        return dumpThrowableNoStacktrace(error);
+    }
+
+    @Override
+    public FullHttpResponseContent handle(final BadRequestException error) {
+        return dumpThrowableNoStacktrace(error);
     }
 
     @Override
     public FullHttpResponseContent handle(final InternalServerErrorException error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
+        dumpThrowableWithStacktrace("error", error, output);
+        return new DefaultFullHttpResponseContent(contentType, generator.finish());
+    }
+
+    private FullHttpResponseContent dumpThrowableNoStacktrace(final Throwable error) {
+        final ByteArrayJsonGenerator generator = jsonGenerator();
+        final JsonGenerator output = jsonGenerator().start();
         output.startObject();
         output.objectMember("error");
+        output.stringValue(error.getClass().getName());
+        final String message = error.getMessage();
+        if (message != null) {
+            output.objectMember("message");
+            output.stringValue(message, true);
+        }
+        output.endObject();
+        return new DefaultFullHttpResponseContent(contentType, generator.finish());
+    }
+
+    private static void dumpThrowableWithStacktrace(final String errorObjectMember,
+                                                    final Throwable error,
+                                                    final JsonGenerator output) {
+        output.startObject();
+        output.objectMember(errorObjectMember);
         output.stringValue(error.getClass().getName());
         final String message = error.getMessage();
         if (message != null) {
@@ -34,23 +61,9 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
             output.stringValue(ste[i].toString(), true);
         }
         output.endArray();
-        output.endObject();
-
-        return new DefaultFullHttpResponseContent(contentType, generator.finish());
-    }
-
-    private FullHttpResponseContent fireExceptionNoStacktrace(final Exception error) {
-        final ByteArrayJsonGenerator generator = jsonGenerator();
-        final JsonGenerator output = jsonGenerator().start();
-        output.startObject();
-        output.objectMember("error");
-        output.stringValue(error.getClass().getName());
-        final String message = error.getMessage();
-        if (message != null) {
-            output.objectMember("message");
-            output.stringValue(message, true);
+        if (error.getCause() != null) {
+            dumpThrowableWithStacktrace("by", error.getCause(), output);
         }
         output.endObject();
-        return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }
 }

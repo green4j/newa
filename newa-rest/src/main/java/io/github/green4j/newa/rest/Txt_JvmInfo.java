@@ -48,11 +48,11 @@ public class Txt_JvmInfo implements TxtRestHandle {
         output.appendln(toDuration(runtimeMXBean.getUptime()));
 
         output.appendln("os");
-        output.append("    name: ");
+        output.tab(1).append("name: ");
         output.appendln(operatingSystemMXBean.getName());
-        output.append("    version: ");
+        output.tab(1).append("version: ");
         output.appendln(operatingSystemMXBean.getVersion());
-        output.append("    arch: ");
+        output.tab(1).append("arch: ");
         output.appendln(operatingSystemMXBean.getArch());
 
         final MemoryUsage heapUsage = memoryMXBean.getHeapMemoryUsage();
@@ -70,11 +70,11 @@ public class Txt_JvmInfo implements TxtRestHandle {
 
     private static void dumpCpuInfo(final LineAppendable output,
                                     final OperatingSystemMXBean operatingSystemMXBean) {
-        output.append("    number: ");
+        output.tab(1).append("number: ");
         output.appendln(Integer.toString(operatingSystemMXBean.getAvailableProcessors()));
-        output.append("    process: ");
+        output.tab(1).append("process: ");
         output.appendln(String.format("%.1f%%", operatingSystemMXBean.getProcessCpuLoad()));
-        output.append("    system: ");
+        output.tab(1).append("system: ");
         output.appendln(String.format("%.1f%%", getCpuLoad(operatingSystemMXBean)));
     }
 
@@ -82,46 +82,45 @@ public class Txt_JvmInfo implements TxtRestHandle {
                                        final OperatingSystemMXBean operatingSystemMXBean,
                                        final MemoryUsage heapUsage,
                                        final MemoryUsage nonHeapUsage) {
-        output.appendln("    physical");
-        output.append("        free: ");
+        output.tab(1).appendln("physical");
+        output.tab(2).append("free: ");
         output.appendln(toMemorySize(getFreeMemorySize(operatingSystemMXBean)));
-        output.append("        total: ");
+        output.tab(2).append("total: ");
         output.appendln(toMemorySize(getTotalMemorySize(operatingSystemMXBean)));
 
-        output.appendln("    heap");
-        output.append("        init: ");
+        output.tab(1).appendln("heap");
+        output.tab(2).append("init: ");
         output.appendln(toMemorySize(heapUsage.getInit()));
-        output.append("        used: ");
+        output.tab(2).append("used: ");
         output.appendln(toMemorySize(heapUsage.getUsed()));
-        output.append("        committed: ");
+        output.tab(2).append("committed: ");
         output.appendln(toMemorySize(heapUsage.getCommitted()));
-        output.append("        max: ");
+        output.tab(2).append("max: ");
         output.appendln(toMemorySize(heapUsage.getMax()));
 
-        output.appendln("    nonHeap");
-        output.append("        init: ");
+        output.tab(1).appendln("nonHeap");
+        output.tab(2).append("init: ");
         output.appendln(toMemorySize(nonHeapUsage.getInit()));
-        output.append("        used: ");
+        output.tab(2).append("used: ");
         output.appendln(toMemorySize(nonHeapUsage.getUsed()));
-        output.append("        committed: ");
+        output.tab(2).append("committed: ");
         output.appendln(toMemorySize(nonHeapUsage.getCommitted()));
     }
 
     private static void dumpGcInfo(final LineAppendable output,
                                    final List<GarbageCollectorMXBean> garbageCollectorMXBeans) {
-        output.append("    collectors [")
+        output.tab(1).append("collectors [")
                 .append(Integer.toString(garbageCollectorMXBeans.size())).append("]\n");
         garbageCollectorMXBeans.stream()
                 .sorted(Comparator.comparing(GarbageCollectorMXBean::getName))
                 .forEach(
                         gc -> {
-                            output.append("        name: ");
-                            output.append(gc.getName());
-                            output.append("\n        count: ");
-                            output.append(Long.toString(gc.getCollectionCount()));
-                            output.append("\n        time: ");
-                            output.append(toDuration(gc.getCollectionTime()));
-                            output.append('\n');
+                            output.tab(2).append("name: ");
+                            output.appendln(gc.getName());
+                            output.tab(2).append("count: ");
+                            output.appendln(Long.toString(gc.getCollectionCount()));
+                            output.tab(2).append("time: ");
+                            output.appendln(toDuration(gc.getCollectionTime()));
                         }
                 );
     }

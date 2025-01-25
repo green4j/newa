@@ -26,7 +26,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
         final ThreadInfo[] threadInfos = threadMXBean.dumpAllThreads(true, true);
         final Map<Long, String> threadDescriptions = new HashMap<>();
 
-        output.append("threads [").append(Integer.toString(threadInfos.length)).append("]\n");
+        output.append("threads [").append(Integer.toString(threadInfos.length)).appendln(']');
 
         for (int i = 0; i < threadInfos.length; i++) {
             final ThreadInfo threadInfo = threadInfos[i];
@@ -72,7 +72,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
                 }
             }
 
-            output.append("    ").append(sb);
+            output.tab(1).append(sb);
 
             threadDescriptions.put(threadInfo.getThreadId(), sb.toString());
 
@@ -90,7 +90,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
                     break;
             }
 
-            output.append('\n');
+            output.appendln();
 
             addStackTrace(output, threadInfo, sb);
         }
@@ -103,10 +103,10 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
             for (final long tid : dlt) {
                 final String td = threadDescriptions.get(tid);
                 if (td == null) {
-                    output.append("    #").append(Long.toString(tid)).append('\n');
+                    output.tab(1).append("#").appendln(Long.toString(tid));
                     continue;
                 }
-                output.append("    ").append(td).append('\n');
+                output.tab(1).appendln(td);
             }
         }
     }
@@ -119,7 +119,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
 
         final StackTraceElement[] stackTrace = threadInfo.getStackTrace();
 
-        to.append("        stack [").append(Integer.toString(stackTrace.length)).append("]\n");
+        to.tab(2).append("stack [").append(Integer.toString(stackTrace.length)).appendln(']');
 
         for (int i = 0; i < stackTrace.length; i++) {
             final StackTraceElement ste = stackTrace[i];
@@ -156,14 +156,14 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
                     sb.append(" - locked ").append(mi);
                 }
             }
-            to.append("            ").append(sb).append('\n');
+            to.tab(3).appendln(sb);
         }
 
         final LockInfo[] locks = threadInfo.getLockedSynchronizers();
         if (locks.length > 0) {
-            to.append("        lockedSynchronizers [").append(Integer.toString(locks.length)).append("]\n");
+            to.tab(2).append("lockedSynchronizers [").append(Integer.toString(locks.length)).appendln("]");
             for (final LockInfo li : locks) {
-                to.append("            ").append(li.toString()).append('\n');
+                to.tab(3).appendln(li.toString());
             }
         }
     }

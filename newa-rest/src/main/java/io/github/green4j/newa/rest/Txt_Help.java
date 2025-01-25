@@ -44,7 +44,7 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
                 }
 
                 if (hasMetaInfo) {
-                    output.append("    ");
+                    output.tab(1);
                 }
                 output.appendln(method.name());
 
@@ -55,37 +55,33 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
                     }
 
                     if (hasMetaInfo) {
-                        output.append("        ");
+                        output.tab(2);
                     } else {
-                        output.append("    ");
+                        output.tab(1);
                     }
                     output.appendln(e.pathExpression());
                     if (e.description() != null) {
                         if (hasMetaInfo) {
-                            output.append("            ");
+                            output.tab(3);
                         } else {
-                            output.append("        ");
+                            output.tab(2);
                         }
                         output.appendln(e.description());
                     }
 
                     final String[] pathParamDescriptions = e.pathParameterDescriptions();
                     if (pathParamDescriptions.length > 0) {
-                        output.append("            ");
-                        output.appendln("path parameters: ");
+                        output.tab(3).appendln("path parameters: ");
                         for (int p = 0; p < pathParamDescriptions.length; p++) {
-                            output.append("                ");
-                            output.appendln(pathParamDescriptions[p]);
+                            output.tab(4).appendln(pathParamDescriptions[p]);
                         }
                     }
 
                     final String[] queryParamDescriptions = e.queryParameterDescriptions();
                     if (queryParamDescriptions.length > 0) {
-                        output.append("            ");
-                        output.appendln("query parameters: ");
+                        output.tab(3).appendln("query parameters: ");
                         for (int p = 0; p < queryParamDescriptions.length; p++) {
-                            output.append("                ");
-                            output.appendln(queryParamDescriptions[p]);
+                            output.tab(4).appendln(queryParamDescriptions[p]);
                         }
                     }
                 }

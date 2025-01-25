@@ -4,6 +4,7 @@ import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.util.AsciiString;
 
 import java.nio.ByteBuffer;
@@ -23,6 +24,20 @@ public interface RestHandle {
         }
 
         RestHandle.Result addHeader(AsciiString header, AsciiString value);
+
+        void respond(HttpResponseStatus statusCode);
+
+        void respond(HttpResponseStatus statusCode,
+                     FullHttpResponseContent content);
+
+        void respond(HttpResponseStatus statusCode,
+                     AsciiString contentType,
+                     ByteArray content);
+
+        RestHandle.Result.Content respond(HttpResponseStatus statusCode,
+                                          AsciiString contentEncoding,
+                                          AsciiString contentType,
+                                          int contentLength);
 
         void ok();
 

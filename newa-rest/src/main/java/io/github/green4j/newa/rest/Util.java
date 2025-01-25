@@ -36,6 +36,7 @@ public abstract class Util {
         final long minutes = TimeUnit.MILLISECONDS.toMinutes(ms);
         ms -= TimeUnit.MINUTES.toMillis(minutes);
         final long seconds = TimeUnit.MILLISECONDS.toSeconds(ms);
+        ms -= TimeUnit.SECONDS.toMillis(seconds);
         final StringBuilder result = new StringBuilder();
         if (days > 0) {
             result.append(days).append('d');
@@ -47,6 +48,7 @@ public abstract class Util {
             result.append(minutes).append('m');
         }
         result.append(seconds).append('s');
+        result.append(ms);
         return result.toString();
     }
 

@@ -34,28 +34,44 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
     }
 
     @Override
+    public FullHttpResponseContent handle(final BadRequestException error) {
+        return new DefaultFullHttpResponseContent(
+                contentType,
+                lineBuilder()
+                        .append("Bad request: ")
+                        .appendln(error.message())
+                        .array()
+        );
+    }
+
+    @Override
     public FullHttpResponseContent handle(final InternalServerErrorException error) {
-        final ByteArrayLineBuilder builder = lineBuilder()
-                .append("An error happened: ");
-        final String message = error.getMessage();
-        if (message != null) {
-            builder.appendln(message);
-        } else {
-            final Throwable cause = error.getCause();
-            if (cause != null) {
-                builder.appendln(cause.toString());
-            } else {
-                builder.appendln(error.toString());
-            }
-        }
-        builder.appendln("Stacktrace:");
-        final StackTraceElement[] ste = error.getStackTrace();
-        for (int i = 0; i < ste.length; i++) {
-            builder.append("    ").appendln(ste[i].toString());
-        }
+        final ByteArrayLineBuilder builder = lineBuilder();
+        dumpThrowableWithStacktrace(
+                "An error happened: ",
+                0,
+                error,
+                builder
+        );
         return new DefaultFullHttpResponseContent(
                 contentType,
                 builder.array()
         );
+    }
+
+    private static void dumpThrowableWithStacktrace(final String errorLabel,
+                                                    final int level,
+                                                    final Throwable error,
+                                                    final ByteArrayLineBuilder output) {
+        output.tab(level).append(errorLabel);
+        output.appendln(error.toString());
+        output.tab(level + 1).appendln("Stacktrace:");
+        final StackTraceElement[] ste = error.getStackTrace();
+        for (int i = 0; i < ste.length; i++) {
+            output.tab(level + 2).appendln(ste[i].toString());
+        }
+        if (error.getCause() != null) {
+            dumpThrowableWithStacktrace("By: ", level + 1, error.getCause(), output);
+        }
     }
 }

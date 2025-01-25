@@ -6,6 +6,8 @@ public interface ErrorHandler {
 
     FullHttpResponseContent handle(PathNotFoundException error);
 
+    FullHttpResponseContent handle(BadRequestException error);
+
     FullHttpResponseContent handle(InternalServerErrorException error);
 
 }
