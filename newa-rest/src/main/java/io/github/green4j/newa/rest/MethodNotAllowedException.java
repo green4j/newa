@@ -8,7 +8,17 @@ public class MethodNotAllowedException extends RestException {
     private final String method;
 
     public MethodNotAllowedException(final String method) {
+        this(method, null);
+    }
+
+    public MethodNotAllowedException(final String method,
+                                     final String message) {
+        super(message);
         this.method = method;
+    }
+
+    public String method() {
+        return method;
     }
 
     @Override
@@ -16,7 +26,4 @@ public class MethodNotAllowedException extends RestException {
         return HttpResponseStatus.METHOD_NOT_ALLOWED;
     }
 
-    public String method() {
-        return method;
-    }
 }

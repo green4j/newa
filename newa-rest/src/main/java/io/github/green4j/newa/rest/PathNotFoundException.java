@@ -8,15 +8,21 @@ public class PathNotFoundException extends RestException {
     private final String path;
 
     public PathNotFoundException(final String path) {
+        this(path, null);
+    }
+
+    public PathNotFoundException(final String path,
+                                 final String message) {
+        super(message);
         this.path = path;
+    }
+
+    public String path() {
+        return path;
     }
 
     @Override
     public HttpResponseStatus status() {
         return HttpResponseStatus.NOT_FOUND;
-    }
-
-    public String path() {
-        return path;
     }
 }

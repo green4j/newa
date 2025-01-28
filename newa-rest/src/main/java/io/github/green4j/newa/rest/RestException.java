@@ -16,7 +16,8 @@ public abstract class RestException extends Exception {
         super(cause);
     }
 
-    protected RestException(final String message, final Throwable cause) {
+    protected RestException(final String message,
+                            final Throwable cause) {
         super(message, cause);
     }
 

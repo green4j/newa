@@ -13,65 +13,95 @@ public class TextErrorHandler extends AbstractTextPlainHandler implements ErrorH
 
     @Override
     public FullHttpResponseContent handle(final MethodNotAllowedException error) {
+        final ByteArrayLineBuilder text = lineBuilder()
+                .append("Method not allowed");
+        final String method = error.method();
+        if (method != null) {
+            text.append(": ").appendln(method);
+        } else {
+            text.appendln();
+        }
+
+        final String message = error.getMessage();
+        if (message != null) {
+            text.appendln(message);
+        }
+
         return new DefaultFullHttpResponseContent(
                 contentType,
-                lineBuilder()
-                        .append("Method not allowed: ")
-                        .appendln(error.method())
-                        .array()
+                text.array()
         );
     }
 
     @Override
     public FullHttpResponseContent handle(final PathNotFoundException error) {
+        final ByteArrayLineBuilder text = lineBuilder()
+                .append("Path not found");
+        final String path = error.path();
+        if (path != null) {
+            text.append(": ").appendln(path);
+        } else {
+            text.appendln();
+        }
+
+        final String message = error.getMessage();
+        if (message != null) {
+            text.appendln(message);
+        }
+
         return new DefaultFullHttpResponseContent(
                 contentType,
-                lineBuilder()
-                        .append("Path not found: ")
-                        .appendln(error.path())
-                        .array()
+                text.array()
         );
     }
 
     @Override
     public FullHttpResponseContent handle(final BadRequestException error) {
+        final ByteArrayLineBuilder text = lineBuilder()
+                .append("Bad request");
+        final String message = error.getMessage();
+        if (message != null) {
+            text.append(": ").appendln(message);
+        } else {
+            text.appendln();
+        }
+
         return new DefaultFullHttpResponseContent(
                 contentType,
-                lineBuilder()
-                        .append("Bad request: ")
-                        .appendln(error.message())
-                        .array()
+                text.array()
         );
     }
 
     @Override
     public FullHttpResponseContent handle(final InternalServerErrorException error) {
-        final ByteArrayLineBuilder builder = lineBuilder();
+        final ByteArrayLineBuilder text = lineBuilder();
+
         dumpThrowableWithStacktrace(
                 "An error happened: ",
                 0,
                 error,
-                builder
+                text
         );
+
         return new DefaultFullHttpResponseContent(
                 contentType,
-                builder.array()
+                text.array()
         );
     }
 
     private static void dumpThrowableWithStacktrace(final String errorLabel,
                                                     final int level,
                                                     final Throwable error,
-                                                    final ByteArrayLineBuilder output) {
-        output.tab(level).append(errorLabel);
-        output.appendln(error.toString());
-        output.tab(level + 1).appendln("Stacktrace:");
+                                                    final ByteArrayLineBuilder text) {
+        text.tab(level).append(errorLabel);
+        text.appendln(error.toString());
+        text.tab(level + 1).appendln("Stacktrace:");
         final StackTraceElement[] ste = error.getStackTrace();
         for (int i = 0; i < ste.length; i++) {
-            output.tab(level + 2).appendln(ste[i].toString());
+            text.tab(level + 2).appendln(ste[i].toString());
         }
         if (error.getCause() != null) {
-            dumpThrowableWithStacktrace("By: ", level + 1, error.getCause(), output);
+            dumpThrowableWithStacktrace("By: ", level + 1, error.getCause(), text);
         }
     }
 }

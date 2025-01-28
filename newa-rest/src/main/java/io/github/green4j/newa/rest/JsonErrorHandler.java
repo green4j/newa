@@ -4,39 +4,60 @@ import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
 
 public class JsonErrorHandler extends AbstractApplicationJsonHandler implements ErrorHandler {
+    private static final String ERROR = "error";
+    private static final String METHOD = "method";
+    private static final String PATH = "path";
+    private static final String MESSAGE = "message";
+    private static final String STACKTRACE = "stacktrace";
+    private static final String BY = "by";
 
     @Override
     public FullHttpResponseContent handle(final MethodNotAllowedException error) {
-        return dumpThrowableNoStacktrace(error);
+        return dumpRestExceptionNoStacktrace(error);
     }
 
     @Override
     public FullHttpResponseContent handle(final PathNotFoundException error) {
-        return dumpThrowableNoStacktrace(error);
+        return dumpRestExceptionNoStacktrace(error);
     }
 
     @Override
     public FullHttpResponseContent handle(final BadRequestException error) {
-        return dumpThrowableNoStacktrace(error);
+        return dumpRestExceptionNoStacktrace(error);
     }
 
     @Override
     public FullHttpResponseContent handle(final InternalServerErrorException error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
-        dumpThrowableWithStacktrace("error", error, output);
+        dumpThrowableWithStacktrace(ERROR, error, output);
         return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }
 
-    private FullHttpResponseContent dumpThrowableNoStacktrace(final Throwable error) {
+    private FullHttpResponseContent dumpRestExceptionNoStacktrace(final RestException error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         final JsonGenerator output = jsonGenerator().start();
         output.startObject();
-        output.objectMember("error");
+        output.objectMember(ERROR);
         output.stringValue(error.getClass().getName());
+
+        if (error instanceof MethodNotAllowedException) {
+            final String method = ((MethodNotAllowedException) error).method();
+            if (method != null) {
+                output.objectMember(METHOD);
+                output.stringValue(method);
+            }
+        } else if (error instanceof PathNotFoundException) {
+            final String path = ((PathNotFoundException) error).path();
+            if (path != null) {
+                output.objectMember(PATH);
+                output.stringValue(path);
+            }
+        }
+
         final String message = error.getMessage();
         if (message != null) {
-            output.objectMember("message");
+            output.objectMember(MESSAGE);
             output.stringValue(message, true);
         }
         output.endObject();
@@ -51,10 +72,10 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
         output.stringValue(error.getClass().getName());
         final String message = error.getMessage();
         if (message != null) {
-            output.objectMember("message");
+            output.objectMember(MESSAGE);
             output.stringValue(message, true);
         }
-        output.objectMember("stacktrace");
+        output.objectMember(STACKTRACE);
         output.startArray();
         final StackTraceElement[] ste = error.getStackTrace();
         for (int i = 0; i < ste.length; i++) {
@@ -62,7 +83,7 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
         }
         output.endArray();
         if (error.getCause() != null) {
-            dumpThrowableWithStacktrace("by", error.getCause(), output);
+            dumpThrowableWithStacktrace(BY, error.getCause(), output);
         }
         output.endObject();
     }
