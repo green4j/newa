@@ -8,12 +8,9 @@ public interface PathParameters {
 
     CharSequence parameterValue(int idx);
 
-    default CharSequence parameterValue(final String name) {
-        for (int i = 0; i < numberOfParameters(); i++) {
-            if (CharSequence.compare(name, parameterName(i)) == 0) {
-                return parameterValue(i);
-            }
-        }
-        return null;
-    }
+    CharSequence parameterValue(final String name);
+
+    CharSequence parameterValueRequired(final String name) throws BadRequestException;
+
+    String parameterValueRequiredString(final String name) throws BadRequestException;
 }

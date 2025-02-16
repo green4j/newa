@@ -184,6 +184,30 @@ public final class PathMatcher<T> {
         }
 
         @Override
+        public CharSequence parameterValue(final String name) {
+            for (int i = 0; i < numberOfParameters(); i++) { // linear probing is going to be OK
+                if (CharSequence.compare(name, parameterName(i)) == 0) {
+                    return parameterValue(i);
+                }
+            }
+            return null;
+        }
+
+        @Override
+        public CharSequence parameterValueRequired(final String name) throws BadRequestException {
+            final CharSequence result = parameterValue(name);
+            if (result == null) {
+                throw new BadRequestException("Parameter '" + name + "' is required");
+            }
+            return result;
+        }
+
+        @Override
+        public String parameterValueRequiredString(final String name) throws BadRequestException {
+            return parameterValueRequired(name).toString();
+        }
+
+        @Override
         public String toString() {
             final StringBuilder result = new StringBuilder();
             result.append("handler: ").append(handler());
