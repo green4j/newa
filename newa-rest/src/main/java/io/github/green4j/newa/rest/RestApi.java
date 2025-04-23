@@ -260,22 +260,40 @@ public final class RestApi implements RestRouter {
         }
     }
 
+    private static final ThreadLocal<PathMatcher<RestHandle>> GET_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> POST_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> PUT_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> DELETE_THREAD_LOCAL = new ThreadLocal<>();
+
     private final Builder builder;
-    private final PathMatcher<RestHandle> get;
-    private final PathMatcher<RestHandle> post;
-    private final PathMatcher<RestHandle> put;
-    private final PathMatcher<RestHandle> delete;
+    private final PathMatcher<RestHandle> getTemplate;
+    private final PathMatcher<RestHandle> postTemplate;
+    private final PathMatcher<RestHandle> putTemplate;
+    private final PathMatcher<RestHandle> deleteTemplate;
+
+    private static PathMatcher<RestHandle> retrieveThreadLocal(final ThreadLocal<PathMatcher<RestHandle>> threadLocal,
+                                                               final PathMatcher<RestHandle> template) {
+        if (template == null) {
+            return null;
+        }
+        PathMatcher<RestHandle> result = threadLocal.get();
+        if (result == null) {
+            result = new PathMatcher<>(template);
+            threadLocal.set(result);
+        }
+        return result;
+    }
 
     private RestApi(final Builder builder) {
         this.builder = builder;
-        // prepare method matchers
-        get = !builder.get.endpoints.isEmpty()
+        // prepare method matcher templates
+        getTemplate = !builder.get.endpoints.isEmpty()
                 ? builder.get.prepareMatcher() : null;
-        post = !builder.post.endpoints.isEmpty()
+        postTemplate = !builder.post.endpoints.isEmpty()
                 ? builder.post.prepareMatcher() : null;
-        put = !builder.put.endpoints.isEmpty()
+        putTemplate = !builder.put.endpoints.isEmpty()
                 ? builder.put.prepareMatcher() : null;
-        delete = !builder.delete.endpoints.isEmpty()
+        deleteTemplate = !builder.delete.endpoints.isEmpty()
                 ? builder.delete.prepareMatcher() : null;
     }
 
@@ -299,7 +317,7 @@ public final class RestApi implements RestRouter {
             PathNotFoundException {
         try {
             final String method = request.method().name();
-            final PathMatcher<RestHandle> pathMatcher = getMethodPathMatcher(method);
+            final PathMatcher<RestHandle> pathMatcher = getThreadLocalMethodPathMatcher(method);
             if (pathMatcher == null) {
                 throw new MethodNotAllowedException(method);
             }
@@ -316,17 +334,29 @@ public final class RestApi implements RestRouter {
         }
     }
 
-    private PathMatcher<RestHandle> getMethodPathMatcher(final String method)
+    private PathMatcher<RestHandle> getThreadLocalMethodPathMatcher(final String method)
             throws MethodNotAllowedException {
         switch (method) {
             case "GET":
-                return get;
+                return retrieveThreadLocal(
+                        GET_THREAD_LOCAL,
+                        getTemplate
+                );
             case "POST":
-                return post;
+                return retrieveThreadLocal(
+                        POST_THREAD_LOCAL,
+                        postTemplate
+                );
             case "PUT":
-                return put;
+                return retrieveThreadLocal(
+                        PUT_THREAD_LOCAL,
+                        putTemplate
+                );
             case "DELETE":
-                return delete;
+                return retrieveThreadLocal(
+                        DELETE_THREAD_LOCAL,
+                        deleteTemplate
+                );
             default:
                 break;
         }

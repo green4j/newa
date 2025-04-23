@@ -6,10 +6,8 @@ import io.github.green4j.newa.text.UtcToIso8601Formatter;
 import java.util.concurrent.TimeUnit;
 
 public abstract class Util {
-    public static final long PID = ProcessHandle.current().pid();
-    public static final long START_TIME = System.currentTimeMillis();
     public static final ThreadLocal<UtcToIso8601Formatter> UTC_TO_ISO_8601_FORMATTER_THREAD_LOCAL =
-            ThreadLocal.withInitial(() -> new UtcToIso8601Formatter());
+            ThreadLocal.withInitial(UtcToIso8601Formatter::new);
 
     public static CharSequence formatUtcToIso8601(final long millis) {
         final UtcToIso8601Formatter utcFormatter =

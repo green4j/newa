@@ -48,8 +48,9 @@ public final class WsApiServer implements
 
         private int maxRequestContentLength = 64 * 1024;
 
-        private int numberOfWorkers = 0;
-        private int soBacklog = 1024;
+        private int numberOfBosses = 1;
+        private int numberOfWorkers = 1;
+        private int soBacklog = 512;
 
         private boolean withCompression;
 
@@ -96,10 +97,12 @@ public final class WsApiServer implements
             return this;
         }
 
+        public Builder withNumberOfBosses(final int numberOfBosses) {
+            this.numberOfBosses = numberOfBosses;
+            return this;
+        }
+
         public Builder withNumberOfWorkers(final int numberOfWorkers) {
-            if (numberOfWorkers > 1_000) {
-                throw new IllegalArgumentException("Too many workers: " + numberOfWorkers);
-            }
             this.numberOfWorkers = numberOfWorkers;
             return this;
         }
@@ -165,8 +168,8 @@ public final class WsApiServer implements
         );
 
         bossGroup = USE_EPOLL
-                ? new EpollEventLoopGroup(1, bossThreadFactory) :
-                new NioEventLoopGroup(1, bossThreadFactory);
+                ? new EpollEventLoopGroup(parameters.numberOfBosses, bossThreadFactory) :
+                new NioEventLoopGroup(parameters.numberOfBosses, bossThreadFactory);
 
         final ThreadFactory workerThreadFactory = new DefaultThreadFactory(
                 "Worker of " + (parameters.apiName != null

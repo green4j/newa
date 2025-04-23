@@ -1,8 +1,8 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
-import io.github.green4j.newa.text.LineAppendable;
 import io.github.green4j.newa.text.ByteArrayLineBuilder;
+import io.github.green4j.newa.text.LineAppendable;
 import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.util.Arrays;

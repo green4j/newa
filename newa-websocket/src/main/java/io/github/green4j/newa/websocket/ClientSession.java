@@ -20,8 +20,6 @@ public class ClientSession implements Sender, Closeable {
 
     private volatile boolean closed;
 
-    Object cookie; // supposed to be used in one single Channel EventLoop's thread
-
     public ClientSession(final ClientSessions owner,
                          final ClientSessionContext context) {
         this.owner = owner;

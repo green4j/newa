@@ -23,7 +23,6 @@ public class UtcToIso8601Formatter {
     private final Calendar lastValueDayMidnightCalendar = new GregorianCalendar(TimeZone.getTimeZone("GMT"));
     private final StringBuilder lastTextTime = new StringBuilder();
     private long lastValueDayMidnight = Long.MIN_VALUE;
-    private long lastValueDay = Long.MIN_VALUE;
 
     public CharSequence format(final long timeMillis) {
         return format(timeMillis, -1);
@@ -53,7 +52,7 @@ public class UtcToIso8601Formatter {
             lastTextTime.setLength(0);
 
             final int year = lastValueDayMidnightCalendar.get(Calendar.YEAR);
-            lastValueDay = year;
+            long lastValueDay = year;
             lastTextTime.append(year);
             lastTextTime.append('-');
 

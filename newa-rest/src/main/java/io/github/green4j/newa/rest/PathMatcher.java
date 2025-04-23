@@ -225,6 +225,7 @@ public final class PathMatcher<T> {
         }
     }
 
+    // Immutable fields
     private final int[] stateJumps; // Stores a table of state jumps "from" (odd index) -> "to" (even index).
     // For leaf nodes "to" is "-(index of a handler in the 'handlers' array + 1) << 16 | to".
     // It is required to have "to" information stored in addition to a handler's index
@@ -233,12 +234,15 @@ public final class PathMatcher<T> {
     private final String[] parameterSegments;
     private final T[] handlers;
     private final String[] parameterNames;
+
+    // Mutable fields
     private final StringBuilder[] parameterValues;
+
     private final Result result = new Result();
 
-    private T handler;
-    private int numberOfParameters;
-    private int currentState;
+    private transient T handler;
+    private transient int numberOfParameters;
+    private transient int currentState;
 
     private int findFirstFromIndex(final int from) {
         int low = 0;
@@ -312,6 +316,20 @@ public final class PathMatcher<T> {
             return false;
         }
     };
+
+    PathMatcher(final PathMatcher<T> from) {
+        // immutable fields - copy by ref
+        this.stateJumps = from.stateJumps;
+        this.staticSegments = from.staticSegments;
+        this.parameterSegments = from.parameterSegments;
+        this.handlers = from.handlers;
+        this.parameterNames = from.parameterNames;
+        // mutable fields - new instances
+        parameterValues = new StringBuilder[from.parameterValues.length];
+        for (int i = 0; i < parameterValues.length; i++) {
+            parameterValues[i] = new StringBuilder();
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private PathMatcher(final TreeSet<Builder.Jump> jumps,

@@ -53,19 +53,17 @@ public final class RestApiServer implements AutoCloseable {
 
         private CorsConfig corsConfig;
 
+        private int numberOfBosses = 1;
         private int numberOfWorkers = 1;
-        private int soBacklog = 1024;
+        private int soBacklog = 512;
 
         private boolean withCompression;
 
         private ErrorHandler errorHandler = new TextErrorHandler();
 
-        private ChannelErrorHandler channelErrorHandler = new ChannelErrorHandler() {
-            @Override
-            public void onError(final Channel channel, final Throwable cause) {
-                System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
-                cause.printStackTrace(System.err);
-            }
+        private ChannelErrorHandler channelErrorHandler = (channel, cause) -> {
+            System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
+            cause.printStackTrace(System.err);
         };
 
         private Builder() {
@@ -96,10 +94,12 @@ public final class RestApiServer implements AutoCloseable {
             return this;
         }
 
+        public Builder withNumberOfBosses(final int numberOfBosses) {
+            this.numberOfBosses = numberOfBosses;
+            return this;
+        }
+
         public Builder withNumberOfWorkers(final int numberOfWorkers) {
-            if (numberOfWorkers > 1_000) {
-                throw new IllegalArgumentException("Too many workers: " + numberOfWorkers);
-            }
             this.numberOfWorkers = numberOfWorkers;
             return this;
         }
@@ -154,8 +154,8 @@ public final class RestApiServer implements AutoCloseable {
         );
 
         bossGroup = USE_EPOLL
-                ? new EpollEventLoopGroup(1, bossThreadFactory) :
-                new NioEventLoopGroup(1, bossThreadFactory);
+                ? new EpollEventLoopGroup(parameters.numberOfBosses, bossThreadFactory) :
+                new NioEventLoopGroup(parameters.numberOfBosses, bossThreadFactory);
 
         final ThreadFactory workerThreadFactory = new DefaultThreadFactory(
                 "Worker of " + (parameters.name != null
