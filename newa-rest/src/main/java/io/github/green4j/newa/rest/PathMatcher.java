@@ -233,9 +233,9 @@ public final class PathMatcher<T> {
     private final String[] staticSegments;
     private final String[] parameterSegments;
     private final T[] handlers;
-    private final String[] parameterNames;
 
     // Mutable fields
+    private final String[] parameterNames;
     private final StringBuilder[] parameterValues;
 
     private final Result result = new Result();
@@ -319,12 +319,13 @@ public final class PathMatcher<T> {
 
     PathMatcher(final PathMatcher<T> from) {
         // immutable fields - copy by ref
-        this.stateJumps = from.stateJumps;
-        this.staticSegments = from.staticSegments;
-        this.parameterSegments = from.parameterSegments;
-        this.handlers = from.handlers;
-        this.parameterNames = from.parameterNames;
+        stateJumps = from.stateJumps;
+        staticSegments = from.staticSegments;
+        parameterSegments = from.parameterSegments;
+        handlers = from.handlers;
+
         // mutable fields - new instances
+        parameterNames = new String[from.parameterNames.length];
         parameterValues = new StringBuilder[from.parameterValues.length];
         for (int i = 0; i < parameterValues.length; i++) {
             parameterValues[i] = new StringBuilder();
