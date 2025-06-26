@@ -1,5 +1,7 @@
 package io.github.green4j.newa.rest;
 
+import io.netty.channel.ChannelFuture;
+
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class AbstractRestServerStarter {
@@ -45,14 +47,15 @@ public abstract class AbstractRestServerStarter {
             try (RestApiServer srv = srvBuilder.build()) {
                 aSwitch = (cause) -> {
                     if (!srvClosed.compareAndExchange(false, true)) {
-                        System.out.println(cause + ". Server is stopping...");
-                        srv.close(); // try
+                        onServerStoppingProbablyConcurrently(cause);
+                        srv.close();
                     }
                 };
 
-                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                    aSwitch.off("Process termination happened");
-                }));
+                Runtime.getRuntime().addShutdownHook(
+                        new Thread(() ->
+                                aSwitch.off("Process termination happened"))
+                );
 
                 final RestApi.Builder apiBuilder = RestApi.builder(
                         apiName,
@@ -61,7 +64,10 @@ public abstract class AbstractRestServerStarter {
                         componentBuildVersion);
 
                 try {
-                    srv.start(buildRestApi(apiBuilder)).sync();
+                    final RestApi restApi = buildRestApi(apiBuilder);
+                    final ChannelFuture closeFuture = srv.start(restApi);
+                    onServerStarted();
+                    closeFuture.sync();
                 } catch (final Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -70,7 +76,7 @@ public abstract class AbstractRestServerStarter {
             try {
                 release();
             } finally {
-                System.out.println("Server stopped.");
+                onServerStopped();
             }
         }
     }
@@ -79,10 +85,20 @@ public abstract class AbstractRestServerStarter {
         return aSwitch;
     }
 
-    public void release() {
+    protected void release() {
     }
 
     protected void tuneUpRestServer(final RestApiServer.Builder builder) {
+    }
+
+    protected void onServerStarted() {
+    }
+
+    // The only method which can be called from another thread
+    protected void onServerStoppingProbablyConcurrently(final String cause) {
+    }
+
+    protected void onServerStopped() {
     }
 
     protected abstract RestApi buildRestApi(RestApi.Builder builder);

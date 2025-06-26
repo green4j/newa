@@ -29,11 +29,7 @@ public class ClientSessions implements ClientSessionsStatistics {
             numberOfSessionsTotal++;
         }
 
-        try {
-            listener.onSessionOpened(session);
-        } catch (final Throwable t) {
-            t.printStackTrace(); // TODO: logging
-        }
+        listener.onSessionOpened(session);
 
         return session;
     }
@@ -84,10 +80,6 @@ public class ClientSessions implements ClientSessionsStatistics {
             return;
         }
 
-        try {
-            listener.onSessionClosed(session);
-        } catch (final Throwable t) {
-            t.printStackTrace(); // TODO: logging
-        }
+        listener.onSessionClosed(session);
     }
 }

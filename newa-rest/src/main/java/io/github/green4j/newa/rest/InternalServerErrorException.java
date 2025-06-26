@@ -3,7 +3,7 @@ package io.github.green4j.newa.rest;
 import io.netty.handler.codec.http.HttpResponseStatus;
 
 public class InternalServerErrorException extends RestException {
-    static final long serialVersionUID = -2387516993124229947L;
+    private static final long serialVersionUID = -2387516993124229947L;
 
     private final transient HttpResponseStatus status;
 

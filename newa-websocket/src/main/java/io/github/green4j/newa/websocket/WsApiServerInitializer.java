@@ -42,7 +42,7 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
     }
 
     @Override
-    public void initChannel(final SocketChannel ch) throws Exception {
+    public void initChannel(final SocketChannel ch) {
         final ChannelPipeline pipeline = ch.pipeline();
         if (sslCtx != null) {
             pipeline.addLast(sslCtx.newHandler(ch.alloc()));
@@ -54,7 +54,7 @@ class WsApiServerInitializer extends ChannelInitializer<SocketChannel> {
         pipeline.addLast(new HttpServerCodec());
         pipeline.addLast(new HttpObjectAggregator(maxRequestContentLength));
         if (withCompression) {
-            pipeline.addLast(new WebSocketServerCompressionHandler());
+            pipeline.addLast(new WebSocketServerCompressionHandler(0));
         }
         pipeline.addLast(wsProtocolHandler);
         pipeline.addLast(new WsFrameHandler(wsProtocolHandler, channelErrorHandler));

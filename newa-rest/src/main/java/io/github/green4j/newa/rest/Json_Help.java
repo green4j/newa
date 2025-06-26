@@ -6,7 +6,7 @@ import java.util.List;
 
 public class Json_Help extends LazyStaticJsonRestHandler {
     public static RestApi.HelpFactory factory() {
-        return forBuilder -> new Json_Help(forBuilder);
+        return Json_Help::new;
     }
 
     private final RestApi.Builder builder;
@@ -40,7 +40,7 @@ public class Json_Help extends LazyStaticJsonRestHandler {
             output.startArray();
 
             for (final RestApi.Builder.Method method : builder.methods()) {
-                final List<RestApi.Endpoint> endpoints = method.endpoints();
+                final List<Endpoint> endpoints = method.endpoints();
 
                 if (endpoints.isEmpty()) {
                     continue;
@@ -52,15 +52,15 @@ public class Json_Help extends LazyStaticJsonRestHandler {
                 output.objectMember("paths");
                 output.startArray();
 
-                for (final RestApi.Endpoint e : endpoints) {
+                for (final Endpoint ep : endpoints) {
                     output.startObject();
                     output.objectMember("path");
-                    output.stringValue(e.pathExpression(), true);
-                    if (e.description() != null) {
+                    output.stringValue(ep.pathExpression(), true);
+                    if (ep.description() != null) {
                         output.objectMember("description");
-                        output.stringValue(e.description(), true);
+                        output.stringValue(ep.description(), true);
                     }
-                    final String[] pathParamDescriptions = e.pathParameterDescriptions();
+                    final String[] pathParamDescriptions = ep.pathParameterDescriptions();
                     if (pathParamDescriptions.length > 0) {
                         output.objectMember("pathParameters");
                         output.startArray();
@@ -69,7 +69,7 @@ public class Json_Help extends LazyStaticJsonRestHandler {
                         }
                         output.endArray();
                     }
-                    final String[] queryParamDescriptions = e.queryParameterDescriptions();
+                    final String[] queryParamDescriptions = ep.queryParameterDescriptions();
                     if (queryParamDescriptions.length > 0) {
                         output.objectMember("queryParameters");
                         output.startArray();

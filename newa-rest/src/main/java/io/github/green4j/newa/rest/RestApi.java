@@ -27,68 +27,15 @@ public final class RestApi implements RestRouter {
         RestHandle buildHelp(Builder forBuilder);
     }
 
-    public static final class Endpoint {
-        public static final String[] EMPTY = new String[0];
-        private final String pathExpression;
-        private final RestHandle handler;
-
-        private String description;
-        private String[] pathParameterDescriptions;
-        private String[] queryParameterDescriptions;
-
-        private Endpoint(final String pathExpression,
-                         final RestHandle handler) {
-            this.pathExpression = pathExpression;
-            this.handler = handler;
-        }
-
-        public Endpoint withDescription(final String description) {
-            this.description = description;
-            return this;
-        }
-
-        public Endpoint withPathParameterDescriptions(final String... parameterDescriptions) {
-            this.pathParameterDescriptions = parameterDescriptions;
-            return this;
-        }
-
-        public Endpoint withQueryParameterDescriptions(final String... queryParameterDescriptions) {
-            this.queryParameterDescriptions = queryParameterDescriptions;
-            return this;
-        }
-
-        String pathExpression() {
-            return pathExpression;
-        }
-
-        String pathExpressionWithoutQuery() {
-            if (pathExpression == null) {
-                return null;
-            }
-            final int qIdx = pathExpression.indexOf('?');
-            return qIdx == -1 ? pathExpression : pathExpression.substring(0, qIdx);
-        }
-
-        String description() {
-            return description;
-        }
-
-        String[] pathParameterDescriptions() {
-            return pathParameterDescriptions != null ? pathParameterDescriptions : EMPTY;
-        }
-
-        String[] queryParameterDescriptions() {
-            return queryParameterDescriptions != null ? queryParameterDescriptions : EMPTY;
-        }
-    }
-
-    public static final class Builder {
+    public static final class Builder implements RestEndpointer {
         private final Method get = new Method("GET");
         private final Method post = new Method("POST");
         private final Method put = new Method("PUT");
         private final Method delete = new Method("DELETE");
 
         private final Method[] methods = new Method[] { get, post, put, delete };
+
+        private final RestEndpointer root;
 
         private final String name;
         private final String version;
@@ -112,8 +59,16 @@ public final class RestApi implements RestRouter {
 
             private Endpoint withEndpoint(final String pathExpression,
                                           final RestHandle handler) {
-                final Endpoint result = new Endpoint(
+                return withRootEndpoint(
                         joinPaths(rootPath, pathExpression),
+                        handler
+                );
+            }
+
+            private Endpoint withRootEndpoint(final String pathExpression,
+                                              final RestHandle handler) {
+                final Endpoint result = new Endpoint(
+                        pathExpression,
                         handler
                 );
                 endpoints.add(result);
@@ -125,27 +80,25 @@ public final class RestApi implements RestRouter {
             }
 
             private PathMatcher<RestHandle> prepareMatcher() {
-                final PathMatcher.Builder<RestHandle> pmBuilder = PathMatcher.builder();
-                for (final Endpoint e : endpoints) {
-                    final String[] parameters = pmBuilder.withPath(
-                            e.pathExpressionWithoutQuery(),
-                            e.handler
+                final PathMatcher.Builder<RestHandle> builder = PathMatcher.builder();
+                for (final Endpoint ep : endpoints) {
+                    final String[] parameters = builder.withPath(
+                            ep.pathExpressionWithoutQuery(),
+                            ep.handle()
                     );
-                    final String[] parameterDescriptions = e.pathParameterDescriptions;
+                    final String[] parameterDescriptions = ep.pathParameterDescriptions();
                     if (parameters.length > 0
                             && (parameterDescriptions != null
                                 && parameterDescriptions.length != parameters.length)) {
                         throw new IllegalArgumentException("Parameter descriptions misconfiguration for the path: "
-                                + e.pathExpression
+                                + ep.pathExpression()
                                 + ". Parsed parameters: "
-                                + (parameters.length > 0
-                                    ? Arrays.stream(parameters)
-                                        .collect(Collectors.joining(", ")) : "none")
+                                + String.join(", ", parameters)
                                 + " (" + parameters.length + "). Number of descriptions: "
                                 + parameterDescriptions.length);
                     }
                 }
-                return pmBuilder.build();
+                return builder.build();
             }
         }
 
@@ -158,64 +111,153 @@ public final class RestApi implements RestRouter {
             this.componentName = componentName;
             this.componentBuildVersion = componentBuildVersion;
             this.rootPath = SLASH + this.version + SLASH;
+
+            root = new RestEndpointer() {
+                @Override
+                public Endpoint get(final String pathExpression,
+                                    final RestHandle handle) {
+                    return get.withRootEndpoint(pathExpression, handle);
+                }
+
+                @Override
+                public Endpoint getJson(final String pathExpression,
+                                        final JsonRestHandle handle) {
+                    return get(pathExpression, new JsonRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint getTxt(final String pathExpression,
+                                       final TxtRestHandle handle) {
+                    return get(pathExpression, new TxtRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint post(final String pathExpression,
+                                     final RestHandle handle) {
+                    return post.withRootEndpoint(pathExpression, handle);
+                }
+
+                @Override
+                public Endpoint postJson(final String pathExpression,
+                                         final JsonRestHandle handle) {
+                    return post(pathExpression, new JsonRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint postTxt(final String pathExpression,
+                                        final TxtRestHandle handle) {
+                    return post(pathExpression, new TxtRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint put(final String pathExpression,
+                                    final RestHandle handle) {
+                    return put.withRootEndpoint(pathExpression, handle);
+                }
+
+                @Override
+                public Endpoint putJson(final String pathExpression,
+                                        final JsonRestHandle handle) {
+                    return put(pathExpression, new JsonRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint putTxt(final String pathExpression,
+                                       final TxtRestHandle handle) {
+                    return put(pathExpression, new TxtRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint delete(final String pathExpression,
+                                       final RestHandle handle) {
+                    return delete.withRootEndpoint(pathExpression, handle);
+                }
+
+                @Override
+                public Endpoint deleteJson(final String pathExpression,
+                                           final JsonRestHandle handle) {
+                    return delete(pathExpression, new JsonRestHandler(handle));
+                }
+
+                @Override
+                public Endpoint deleteTxt(final String pathExpression,
+                                          final TxtRestHandle handle) {
+                    return delete(pathExpression, new TxtRestHandler(handle));
+                }
+            };
         }
 
+        public RestEndpointer root() {
+            return root;
+        }
+
+        @Override
         public Endpoint get(final String pathExpression,
                             final RestHandle handle) {
             return get.withEndpoint(pathExpression, handle);
         }
 
+        @Override
         public Endpoint getJson(final String pathExpression,
                                 final JsonRestHandle handle) {
             return get(pathExpression, new JsonRestHandler(handle));
         }
 
+        @Override
         public Endpoint getTxt(final String pathExpression,
                                final TxtRestHandle handle) {
             return get(pathExpression, new TxtRestHandler(handle));
         }
 
+        @Override
         public Endpoint post(final String pathExpression,
                              final RestHandle handle) {
             return post.withEndpoint(pathExpression, handle);
         }
 
+        @Override
         public Endpoint postJson(final String pathExpression,
                                  final JsonRestHandle handle) {
             return post(pathExpression, new JsonRestHandler(handle));
         }
 
+        @Override
         public Endpoint postTxt(final String pathExpression,
                                 final TxtRestHandle handle) {
             return post(pathExpression, new TxtRestHandler(handle));
         }
 
+        @Override
         public Endpoint put(final String pathExpression,
                             final RestHandle handle) {
             return put.withEndpoint(pathExpression, handle);
         }
 
+        @Override
         public Endpoint putJson(final String pathExpression,
                                 final JsonRestHandle handle) {
             return put(pathExpression, new JsonRestHandler(handle));
         }
 
+        @Override
         public Endpoint putTxt(final String pathExpression,
                                final TxtRestHandle handle) {
             return put(pathExpression, new TxtRestHandler(handle));
         }
 
-
+        @Override
         public Endpoint delete(final String pathExpression,
                                final RestHandle handle) {
             return delete.withEndpoint(pathExpression, handle);
         }
 
+        @Override
         public Endpoint deleteJson(final String pathExpression,
                                    final JsonRestHandle handle) {
             return delete(pathExpression, new JsonRestHandler(handle));
         }
 
+        @Override
         public Endpoint deleteTxt(final String pathExpression,
                                   final TxtRestHandle handle) {
             return delete(pathExpression, new TxtRestHandler(handle));
@@ -251,7 +293,7 @@ public final class RestApi implements RestRouter {
 
         List<Endpoint> endpoints() {
             return Arrays.stream(methods)
-                    .map(m -> m.endpoints())
+                    .map(Method::endpoints)
                     .flatMap(List::stream).collect(Collectors.toList());
         }
 
@@ -260,16 +302,17 @@ public final class RestApi implements RestRouter {
         }
     }
 
-    private static final ThreadLocal<PathMatcher<RestHandle>> GET_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> POST_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> PUT_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> DELETE_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> GET_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> POST_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> PUT_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
+    private static final ThreadLocal<PathMatcher<RestHandle>> DELETE_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
 
     private final Builder builder;
-    private final PathMatcher<RestHandle> getTemplate;
-    private final PathMatcher<RestHandle> postTemplate;
-    private final PathMatcher<RestHandle> putTemplate;
-    private final PathMatcher<RestHandle> deleteTemplate;
+
+    private final PathMatcher<RestHandle> getMatcherTemplate;
+    private final PathMatcher<RestHandle> postMatcherTemplate;
+    private final PathMatcher<RestHandle> putMatcherTemplate;
+    private final PathMatcher<RestHandle> deleteMatcherTemplate;
 
     private static PathMatcher<RestHandle> retrieveThreadLocal(final ThreadLocal<PathMatcher<RestHandle>> threadLocal,
                                                                final PathMatcher<RestHandle> template) {
@@ -287,13 +330,13 @@ public final class RestApi implements RestRouter {
     private RestApi(final Builder builder) {
         this.builder = builder;
         // prepare method matcher templates
-        getTemplate = !builder.get.endpoints.isEmpty()
+        getMatcherTemplate = !builder.get.endpoints.isEmpty()
                 ? builder.get.prepareMatcher() : null;
-        postTemplate = !builder.post.endpoints.isEmpty()
+        postMatcherTemplate = !builder.post.endpoints.isEmpty()
                 ? builder.post.prepareMatcher() : null;
-        putTemplate = !builder.put.endpoints.isEmpty()
+        putMatcherTemplate = !builder.put.endpoints.isEmpty()
                 ? builder.put.prepareMatcher() : null;
-        deleteTemplate = !builder.delete.endpoints.isEmpty()
+        deleteMatcherTemplate = !builder.delete.endpoints.isEmpty()
                 ? builder.delete.prepareMatcher() : null;
     }
 
@@ -312,50 +355,44 @@ public final class RestApi implements RestRouter {
         return builder.helpEndpoint.pathExpression();
     }
 
-    public RestHandling resolve(final FullHttpRequest request) throws
-            MethodNotAllowedException,
-            PathNotFoundException {
-        try {
-            final String method = request.method().name();
-            final PathMatcher<RestHandle> pathMatcher = getThreadLocalMethodPathMatcher(method);
-            if (pathMatcher == null) {
-                throw new MethodNotAllowedException(method);
-            }
-
-            final QueryStringDecoder qsd = new QueryStringDecoder(request.uri());
-            final PathMatcher<RestHandle>.Result match = pathMatcher.match(qsd.path());
-            if (match == null) {
-                throw new PathNotFoundException(qsd.path());
-            }
-
-            return new RestHandling(match.handler(), match);
-        } catch (final RestException e) {
-            throw e;
+    public RestHandling resolve(final FullHttpRequest request)
+            throws MethodNotAllowedException, PathNotFoundException {
+        final String method = request.method().name();
+        final PathMatcher<RestHandle> pathMatcher = getThreadLocalMethodPathMatcher(method);
+        if (pathMatcher == null) {
+            throw new MethodNotAllowedException(method);
         }
+
+        final QueryStringDecoder qsd = new QueryStringDecoder(request.uri());
+        final PathMatcher<RestHandle>.Result match = pathMatcher.match(qsd.path());
+        if (match == null) {
+            throw new PathNotFoundException(qsd.path());
+        }
+
+        return new RestHandling(match.handler(), match);
     }
 
-    private PathMatcher<RestHandle> getThreadLocalMethodPathMatcher(final String method)
-            throws MethodNotAllowedException {
+    private PathMatcher<RestHandle> getThreadLocalMethodPathMatcher(final String method) {
         switch (method) {
             case "GET":
                 return retrieveThreadLocal(
-                        GET_THREAD_LOCAL,
-                        getTemplate
+                        GET_MATCHER_THREAD_LOCAL,
+                        getMatcherTemplate
                 );
             case "POST":
                 return retrieveThreadLocal(
-                        POST_THREAD_LOCAL,
-                        postTemplate
+                        POST_MATCHER_THREAD_LOCAL,
+                        postMatcherTemplate
                 );
             case "PUT":
                 return retrieveThreadLocal(
-                        PUT_THREAD_LOCAL,
-                        putTemplate
+                        PUT_MATCHER_THREAD_LOCAL,
+                        putMatcherTemplate
                 );
             case "DELETE":
                 return retrieveThreadLocal(
-                        DELETE_THREAD_LOCAL,
-                        deleteTemplate
+                        DELETE_MATCHER_THREAD_LOCAL,
+                        deleteMatcherTemplate
                 );
             default:
                 break;
@@ -397,6 +434,6 @@ public final class RestApi implements RestRouter {
             to.setLength(lastCharIdx);
         }
         return to.length() > 0
-                ? to.charAt(to.length() - 1) == SLASH_CHAR : false;
+                && to.charAt(to.length() - 1) == SLASH_CHAR;
     }
 }

@@ -3,7 +3,6 @@ package io.github.green4j.newa.websocket;
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Scheduler;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -25,9 +24,11 @@ import java.util.concurrent.TimeUnit;
 public final class WsApiServer implements
         ClientSessionsStatistics,
         AutoCloseable {
+
     private static final boolean USE_EPOLL = Epoll.isAvailable();
 
-    public static Builder builder(final String localIfc, final int port) {
+    public static Builder builder(final String localIfc,
+                                  final int port) {
         return new Builder()
                 .withLocalIfc(localIfc)
                 .withPort(port);
@@ -56,12 +57,9 @@ public final class WsApiServer implements
 
         private String pathPrefix = "websocket";
 
-        private ChannelErrorHandler channelErrorHandler = new ChannelErrorHandler() {
-            @Override
-            public void onError(final Channel channel, final Throwable cause) {
-                System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
-                cause.printStackTrace(System.err);
-            }
+        private ChannelErrorHandler channelErrorHandler = (channel, cause) -> {
+            System.err.println("Unexpected error in the channel '" + channel.id() + "': " + cause.getMessage());
+            cause.printStackTrace(System.err);
         };
 
         private Builder() {
@@ -196,7 +194,8 @@ public final class WsApiServer implements
         return start(channels, null);
     }
 
-    public ChannelFuture start(final Channels channels, final WsApiServerListener listener) throws Exception {
+    public ChannelFuture start(final Channels channels,
+                               final WsApiServerListener listener) throws Exception {
         final SslContext sslCtx;
         if (parameters.useSsl) {
             final SelfSignedCertificate ssc = new SelfSignedCertificate();
@@ -218,7 +217,8 @@ public final class WsApiServer implements
             }
 
             @Override
-            public void onError(final ClientSession session, final Throwable error) {
+            public void onError(final ClientSession session,
+                                final Throwable error) {
                 session.close();
             }
         };
@@ -258,28 +258,18 @@ public final class WsApiServer implements
                 .childHandler(serverInit);
 
         final ChannelFuture bindFuture;
-        final String listenTo;
 
         if (parameters.localIfc == null || parameters.localIfc.isBlank()) {
             bindFuture = bootstrap.bind(parameters.port);
-            listenTo = "127.0.0.1:" + parameters.port;
         } else {
             bindFuture = bootstrap.bind(InetAddress.getByName(parameters.localIfc), parameters.port);
-            listenTo = parameters.localIfc + ':' + parameters.port;
         }
 
-        final io.netty.channel.Channel ch = bindFuture.sync().channel();
+        final io.netty.channel.Channel channel = bindFuture.sync().channel();
 
         channels.start();
 
-        final ChannelFuture closeFuture = ch.closeFuture();
-
-        System.out.println("WebSocket server is listening to " + listenTo
-                + "... Websocket URL: "
-                + (sslCtx == null ? "ws://" : "wss://")
-                + listenTo + serverInit.websocketPath());
-
-        return closeFuture;
+        return channel.closeFuture();
     }
 
     @Override

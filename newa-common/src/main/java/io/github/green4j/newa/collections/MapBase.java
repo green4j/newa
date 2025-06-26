@@ -2,7 +2,7 @@ package io.github.green4j.newa.collections;
 
 import java.util.Arrays;
 
-public abstract class MapBase implements Cloneable {
+public abstract class MapBase {
     protected static final int NULL = Integer.MIN_VALUE;
     public static final int MIN_CAPACITY = 16;
 
@@ -30,7 +30,7 @@ public abstract class MapBase implements Cloneable {
         return count;
     }
 
-    public final int getCapacity() {
+    public final int capacity() {
         return next.length;
     }
 

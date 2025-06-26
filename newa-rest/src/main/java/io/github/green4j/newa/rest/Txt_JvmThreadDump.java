@@ -99,7 +99,7 @@ public class Txt_JvmThreadDump implements TxtRestHandle {
         output.append("deadlocks [").append(
                 dlt != null ? Integer.toString(dlt.length) : "0"
         ).append("]\n");
-        if (dlt != null && dlt.length > 0) {
+        if (dlt != null) {
             for (final long tid : dlt) {
                 final String td = threadDescriptions.get(tid);
                 if (td == null) {

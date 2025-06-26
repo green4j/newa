@@ -6,7 +6,7 @@ import java.util.List;
 
 public class Txt_Help extends LazyStaticTxtRestHandler {
     public static RestApi.HelpFactory factory() {
-        return forBuilder -> new Txt_Help(forBuilder);
+        return Txt_Help::new;
     }
 
     private final RestApi.Builder builder;
@@ -37,7 +37,7 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
 
         if (totalSize > 0) {
             for (final RestApi.Builder.Method method : builder.methods()) {
-                final List<RestApi.Endpoint> endpoints = method.endpoints();
+                final List<Endpoint> endpoints = method.endpoints();
 
                 if (endpoints.isEmpty()) {
                     continue;
@@ -49,7 +49,7 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
                 output.appendln(method.name());
 
                 for (int i = 0; i < endpoints.size(); i++) {
-                    final RestApi.Endpoint e = endpoints.get(i);
+                    final Endpoint ep = endpoints.get(i);
                     if (i > 0) {
                         output.appendln();
                     }
@@ -59,17 +59,17 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
                     } else {
                         output.tab(1);
                     }
-                    output.appendln(e.pathExpression());
-                    if (e.description() != null) {
+                    output.appendln(ep.pathExpression());
+                    if (ep.description() != null) {
                         if (hasMetaInfo) {
                             output.tab(3);
                         } else {
                             output.tab(2);
                         }
-                        output.appendln(e.description());
+                        output.appendln(ep.description());
                     }
 
-                    final String[] pathParamDescriptions = e.pathParameterDescriptions();
+                    final String[] pathParamDescriptions = ep.pathParameterDescriptions();
                     if (pathParamDescriptions.length > 0) {
                         output.tab(3).appendln("path parameters: ");
                         for (int p = 0; p < pathParamDescriptions.length; p++) {
@@ -77,7 +77,7 @@ public class Txt_Help extends LazyStaticTxtRestHandler {
                         }
                     }
 
-                    final String[] queryParamDescriptions = e.queryParameterDescriptions();
+                    final String[] queryParamDescriptions = ep.queryParameterDescriptions();
                     if (queryParamDescriptions.length > 0) {
                         output.tab(3).appendln("query parameters: ");
                         for (int p = 0; p < queryParamDescriptions.length; p++) {

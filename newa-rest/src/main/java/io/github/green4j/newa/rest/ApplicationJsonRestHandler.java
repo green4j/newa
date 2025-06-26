@@ -19,8 +19,7 @@ public abstract class ApplicationJsonRestHandler
     public final void handle(final ChannelHandlerContext ctx,
                              final FullHttpRequest request,
                              final PathParameters pathParameters,
-                             final Result result)
-            throws PathNotFoundException, BadRequestException {
+                             final Result result) {
         try {
             final ByteArray content = doHandle(request, pathParameters);
             result.ok(new DefaultFullHttpResponseContent(contentType, content));

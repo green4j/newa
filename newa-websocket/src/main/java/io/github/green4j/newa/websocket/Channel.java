@@ -40,38 +40,30 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
     // unsubscribeAll can be called from another thread
     public final void subscribe(final ClientSession session,
                                 final List<String> ids) {
-        try {
-            for (int i = 0; i < ids.size(); i++) {
-                final String id = ids.get(i);
+        for (int i = 0; i < ids.size(); i++) {
+            final String id = ids.get(i);
 
-                final S subscriptions = getOrCreateEntitySubscriptions(id);
-                subscriptions.add(session);
-            }
-        } catch (final Exception e) {
-            e.printStackTrace(); // TODO: logging
+            final S subscriptions = getOrCreateEntitySubscriptions(id);
+            subscriptions.add(session);
         }
     }
 
     public final List<String> subscribeKnown(final ClientSession session,
                                              final List<String> ids) {
         List<String> unknown = null;
-        try {
-            for (int i = 0; i < ids.size(); i++) {
-                final String id = ids.get(i);
+        for (int i = 0; i < ids.size(); i++) {
+            final String id = ids.get(i);
 
-                final S subscriptions = getEntitySubscriptions(id);
-                if (subscriptions == null) {
-                    if (unknown == null) {
-                        unknown = new ArrayList<>();
-                    }
-                    unknown.add(id);
-                    continue; // unknown entity?
+            final S subscriptions = getEntitySubscriptions(id);
+            if (subscriptions == null) {
+                if (unknown == null) {
+                    unknown = new ArrayList<>();
                 }
-
-                subscriptions.add(session);
+                unknown.add(id);
+                continue; // unknown entity?
             }
-        } catch (final Exception e) {
-            e.printStackTrace(); // TODO: logging
+
+            subscriptions.add(session);
         }
         return unknown == null ? EMPTY_LIST : unknown;
     }
@@ -80,19 +72,15 @@ public abstract class Channel<S extends EntitySubscriptions> implements AutoClos
     // unsubscribeAll can be called from another thread
     public final void unsubscribe(final ClientSession session,
                                   final List<String> ids) {
-        try {
-            for (int i = 0; i < ids.size(); i++) {
-                final String id = ids.get(i);
+        for (int i = 0; i < ids.size(); i++) {
+            final String id = ids.get(i);
 
-                final S subscriptions = getEntitySubscriptions(id);
-                if (subscriptions == null) {
-                    continue; // unknown entity?
-                }
-
-                subscriptions.remove(session);
+            final S subscriptions = getEntitySubscriptions(id);
+            if (subscriptions == null) {
+                continue; // unknown entity?
             }
-        } catch (final Exception e) {
-            e.printStackTrace(); // TODO: logging
+
+            subscriptions.remove(session);
         }
     }
 

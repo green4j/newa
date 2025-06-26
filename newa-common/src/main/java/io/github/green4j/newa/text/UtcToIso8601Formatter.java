@@ -52,28 +52,21 @@ public class UtcToIso8601Formatter {
             lastTextTime.setLength(0);
 
             final int year = lastValueDayMidnightCalendar.get(Calendar.YEAR);
-            long lastValueDay = year;
             lastTextTime.append(year);
             lastTextTime.append('-');
 
             final int month = lastValueDayMidnightCalendar.get(Calendar.MONTH) + 1;
             if (month < 10) {
                 lastTextTime.append('0');
-                lastValueDay = lastValueDay * 10;
             }
             lastTextTime.append(month);
-            lastValueDay = lastValueDay * 10;
-            lastValueDay = lastValueDay + month;
             lastTextTime.append('-');
 
             final int day = lastValueDayMidnightCalendar.get(Calendar.DAY_OF_MONTH);
             if (day < 10) {
                 lastTextTime.append('0');
-                lastValueDay = lastValueDay * 10;
             }
             lastTextTime.append(day);
-            lastValueDay = lastValueDay * 10;
-            lastValueDay = lastValueDay + day;
 
             lastTextTime.append('T');
         } else {

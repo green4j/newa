@@ -32,10 +32,8 @@ public class JsonParserUtil {
 
     public static <T extends JsonParserListener> T parseAsciiAndClose(
             final InputStream stream, final T listener) throws IOException {
-        try {
+        try (stream) {
             return parseAscii(stream, listener);
-        } finally {
-            stream.close();
         }
     }
 

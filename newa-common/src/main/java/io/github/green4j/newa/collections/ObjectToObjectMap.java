@@ -97,7 +97,8 @@ public class ObjectToObjectMap<K, V> extends ObjectMapBase<K> implements Iterabl
     }
 
     @SuppressWarnings("unchecked")
-    public V get(final K key, final V notFoundValue) {
+    public V get(final K key,
+                 final V notFoundValue) {
         final int pos = find(key);
         return pos == NULL ? notFoundValue : (V) values[pos]; // unchecked
     }
@@ -133,7 +134,8 @@ public class ObjectToObjectMap<K, V> extends ObjectMapBase<K> implements Iterabl
         putKey(idx, key);
     }
 
-    public boolean put(final K key, final V value) {
+    public boolean put(final K key,
+                       final V value) {
         int hashIndex = hashIndex(key);
         int idx = find(hashIndex, key);
         if (idx != NULL) {

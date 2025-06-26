@@ -194,30 +194,16 @@ public final class RestApiServer implements AutoCloseable {
                 );
 
         final ChannelFuture bindFuture;
-        final String listenTo;
 
         if (parameters.localIfc == null || parameters.localIfc.isBlank()) {
             bindFuture = bootstrap.bind(parameters.port);
-            listenTo = "127.0.0.1:" + parameters.port;
         } else {
             bindFuture = bootstrap.bind(InetAddress.getByName(parameters.localIfc), parameters.port);
-            listenTo = parameters.localIfc + ':' + parameters.port;
         }
 
-        final Channel ch = bindFuture.sync().channel();
-        final ChannelFuture close = ch.closeFuture();
+        final Channel channel = bindFuture.sync().channel();
 
-        final String helpPath = restApi.helpPath();
-
-        final String serviceDescription = restApi.description();
-
-        System.out.println((serviceDescription != null && !serviceDescription.isBlank()
-                ? serviceDescription : "REST API") + " is listening to " + listenTo + "..."
-                + (helpPath != null ? " Help "
-                + (parameters.useSsl ? "https://" : "http://")
-                + listenTo + helpPath : ""));
-
-        return close;
+        return channel.closeFuture();
     }
 
     @Override

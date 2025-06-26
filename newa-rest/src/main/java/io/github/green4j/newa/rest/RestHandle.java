@@ -80,5 +80,4 @@ public interface RestHandle {
                 PathParameters pathParameters,
                 Result result)
             throws PathNotFoundException, BadRequestException;
-
 }

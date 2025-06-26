@@ -10,7 +10,7 @@ class PathMatcherTest {
 
     @Test
     public void testStaticMatch() {
-        final PathMatcher.Builder builder = PathMatcher.builder();
+        final PathMatcher.Builder<Integer> builder = PathMatcher.builder();
         builder.withPath("/dogs", 1);
         builder.withPath("/dogs/a", 2);
         builder.withPath("/dogs/aaa", 3);
@@ -43,7 +43,7 @@ class PathMatcherTest {
 
     @Test
     public void testParameterMatch() {
-        final PathMatcher.Builder builder = PathMatcher.builder();
+        final PathMatcher.Builder<Integer> builder = PathMatcher.builder();
         builder.withPath("/{id}", 1);
         builder.withPath("/dogs", 2);
         builder.withPath("/dogs/{id}/x", 3);
@@ -55,7 +55,7 @@ class PathMatcherTest {
 
         final PathMatcher<Integer> pathMatcher = builder.build();
 
-        PathMatcher.Result result = pathMatcher.match("/10");
+        PathMatcher<Integer>.Result result = pathMatcher.match("/10");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(1, result.handler());
         Assertions.assertEquals(1, result.numberOfParameters());
@@ -110,26 +110,43 @@ class PathMatcherTest {
 
     @Test
     public void testAmbiguousError() {
-        final PathMatcher.Builder builder1 = PathMatcher.builder();
+        final PathMatcher.Builder<Integer> builder1 = PathMatcher.builder();
         builder1.withPath("/dogs/yy", 1);
         builder1.withPath("/cats", 2);
 
         Throwable exception = assertThrows(
                 IllegalArgumentException.class,
-                () -> {
-                    builder1.withPath("/dogs/yy", 3);
-                }
+                () -> builder1.withPath("/dogs/yy", 3)
         );
         assertTrue(exception.getMessage().startsWith("Ambiguous path expression"));
 
-        final PathMatcher.Builder builder2 = PathMatcher.builder();
+        final PathMatcher.Builder<Integer> builder2 = PathMatcher.builder();
         builder2.withPath("/dogs/{id}/xx", 1);
         exception = assertThrows(
                 IllegalArgumentException.class,
-                () -> {
-                    builder2.withPath("/dogs/{id2}/yy", 2);
-                }
+                () -> builder2.withPath("/dogs/{id2}/yy", 2)
         );
         assertTrue(exception.getMessage().startsWith("Ambiguous parameter"));
+    }
+
+    @Test
+    public void testCopyConcurrently() {
+        final PathMatcher.Builder<Integer> builder = PathMatcher.builder();
+        builder.withPath("/dogs/{dogName}", 1);
+        builder.withPath("/cats/{catName}", 2);
+
+        final PathMatcher<Integer> pathMatcher1 = builder.build();
+        final PathMatcher<Integer> pathMatcher2 = new PathMatcher<>(pathMatcher1);
+
+        final PathMatcher<Integer>.Result result1 = pathMatcher1.match("/dogs/rex");
+        final PathMatcher<Integer>.Result result2 = pathMatcher2.match("/cats/pussy");
+
+        Assertions.assertNotNull(result1);
+        Assertions.assertEquals(1, result1.handler());
+        Assertions.assertEquals("rex", result1.parameterValue("dogName").toString());
+
+        Assertions.assertNotNull(result2);
+        Assertions.assertEquals(2, result2.handler());
+        Assertions.assertEquals("pussy", result2.parameterValue("catName").toString());
     }
 }

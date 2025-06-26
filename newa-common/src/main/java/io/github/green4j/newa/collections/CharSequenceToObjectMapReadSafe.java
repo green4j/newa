@@ -6,7 +6,7 @@ public class CharSequenceToObjectMapReadSafe<T> extends HashMap<String, T> {
     private static final long serialVersionUID = 562498820763181265L;
 
     private static final ThreadLocal<CharSequenceToObjectMap.KeyBuffer> KEY_BUFFER_THREAD_LOCAL =
-            ThreadLocal.withInitial(() -> new CharSequenceToObjectMap.KeyBuffer());
+            ThreadLocal.withInitial(CharSequenceToObjectMap.KeyBuffer::new);
 
     public CharSequenceToObjectMapReadSafe(final int initialCapacity,
                                    final float loadFactor) {

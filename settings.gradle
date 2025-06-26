@@ -4,6 +4,7 @@ include (
         'newa-common',
         'newa-rest',
         'newa-websocket',
-        'newa-all'
+        'newa-all',
+        'newa-example'
 )
 

@@ -101,7 +101,7 @@ public class Json_JvmThreadDump implements JsonRestHandle {
         final long[] dlt = threadMXBean.findDeadlockedThreads();
         output.objectMember("deadlocks");
         output.startArray();
-        if (dlt != null && dlt.length > 0) {
+        if (dlt != null) {
             for (final long tid : dlt) {
                 final String td = threadDescriptions.get(tid);
                 if (td == null) {

@@ -3,7 +3,7 @@ package io.github.green4j.newa.collections;
 import java.util.HashMap;
 
 public class CharSequenceToObjectMap<T> extends HashMap<String, T> {
-    static final long serialVersionUID = -5687516993124229947L;
+    private static final long serialVersionUID = -5687516993124229947L;
 
     private final transient KeyBuffer buffer = new KeyBuffer();
 

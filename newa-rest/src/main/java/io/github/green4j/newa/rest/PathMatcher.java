@@ -31,8 +31,7 @@ public final class PathMatcher<T> {
                 return routeIndex > -1;
             }
 
-            @Override
-            public Jump clone() {
+            public Jump copy() {
                 final Jump result = new Jump();
                 result.from = this.from;
                 result.to = this.to;
@@ -101,7 +100,7 @@ public final class PathMatcher<T> {
                 final SortedSet<Jump> contains = jumps.subSet(jump, true, jump, true);
                 if (contains.isEmpty()) {
                     jump.to = ++currentState;
-                    final Jump jumpToStore = jump.clone();
+                    final Jump jumpToStore = jump.copy();
                     addedJump.jump = jumpToStore;
                     jumps.add(jumpToStore);
                     jump.from = jump.to;
@@ -129,12 +128,11 @@ public final class PathMatcher<T> {
 
             // check if there is a jump fo a final state/handler with the same segment
             // already (current new jump is a duplication)
-            if (jumps.stream().filter(j ->
+            if (jumps.stream().anyMatch(j ->
                     j.from == addedJump.jump.from
                             && j.isParameter == addedJump.jump.isParameter
                             && j.segment.equals(addedJump.jump.segment)
-                            && j.isLeaf()
-            ).count() > 0) {
+                            && j.isLeaf())) {
                 throw new IllegalArgumentException("Ambiguous path expression: " + pathExpression);
             }
 
@@ -160,7 +158,6 @@ public final class PathMatcher<T> {
     }
 
     public final class Result implements PathParameters {
-
         private Result() {
         }
 
@@ -342,6 +339,9 @@ public final class PathMatcher<T> {
 
         for (int i = 0, len = jumps.size(); i < len; i++) {
             final Builder.Jump jump = jumps.pollFirst();
+
+            assert jump != null;
+
             stateJumps[i << 1] = jump.from;
             stateJumps[(i << 1) + 1] = jump.isLeaf() ? routeIndexToTo(jump.routeIndex, jump.to) : jump.to;
 
