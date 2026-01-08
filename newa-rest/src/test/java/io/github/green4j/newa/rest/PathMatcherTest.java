@@ -3,6 +3,8 @@ package io.github.green4j.newa.rest;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.Objects;
+
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,15 +25,24 @@ class PathMatcherTest {
 
         final PathMatcher<Integer> pathMatcher = builder.build();
 
-        Assertions.assertEquals(7, pathMatcher.match("/cats").handler());
-        Assertions.assertEquals(8, pathMatcher.match("/cats/a").handler());
-        Assertions.assertEquals(6, pathMatcher.match("/dogs/aaaa/bbb/c").handler());
-        Assertions.assertEquals(9, pathMatcher.match("/cats/aaa/bbb").handler());
-        Assertions.assertEquals(1, pathMatcher.match("/dogs").handler());
-        Assertions.assertEquals(2, pathMatcher.match("/dogs/a").handler());
-        Assertions.assertEquals(3, pathMatcher.match("/dogs/aaa").handler());
-        Assertions.assertEquals(5, pathMatcher.match("/dogs/aaa/bbb").handler());
-        Assertions.assertEquals(4, pathMatcher.match("/dogs/aaaa").handler());
+        Assertions.assertEquals(7,
+                Objects.requireNonNull(pathMatcher.match("/cats")).handler());
+        Assertions.assertEquals(8,
+                Objects.requireNonNull(pathMatcher.match("/cats/a")).handler());
+        Assertions.assertEquals(6,
+                Objects.requireNonNull(pathMatcher.match("/dogs/aaaa/bbb/c")).handler());
+        Assertions.assertEquals(9,
+                Objects.requireNonNull(pathMatcher.match("/cats/aaa/bbb")).handler());
+        Assertions.assertEquals(1,
+                Objects.requireNonNull(pathMatcher.match("/dogs")).handler());
+        Assertions.assertEquals(2,
+                Objects.requireNonNull(pathMatcher.match("/dogs/a")).handler());
+        Assertions.assertEquals(3,
+                Objects.requireNonNull(pathMatcher.match("/dogs/aaa")).handler());
+        Assertions.assertEquals(5,
+                Objects.requireNonNull(pathMatcher.match("/dogs/aaa/bbb")).handler());
+        Assertions.assertEquals(4,
+                Objects.requireNonNull(pathMatcher.match("/dogs/aaaa")).handler());
 
         Assertions.assertNull(pathMatcher.match("/dog"));
         Assertions.assertNull(pathMatcher.match("/dog/a"));
@@ -59,7 +70,8 @@ class PathMatcherTest {
         Assertions.assertNotNull(result);
         Assertions.assertEquals(1, result.handler());
         Assertions.assertEquals(1, result.numberOfParameters());
-        Assertions.assertEquals("10", result.parameterValue("id").toString());
+        Assertions.assertEquals("10",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
 
         result = pathMatcher.match("/dogs");
         Assertions.assertNotNull(result);
@@ -70,33 +82,40 @@ class PathMatcherTest {
         Assertions.assertNotNull(result);
         Assertions.assertEquals(3, result.handler());
         Assertions.assertEquals(1, result.numberOfParameters());
-        Assertions.assertEquals("20", result.parameterValue("id").toString());
+        Assertions.assertEquals("20",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
 
         result = pathMatcher.match("/dogs/30/x/yy");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(4, result.handler());
         Assertions.assertEquals(1, result.numberOfParameters());
-        Assertions.assertEquals("30", result.parameterValue("id").toString());
+        Assertions.assertEquals("30",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
 
         result = pathMatcher.match("/dogs/40/xxxx/150");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(5, result.handler());
         Assertions.assertEquals(2, result.numberOfParameters());
-        Assertions.assertEquals("40", result.parameterValue("id").toString());
-        Assertions.assertEquals("150", result.parameterValue("id2").toString());
+        Assertions.assertEquals("40",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
+        Assertions.assertEquals("150",
+                Objects.requireNonNull(result.parameterValue("id2")).toString());
 
         result = pathMatcher.match("/cats/80");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(6, result.handler());
         Assertions.assertEquals(1, result.numberOfParameters());
-        Assertions.assertEquals("80", result.parameterValue("id").toString());
+        Assertions.assertEquals("80",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
 
         result = pathMatcher.match("/cats/90/100");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(7, result.handler());
         Assertions.assertEquals(2, result.numberOfParameters());
-        Assertions.assertEquals("90", result.parameterValue("id").toString());
-        Assertions.assertEquals("100", result.parameterValue("id2").toString());
+        Assertions.assertEquals("90",
+                Objects.requireNonNull(result.parameterValue("id")).toString());
+        Assertions.assertEquals("100",
+                Objects.requireNonNull(result.parameterValue("id2")).toString());
 
         result = pathMatcher.match("/cats");
         Assertions.assertNotNull(result);
@@ -143,10 +162,12 @@ class PathMatcherTest {
 
         Assertions.assertNotNull(result1);
         Assertions.assertEquals(1, result1.handler());
-        Assertions.assertEquals("rex", result1.parameterValue("dogName").toString());
+        Assertions.assertEquals("rex",
+                Objects.requireNonNull(result1.parameterValue("dogName")).toString());
 
         Assertions.assertNotNull(result2);
         Assertions.assertEquals(2, result2.handler());
-        Assertions.assertEquals("pussy", result2.parameterValue("catName").toString());
+        Assertions.assertEquals("pussy",
+                Objects.requireNonNull(result2.parameterValue("catName")).toString());
     }
 }

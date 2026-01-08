@@ -4,9 +4,15 @@ Netty-based minimalistic REST and Websocket server framework.
 
 ### REST Server
 ```
-io.github.green4j.newa.rest.example.hello.HelloRestServer
+io.github.green4j.newa.example.rest.hello.HelloRestServer
 ```
 
 ### Websocket Server
+```
+io.github.green4j.newa.example.ws.echo.EchoWsServer
 
-TBD
+io.github.green4j.newa.example.ws.broadcast.BroadcastWsServer
+
+io.github.green4j.newa.example.ws.subscriptions.SubscriptionsWsServer
+
+```

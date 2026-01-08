@@ -4,6 +4,7 @@ import io.netty.channel.Channel;
 
 public interface ChannelErrorHandler {
 
-    void onError(Channel channel, Throwable cause);
+    void onError(Channel channel,
+                 Throwable cause);
 
 }

@@ -5,4 +5,5 @@ public interface ClientSessionsListener {
     void onSessionOpened(ClientSession session);
 
     void onSessionClosed(ClientSession session);
+
 }

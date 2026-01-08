@@ -35,4 +35,13 @@ public interface RestEndpointer {
 
     Endpoint deleteTxt(String pathExpression,
                        TxtRestHandle handle);
+
+    Endpoint patch(String pathExpression,
+                   RestHandle handle);
+
+    Endpoint patchJson(String pathExpression,
+                       JsonRestHandle handle);
+
+    Endpoint patchTxt(String pathExpression,
+                      TxtRestHandle handle);
 }

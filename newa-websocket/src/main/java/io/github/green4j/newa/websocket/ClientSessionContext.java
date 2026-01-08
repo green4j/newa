@@ -1,20 +1,23 @@
 package io.github.green4j.newa.websocket;
 
 public class ClientSessionContext {
-    private final SendingResult sendingResult;
+    private final WritingResult writingResult;
     private final Receiver receiver;
     private final io.netty.channel.Channel channel;
+    private final long pingIntervalMs;
 
-    public ClientSessionContext(final SendingResult sendingResult,
+    public ClientSessionContext(final WritingResult writingResult,
                                 final Receiver receiver,
-                                final io.netty.channel.Channel channel) {
-        this.sendingResult = sendingResult;
+                                final io.netty.channel.Channel channel,
+                                final long pingIntervalMs) {
+        this.writingResult = writingResult;
         this.receiver = receiver;
         this.channel = channel;
+        this.pingIntervalMs = pingIntervalMs;
     }
 
-    public SendingResult sendingResult() {
-        return sendingResult;
+    public WritingResult writingResult() {
+        return writingResult;
     }
 
     public Receiver receiver() {
@@ -23,5 +26,9 @@ public class ClientSessionContext {
 
     public io.netty.channel.Channel channel() {
         return channel;
+    }
+
+    public long pingIntervalMs() {
+        return pingIntervalMs;
     }
 }

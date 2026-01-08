@@ -1,7 +1,7 @@
 /**
  * MIT License
  *
- * Copyright (c) 2023-2025 Anatoly Gudkov and others.
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -41,16 +41,50 @@ def getConfigProperty(final String propertyName) {
 
 def groupDeps(group, names, version) {
     def deps = []
-    names.each { it -> {
-        def nameAndClassifier = it.split(':')
-        if (nameAndClassifier.size() < 2) {
-            deps += [group: group, name: nameAndClassifier[0], version: version]
-        } else {
-            deps += [group: group, name: nameAndClassifier[0], version: version, classifier: nameAndClassifier[1]]
+    names.each { it ->
+        {
+            def nameAndClassifier = it.split(':')
+            if (nameAndClassifier.size() < 2) {
+                deps += [group: group, name: nameAndClassifier[0], version: version]
+            } else {
+                deps += [group: group, name: nameAndClassifier[0], version: version, classifier: nameAndClassifier[1]]
+            }
         }
     }
-    }
     return deps
+}
+
+def addDependenciesFromProjects(pom, projects) {
+    pom.withXml {
+        def depsNode = asNode().appendNode('dependencies')
+        def addedDeps = [] as Set
+
+        projects.each { proj ->
+            // api -> compile scope
+            proj.configurations.api.allDependencies.each { dep ->
+                if (dep instanceof ExternalModuleDependency
+                        && addedDeps.add("${dep.group}:${dep.name}")) {
+                    def node = depsNode.appendNode('dependency')
+                    node.appendNode('groupId', dep.group)
+                    node.appendNode('artifactId', dep.name)
+                    node.appendNode('version', dep.version)
+                    node.appendNode('scope', 'compile')
+                }
+            }
+
+            // implementation -> runtime scope
+            proj.configurations.implementation.allDependencies.each { dep ->
+                if (dep instanceof ExternalModuleDependency
+                        && addedDeps.add("${dep.group}:${dep.name}")) {
+                    def node = depsNode.appendNode('dependency')
+                    node.appendNode('groupId', dep.group)
+                    node.appendNode('artifactId', dep.name)
+                    node.appendNode('version', dep.version)
+                    node.appendNode('scope', 'runtime')
+                }
+            }
+        }
+    }
 }
 
 ext {
@@ -68,10 +102,6 @@ ext {
     signingKey = getConfigProperty('SIGNING_GPG_SECRET_KEY')    // ascii-armored secret key
     signingPassword = getConfigProperty('SIGNING_GPG_PASSWORD') // plain text
 }
-
-println "VERSION: $projectVersion"
-println "RELEASE: $isRelease"
-println "SONATYPE REPOSITORY: $sonatypeReleasesRepoUrl"
 
 def projectPom = {
     name = projectName
@@ -210,9 +240,9 @@ configure([commonProject,
 
 configure(commonProject) {
     dependencies {
-        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
-        implementation(groupDeps('io.netty', [
-                'netty-codec-http'
+        api "io.github.green4j:green-jelly:$greenJellyVersion"
+        api(groupDeps('io.netty', [
+                'netty-transport'
         ], nettyVersion))
     }
 
@@ -246,17 +276,11 @@ configure(commonProject) {
 
 configure(restProject) {
     dependencies {
-        implementation(commonProject)
-        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
-        implementation(groupDeps('io.netty', [
+        api(commonProject)
+        api(groupDeps('io.netty', [
                 'netty-buffer',
                 'netty-codec',
-                'netty-codec-http',
-                'netty-transport',
-                'netty-transport-classes-epoll',
-                'netty-transport-native-epoll:linux-x86_64',
-                'netty-transport-native-epoll:linux-aarch_64',
-                'netty-transport-classes-epoll'
+                'netty-codec-http'
         ], nettyVersion))
     }
 
@@ -290,16 +314,11 @@ configure(restProject) {
 
 configure(websocketProject) {
     dependencies {
-        implementation(commonProject)
-        implementation(groupDeps('io.netty', [
+        api(commonProject)
+        api(groupDeps('io.netty', [
                 'netty-buffer',
                 'netty-codec',
-                'netty-codec-http',
-                'netty-transport',
-                'netty-transport-classes-epoll',
-                'netty-transport-native-epoll:linux-x86_64',
-                'netty-transport-native-epoll:linux-aarch_64',
-                'netty-transport-classes-epoll'
+                'netty-codec-http'
         ], nettyVersion))
     }
 
@@ -337,9 +356,9 @@ configure(allProject) {
     apply plugin: 'com.github.johnrengelman.shadow'
 
     dependencies {
-        implementation commonProject
-        implementation restProject
-        implementation websocketProject
+        api commonProject
+        api restProject
+        api websocketProject
     }
 
     shadowJar {
@@ -351,6 +370,12 @@ configure(allProject) {
                 'Implementation-Version': projectVersion,
                 'Implementation-Vendor': projectAuthor,
                 'Automatic-Module-Name': 'io.github.green4j.newa.all')
+
+        dependencies {
+            include(project(commonProject.path))
+            include(project(restProject.path))
+            include(project(websocketProject.path))
+        }
     }
 
     jar.finalizedBy shadowJar
@@ -376,6 +401,7 @@ configure(allProject) {
                 artifact sourcesJar
                 artifact javadocJar
                 pom(projectPom)
+                addDependenciesFromProjects(pom, [commonProject, restProject, websocketProject])
             }
         }
 
@@ -403,10 +429,6 @@ configure(exampleProject) {
     dependencies {
         implementation commonProject
         implementation restProject
-        implementation "io.github.green4j:green-jelly:$greenJellyVersion"
-        implementation(groupDeps('io.netty', [
-                'netty-codec',
-                'netty-codec-http'
-        ], nettyVersion))
+        implementation websocketProject
     }
 }

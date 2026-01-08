@@ -30,12 +30,24 @@ public final class Endpoint {
         return this;
     }
 
-    RestHandle handle() {
+    public String pathExpression() {
+        return pathExpression;
+    }
+
+    public RestHandle handle() {
         return handle;
     }
 
-    String pathExpression() {
-        return pathExpression;
+    public String description() {
+        return description;
+    }
+
+    public String[] pathParameterDescriptions() {
+        return pathParameterDescriptions != null ? pathParameterDescriptions : EMPTY;
+    }
+
+    public String[] queryParameterDescriptions() {
+        return queryParameterDescriptions != null ? queryParameterDescriptions : EMPTY;
     }
 
     String pathExpressionWithoutQuery() {
@@ -44,17 +56,5 @@ public final class Endpoint {
         }
         final int qIdx = pathExpression.indexOf('?');
         return qIdx == -1 ? pathExpression : pathExpression.substring(0, qIdx);
-    }
-
-    String description() {
-        return description;
-    }
-
-    String[] pathParameterDescriptions() {
-        return pathParameterDescriptions != null ? pathParameterDescriptions : EMPTY;
-    }
-
-    String[] queryParameterDescriptions() {
-        return queryParameterDescriptions != null ? queryParameterDescriptions : EMPTY;
     }
 }
