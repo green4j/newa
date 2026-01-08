@@ -1,3 +1,5 @@
+import io.github.green4j.newa.build.SonatypeCentralPortalUploadRepositoryTask
+
 /**
  * MIT License
  *
@@ -54,7 +56,7 @@ def groupDeps(group, names, version) {
     return deps
 }
 
-def addDependenciesFromProjects(pom, projects) {
+def addDepsFromProjects(pom, projects) {
     pom.withXml {
         def depsNode = asNode().appendNode('dependencies')
         def addedDeps = [] as Set
@@ -93,8 +95,8 @@ ext {
     isRelease = !projectVersion.endsWith('-SNAPSHOT')
 
     sonatypeReleasesRepoUrl = isRelease
-            ? 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
-            : 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+            ? 'https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/'
+            : 'https://central.sonatype.com/repository/maven-snapshots/'
 
     sonatypeUsername = getConfigProperty('SONATYPE_USERNAME')
     sonatypePassword = getConfigProperty('SONATYPE_PASSWORD')
@@ -401,7 +403,7 @@ configure(allProject) {
                 artifact sourcesJar
                 artifact javadocJar
                 pom(projectPom)
-                addDependenciesFromProjects(pom, [commonProject, restProject, websocketProject])
+                addDepsFromProjects(pom, [commonProject, restProject, websocketProject])
             }
         }
 
@@ -431,4 +433,11 @@ configure(exampleProject) {
         implementation restProject
         implementation websocketProject
     }
+}
+
+tasks.register('uploadArtifactsToSonatypeCentralPortal', SonatypeCentralPortalUploadRepositoryTask) {
+    portalUsername.set(sonatypeUsername)
+    portalPassword.set(sonatypePassword)
+    groupId.set(projectGroup)
+    snapshotRelease.set(!isRelease)
 }

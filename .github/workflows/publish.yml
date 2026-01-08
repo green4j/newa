@@ -51,8 +51,8 @@ jobs:
       with:
         distribution: 'zulu'
         java-version: 11
-    - name: Test and publish to Maven Central
-      run: ./gradlew test publish
+    - name: Test and publish to Sonatype Central Portal
+      run: ./gradlew test publish uploadArtifactsToSonatypeCentralPortal
       env:
         SONATYPE_USERNAME:       ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD:       ${{ secrets.SONATYPE_PASSWORD }}
