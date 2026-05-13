@@ -4,7 +4,6 @@ import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
 import io.github.green4j.newa.lang.Charset;
-import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.util.Arrays;
 
@@ -19,8 +18,7 @@ public abstract class LazyStaticJsonRestHandler extends ApplicationJsonRestHandl
     }
 
     @Override
-    protected final ByteArray doHandle(final FullHttpRequest request,
-                                       final PathParameters pathParameters) {
+    protected final ByteArray doHandle(final RestContext context) {
         if (content == null) {
             synchronized (this) {
                 if (content == null) {

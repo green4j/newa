@@ -2,8 +2,6 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.lang.Charset;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.FullHttpRequest;
 
 public abstract class ApplicationJsonRestHandler
         extends AbstractApplicationJsonHandler implements RestHandle {
@@ -16,19 +14,16 @@ public abstract class ApplicationJsonRestHandler
     }
 
     @Override
-    public final void handle(final ChannelHandlerContext ctx,
-                             final FullHttpRequest request,
-                             final PathParameters pathParameters,
+    public final void handle(final RestContext context,
                              final Result result) {
         try {
-            final ByteArray content = doHandle(request, pathParameters);
+            final ByteArray content = doHandle(context);
             result.ok(new DefaultFullHttpResponseContent(contentType, content));
         } catch (final Exception e) {
             result.error(e);
         }
     }
 
-    protected abstract ByteArray doHandle(FullHttpRequest request,
-                                          PathParameters pathParameters)
+    protected abstract ByteArray doHandle(RestContext context)
             throws PathNotFoundException, BadRequestException;
 }

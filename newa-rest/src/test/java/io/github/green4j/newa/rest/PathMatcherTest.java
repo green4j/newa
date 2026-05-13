@@ -69,58 +69,58 @@ class PathMatcherTest {
         PathMatcher<Integer>.Result result = pathMatcher.match("/10");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(1, result.handler());
-        Assertions.assertEquals(1, result.numberOfParameters());
+        Assertions.assertEquals(1, result.numberOfNames());
         Assertions.assertEquals("10",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
 
         result = pathMatcher.match("/dogs");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(2, result.handler());
-        Assertions.assertEquals(0, result.numberOfParameters());
+        Assertions.assertEquals(0, result.numberOfNames());
 
         result = pathMatcher.match("/dogs/20/x");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(3, result.handler());
-        Assertions.assertEquals(1, result.numberOfParameters());
+        Assertions.assertEquals(1, result.numberOfNames());
         Assertions.assertEquals("20",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
 
         result = pathMatcher.match("/dogs/30/x/yy");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(4, result.handler());
-        Assertions.assertEquals(1, result.numberOfParameters());
+        Assertions.assertEquals(1, result.numberOfNames());
         Assertions.assertEquals("30",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
 
         result = pathMatcher.match("/dogs/40/xxxx/150");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(5, result.handler());
-        Assertions.assertEquals(2, result.numberOfParameters());
+        Assertions.assertEquals(2, result.numberOfNames());
         Assertions.assertEquals("40",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
         Assertions.assertEquals("150",
-                Objects.requireNonNull(result.parameterValue("id2")).toString());
+                Objects.requireNonNull(result.value("id2")).toString());
 
         result = pathMatcher.match("/cats/80");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(6, result.handler());
-        Assertions.assertEquals(1, result.numberOfParameters());
+        Assertions.assertEquals(1, result.numberOfNames());
         Assertions.assertEquals("80",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
 
         result = pathMatcher.match("/cats/90/100");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(7, result.handler());
-        Assertions.assertEquals(2, result.numberOfParameters());
+        Assertions.assertEquals(2, result.numberOfNames());
         Assertions.assertEquals("90",
-                Objects.requireNonNull(result.parameterValue("id")).toString());
+                Objects.requireNonNull(result.value("id")).toString());
         Assertions.assertEquals("100",
-                Objects.requireNonNull(result.parameterValue("id2")).toString());
+                Objects.requireNonNull(result.value("id2")).toString());
 
         result = pathMatcher.match("/cats");
         Assertions.assertNotNull(result);
         Assertions.assertEquals(8, result.handler());
-        Assertions.assertEquals(0, result.numberOfParameters());
+        Assertions.assertEquals(0, result.numberOfNames());
 
         Assertions.assertNull(pathMatcher.match("/10/20"));
         Assertions.assertNull(pathMatcher.match("/cats/90/100/10"));
@@ -163,11 +163,11 @@ class PathMatcherTest {
         Assertions.assertNotNull(result1);
         Assertions.assertEquals(1, result1.handler());
         Assertions.assertEquals("rex",
-                Objects.requireNonNull(result1.parameterValue("dogName")).toString());
+                Objects.requireNonNull(result1.value("dogName")).toString());
 
         Assertions.assertNotNull(result2);
         Assertions.assertEquals(2, result2.handler());
         Assertions.assertEquals("pussy",
-                Objects.requireNonNull(result2.parameterValue("catName")).toString());
+                Objects.requireNonNull(result2.value("catName")).toString());
     }
 }

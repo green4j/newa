@@ -1,9 +1,8 @@
 package io.github.green4j.newa.rest.handles;
 
-import io.github.green4j.newa.rest.PathParameters;
+import io.github.green4j.newa.rest.RestContext;
 import io.github.green4j.newa.rest.TxtRestHandle;
 import io.github.green4j.newa.text.LineAppendable;
-import io.netty.handler.codec.http.FullHttpRequest;
 
 public class Txt_Execute implements TxtRestHandle {
     private final Runnable runnable;
@@ -13,8 +12,7 @@ public class Txt_Execute implements TxtRestHandle {
     }
 
     @Override
-    public void doHandle(final FullHttpRequest request,
-                         final PathParameters pathParameters,
+    public void doHandle(final RestContext context,
                          final LineAppendable output) {
         runnable.run();
         output.append("OK");

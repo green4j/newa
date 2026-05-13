@@ -3,8 +3,7 @@ package io.github.green4j.newa.rest.handles;
 import com.sun.management.OperatingSystemMXBean;
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.rest.JsonRestHandle;
-import io.github.green4j.newa.rest.PathParameters;
-import io.netty.handler.codec.http.FullHttpRequest;
+import io.github.green4j.newa.rest.RestContext;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -100,8 +99,7 @@ public class Json_JvmInfo implements JsonRestHandle {
     }
 
     @Override
-    public void doHandle(final FullHttpRequest request,
-                         final PathParameters pathParameters,
+    public void doHandle(final RestContext context,
                          final JsonGenerator output) {
         final RuntimeMXBean runtimeMXBean =
                 ManagementFactory.getRuntimeMXBean();

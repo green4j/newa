@@ -3,7 +3,6 @@ package io.github.green4j.newa.rest;
 import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
 import io.github.green4j.newa.lang.Charset;
-import io.netty.handler.codec.http.FullHttpRequest;
 
 public class JsonRestHandler extends ApplicationJsonRestHandler {
     private final JsonRestHandle handle;
@@ -19,11 +18,10 @@ public class JsonRestHandler extends ApplicationJsonRestHandler {
     }
 
     @Override
-    protected ByteArray doHandle(final FullHttpRequest request,
-                                 final PathParameters pathParameters)
+    protected ByteArray doHandle(final RestContext context)
             throws PathNotFoundException, BadRequestException {
         final ByteArrayJsonGenerator generator = jsonGenerator();
-        handle.doHandle(request, pathParameters, generator.start());
+        handle.doHandle(context, generator.start());
         return generator.finish();
     }
 }

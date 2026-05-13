@@ -2,8 +2,7 @@ package io.github.green4j.newa.rest.handles;
 
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.rest.JsonRestHandle;
-import io.github.green4j.newa.rest.PathParameters;
-import io.netty.handler.codec.http.FullHttpRequest;
+import io.github.green4j.newa.rest.RestContext;
 
 public class Json_Execute implements JsonRestHandle {
     private final Runnable runnable;
@@ -13,8 +12,7 @@ public class Json_Execute implements JsonRestHandle {
     }
 
     @Override
-    public void doHandle(final FullHttpRequest request,
-                         final PathParameters pathParameters,
+    public void doHandle(final RestContext context,
                          final JsonGenerator output) {
         runnable.run();
         output.stringValue("OK");

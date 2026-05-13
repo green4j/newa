@@ -3,8 +3,7 @@ package io.github.green4j.newa.rest.handles;
 import com.sun.management.ThreadMXBean;
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.rest.JsonRestHandle;
-import io.github.green4j.newa.rest.PathParameters;
-import io.netty.handler.codec.http.FullHttpRequest;
+import io.github.green4j.newa.rest.RestContext;
 
 import java.lang.management.LockInfo;
 import java.lang.management.ManagementFactory;
@@ -19,8 +18,7 @@ import static io.github.green4j.newa.rest.handles.Util.toDuration;
 public class Json_JvmThreadDump implements JsonRestHandle {
 
     @Override
-    public void doHandle(final FullHttpRequest request,
-                         final PathParameters pathParameters,
+    public void doHandle(final RestContext context,
                          final JsonGenerator output) {
         final ThreadMXBean threadMXBean =
                 (ThreadMXBean) ManagementFactory.getThreadMXBean(); // unchecked

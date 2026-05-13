@@ -1,10 +1,9 @@
 package io.github.green4j.newa.rest.handles;
 
 import com.sun.management.ThreadMXBean;
-import io.github.green4j.newa.rest.PathParameters;
+import io.github.green4j.newa.rest.RestContext;
 import io.github.green4j.newa.rest.TxtRestHandle;
 import io.github.green4j.newa.text.LineAppendable;
-import io.netty.handler.codec.http.FullHttpRequest;
 
 import java.lang.management.LockInfo;
 import java.lang.management.ManagementFactory;
@@ -19,8 +18,7 @@ import static io.github.green4j.newa.rest.handles.Util.toDuration;
 public class Txt_JvmThreadDump implements TxtRestHandle {
 
     @Override
-    public void doHandle(final FullHttpRequest request,
-                         final PathParameters pathParameters,
+    public void doHandle(final RestContext context,
                          final LineAppendable output) {
 
         final ThreadMXBean threadMXBean =

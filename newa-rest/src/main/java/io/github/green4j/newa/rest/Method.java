@@ -46,6 +46,7 @@ public final class Method {
 
     /**
      * Prepares PathMatcher for the specified endpoints.
+     *
      * @return matcher if any endpoint has been specified for the method, otherwise null
      */
     PathMatcher<RestHandle> prepareMatcher() {

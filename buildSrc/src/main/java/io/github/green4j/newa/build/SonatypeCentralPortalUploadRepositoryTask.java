@@ -31,7 +31,7 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
     private final Property<Boolean> snapshotRelease;
 
     /**
-     * Create new task instance.
+     * Creates new task instance.
      */
     public SonatypeCentralPortalUploadRepositoryTask() {
         portalUsername = getProject().getObjects().property(String.class);
@@ -41,7 +41,7 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
     }
 
     /**
-     * Return property to set Central Portal username.
+     * Returns property to set Central Portal username.
      *
      * @return Central Portal username.
      */
@@ -51,7 +51,7 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
     }
 
     /**
-     * Return property to set Central Portal password.
+     * Returns property to set Central Portal password.
      *
      * @return Central Portal password.
      */
@@ -61,7 +61,7 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
     }
 
     /**
-     * Return property to set {@code groupId} of the project.
+     * Returns property to set {@code groupId} of the project.
      *
      * @return {@code groupId} of the project.
      */
@@ -71,7 +71,7 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
     }
 
     /**
-     * Return property to set snapshot release.
+     * Returns property to set snapshot release.
      *
      * @return {@code true} if snapshot release.
      */
@@ -80,9 +80,6 @@ public class SonatypeCentralPortalUploadRepositoryTask extends DefaultTask {
         return snapshotRelease;
     }
 
-    /**
-     * Publish staging repository to the Central Portal.
-     */
     @TaskAction
     public void run() throws IOException, InterruptedException {
         if (!portalUsername.isPresent()) {

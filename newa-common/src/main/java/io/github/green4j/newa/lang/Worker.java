@@ -13,8 +13,9 @@ public class Worker {
     /**
      * Starts a Work and wait until it is stopped. The stopping can be initiated
      * with a Stopper exposed
+     *
      * @param work to do
-     * @throws Exception  if a problem happened while doing the work
+     * @throws Exception if a problem happened while doing the work
      */
     public final void doWork(final Work work) throws Exception {
         final AtomicBoolean srvClosed = new AtomicBoolean();
@@ -59,6 +60,7 @@ public class Worker {
      * Returns a Stopper to initiate stopping of a Work passed in doWork if any.
      * Must be available after the Work is started. A thread waiting in doWork
      * will be released after stopper().stop(...)
+     *
      * @return stopper
      */
     public Stopper stopper() {

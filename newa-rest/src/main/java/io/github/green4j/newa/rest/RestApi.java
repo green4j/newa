@@ -12,6 +12,7 @@ public final class RestApi implements RestRouter {
     private static final ThreadLocal<PathMatcher<RestHandle>> PUT_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
     private static final ThreadLocal<PathMatcher<RestHandle>> DELETE_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
     private static final ThreadLocal<PathMatcher<RestHandle>> PATCH_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
+
     private static PathMatcher<RestHandle> retrieveThreadLocal(final ThreadLocal<PathMatcher<RestHandle>> threadLocal,
                                                                final PathMatcher<RestHandle> template) {
         if (template == null) {

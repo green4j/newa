@@ -2,8 +2,6 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.util.AsciiString;
 
@@ -75,9 +73,7 @@ public interface RestHandle {
         void errorAndClose(Exception error);
     }
 
-    void handle(ChannelHandlerContext ctx,
-                FullHttpRequest request,
-                PathParameters pathParameters,
+    void handle(RestContext context,
                 Result result)
             throws PathNotFoundException, BadRequestException;
 }

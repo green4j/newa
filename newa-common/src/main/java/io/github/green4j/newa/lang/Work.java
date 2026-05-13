@@ -9,6 +9,7 @@ public interface Work extends Closeable {
     /**
      * Starts a process returning ChannelFuture to wait until the process
      * has been finished
+     *
      * @return ChannelFuture to wait until the process finished
      * @throws Exception if a problem happened while doing the work
      */

@@ -16,7 +16,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -45,13 +46,12 @@ public class HelloRestServer {
         );
 
         apiBuilder.getJson("/hello/{name}",
-                (request,
-                 pathParameters,
+                (context,
                  output) ->
                         output.stringValue(
                                 String.format(
                                         "Hello %s!",
-                                        pathParameters.parameterValueRequired("name")
+                                        context.pathParameters().valueRequired("name")
                                 )
                         )
         ).withPathParameterDescriptions("name - Your name");
@@ -72,15 +72,14 @@ public class HelloRestServer {
                 .root()
                 .getJson(
                         "/version",
-                        (request,
-                         pathParameters,
+                        (context,
                          output) ->
                                 output.stringValue(apiBuilder.fullVersion()));
 
         final RestApi api = apiBuilder.buildWithHelp(Json_Help.factory());
 
-        final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        final EventLoopGroup workerGroup = new NioEventLoopGroup(1);
+        final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
 
         final ServerBootstrap bootstrap = new ServerBootstrap();
 

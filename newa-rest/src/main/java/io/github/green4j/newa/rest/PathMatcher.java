@@ -157,7 +157,7 @@ public final class PathMatcher<T> {
         }
     }
 
-    public final class Result implements PathParameters {
+    public final class Result implements NamedValues {
         private Result() {
         }
 
@@ -166,42 +166,40 @@ public final class PathMatcher<T> {
         }
 
         @Override
-        public int numberOfParameters() {
+        public int numberOfNames() {
             return numberOfParameters;
         }
 
         @Override
-        public String parameterName(final int idx) {
-            return parameterNames[idx];
-        }
-
-        @Override
-        public CharSequence parameterValue(final int idx) {
-            return parameterValues[idx];
-        }
-
-        @Override
-        public CharSequence parameterValue(final String name) {
-            for (int i = 0; i < numberOfParameters(); i++) { // linear probing is going to be OK
-                if (CharSequence.compare(name, parameterName(i)) == 0) {
-                    return parameterValue(i);
+        public int nameToIndex(final String name) {
+            for (int i = 0; i < numberOfNames(); i++) { // linear probing is going to be OK
+                if (CharSequence.compare(name, indexToName(i)) == 0) {
+                    return i;
                 }
             }
-            return null;
+            return -1;
         }
 
         @Override
-        public CharSequence parameterValueRequired(final String name) throws BadRequestException {
-            final CharSequence result = parameterValue(name);
-            if (result == null) {
-                throw new BadRequestException("Parameter '" + name + "' is required");
+        public String indexToName(final int nameIndex) {
+            return parameterNames[nameIndex];
+        }
+
+        @Override
+        public String value(final int nameIndex) {
+            if (nameIndex < 0 || nameIndex >= numberOfParameters) {
+                return null;
             }
-            return result;
+            return parameterValues[nameIndex].toString();
         }
 
         @Override
-        public String parameterValueRequiredString(final String name) throws BadRequestException {
-            return parameterValueRequired(name).toString();
+        public String value(final String name) {
+            final int index = nameToIndex(name);
+            if (index == -1) {
+                return null;
+            }
+            return value(index);
         }
 
         @Override
@@ -209,13 +207,13 @@ public final class PathMatcher<T> {
             final StringBuilder result = new StringBuilder();
             result.append("handler: ").append(handler());
             result.append(", parameters: [");
-            for (int i = 0; i < numberOfParameters(); i++) {
+            for (int i = 0; i < numberOfNames(); i++) {
                 if (i > 0) {
                     result.append(", ");
                 }
-                result.append(parameterName(i))
+                result.append(indexToName(i))
                         .append("=")
-                        .append(parameterValue(i));
+                        .append(value(i));
             }
             result.append(']');
             return result.toString();

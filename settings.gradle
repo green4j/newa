@@ -1,6 +1,6 @@
-rootProject.name=projectName
+rootProject.name = projectName
 
-include (
+include(
         'newa-common',
         'newa-rest',
         'newa-websocket',

@@ -9,7 +9,7 @@ public class CharSequenceToObjectMapReadSafe<T> extends HashMap<String, T> {
             ThreadLocal.withInitial(CharSequenceToObjectMap.KeyBuffer::new);
 
     public CharSequenceToObjectMapReadSafe(final int initialCapacity,
-                                   final float loadFactor) {
+                                           final float loadFactor) {
         super(initialCapacity, loadFactor);
     }
 

@@ -2,10 +2,10 @@ package io.github.green4j.newa.rest;
 
 public class RestHandling {
     private final RestHandle handle;
-    private final PathParameters pathParameters;
+    private final NamedValues pathParameters;
 
     public RestHandling(final RestHandle handle,
-                        final PathParameters pathParameters) {
+                        final NamedValues pathParameters) {
         this.handle = handle;
         this.pathParameters = pathParameters;
     }
@@ -14,7 +14,7 @@ public class RestHandling {
         return handle;
     }
 
-    public PathParameters pathParameters() {
+    public NamedValues pathParameters() {
         return pathParameters;
     }
 }

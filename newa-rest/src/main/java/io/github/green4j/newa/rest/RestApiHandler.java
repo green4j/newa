@@ -24,7 +24,7 @@ public class RestApiHandler
     public void channelRead0(final ChannelHandlerContext ctx,
                              final FullHttpRequest request) {
 
-        final RestHandlingResult result = new RestHandlingResult(
+        final RestResult result = new RestResult(
                 ctx,
                 request,
                 errorHandler
@@ -34,12 +34,14 @@ public class RestApiHandler
             final RestHandling handling = api.resolve(request);
 
             final RestHandle handle = handling.handle();
-            final PathParameters pathParameters = handling.pathParameters();
+            final NamedValues pathParameters = handling.pathParameters();
 
             handle.handle(
-                    ctx,
-                    request,
-                    pathParameters,
+                    new RestContext(
+                            ctx,
+                            request,
+                            pathParameters
+                    ),
                     result
             );
         } catch (final Exception error) {

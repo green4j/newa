@@ -30,7 +30,8 @@ public class UtcToIso8601Formatter {
 
     /**
      * Formats time in millis with optional microseconds.
-     * @param timeMillis time in millis
+     *
+     * @param timeMillis  time in millis
      * @param microsToAdd microseconds to be added at the end of the formatted value. -1 - no micros
      * @return formatted timestamp
      */

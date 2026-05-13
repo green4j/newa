@@ -25,7 +25,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 import static io.netty.handler.codec.http.HttpHeaderValues.CLOSE;
 import static io.netty.handler.codec.http.HttpHeaderValues.KEEP_ALIVE;
 
-class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content {
+class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     private final HttpHeaders userHeaders = new DefaultHttpHeaders();
 
     private final ChannelHandlerContext ctx;
@@ -36,9 +36,9 @@ class RestHandlingResult implements RestHandle.Result, RestHandle.Result.Content
 
     private FullHttpResponse response;
 
-    RestHandlingResult(final ChannelHandlerContext ctx,
-                       final HttpMessage request,
-                       final ErrorHandler errorHandler) {
+    RestResult(final ChannelHandlerContext ctx,
+               final HttpMessage request,
+               final ErrorHandler errorHandler) {
         this.ctx = ctx;
 
         httpVersion = request.protocolVersion();

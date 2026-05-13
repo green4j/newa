@@ -10,7 +10,7 @@ public final class Endpoint {
     private String[] queryParameterDescriptions;
 
     Endpoint(final String pathExpression,
-                     final RestHandle handle) {
+             final RestHandle handle) {
         this.pathExpression = pathExpression;
         this.handle = handle;
     }
