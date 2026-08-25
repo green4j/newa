@@ -1,19 +1,37 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.AsciiByteArrayWriter;
+import io.github.green4j.jelly.ClearableByteArrayBufferingWriter;
 import io.github.green4j.jelly.Utf8ByteArrayWriter;
 import io.github.green4j.newa.lang.Charset;
 import io.github.green4j.newa.text.ByteArrayLineBuilder;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.util.AsciiString;
 
-public abstract class AbstractTextPlainHandler {
-    private static final int INITIAL_SIZE = 1024;
+import java.util.function.IntConsumer;
 
-    private static final ThreadLocal<ByteArrayLineBuilder> ASCII_LINE_BUILDER =
-            ThreadLocal.withInitial(() -> new ByteArrayLineBuilder(new AsciiByteArrayWriter(INITIAL_SIZE)));
-    private static final ThreadLocal<ByteArrayLineBuilder> UTF8_LINE_BUILDER =
-            ThreadLocal.withInitial(() -> new ByteArrayLineBuilder(new Utf8ByteArrayWriter(INITIAL_SIZE)));
+public abstract class AbstractTextPlainHandler {
+    private static final ThreadLocal<RetainedBuffer<ByteArrayLineBuilder>> ASCII_LINE_BUILDER =
+            ThreadLocal.withInitial(() -> {
+                final AsciiByteArrayWriter writer = new AsciiByteArrayWriter(ResponseBuffers.baseSize());
+                return retainedLineBuilder(writer, size -> writer.set(new byte[size]));
+            });
+    private static final ThreadLocal<RetainedBuffer<ByteArrayLineBuilder>> UTF8_LINE_BUILDER =
+            ThreadLocal.withInitial(() -> {
+                final Utf8ByteArrayWriter writer = new Utf8ByteArrayWriter(ResponseBuffers.baseSize());
+                return retainedLineBuilder(writer, size -> writer.set(new byte[size]));
+            });
+
+    private static RetainedBuffer<ByteArrayLineBuilder> retainedLineBuilder(
+            final ClearableByteArrayBufferingWriter writer,
+            final IntConsumer resize) {
+        return new RetainedBuffer<>(
+                new ByteArrayLineBuilder(writer),
+                ByteArrayLineBuilder::capacity,
+                lineBuilder -> lineBuilder.array().length(),
+                resize
+        );
+    }
 
     protected final AsciiString contentType;
     protected final Charset responseCharset;
@@ -29,18 +47,31 @@ public abstract class AbstractTextPlainHandler {
     }
 
     protected final ByteArrayLineBuilder lineBuilder() {
-        final ByteArrayLineBuilder result;
+        final ByteArrayLineBuilder result = lineBuilderThreadLocal().get().buffer();
+        result.clear();
+        return result;
+    }
+
+    /**
+     * Reports that a response has been rendered, letting a buffer grown oversized by a large response be
+     * shrunk back once the load no longer needs that size - see {@link ResponseBuffers}. Without this a
+     * single huge response makes every thread which rendered one hold a buffer of that size for the lifetime
+     * of the process.
+     * <p>
+     * Call this only once the rendered content has been copied out of the buffer.
+     */
+    protected final void responseRendered() {
+        lineBuilderThreadLocal().get().onResponseRendered();
+    }
+
+    private ThreadLocal<RetainedBuffer<ByteArrayLineBuilder>> lineBuilderThreadLocal() {
         switch (responseCharset) {
             case US_ASCII:
-                result = ASCII_LINE_BUILDER.get();
-                break;
+                return ASCII_LINE_BUILDER;
             case UTF8:
-                result = UTF8_LINE_BUILDER.get();
-                break;
+                return UTF8_LINE_BUILDER;
             default:
                 throw new IllegalStateException();
         }
-        result.clear();
-        return result;
     }
 }

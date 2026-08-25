@@ -2,7 +2,6 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -71,7 +70,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 statusCode,
-                content.toByteBuf());
+                content.toByteBuf(ctx.alloc()));
 
         setUserHandlers();
 
@@ -96,9 +95,14 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
                                              final AsciiString contentEncoding,
                                              final AsciiString contentType,
                                              final int contentLength) {
+        // the whole content is declared up front, so allocate it in one go: growing a buffer from
+        // scratch would copy the content over and over as it doubles
         response = new DefaultFullHttpResponse(
                 httpVersion,
-                statusCode);
+                statusCode,
+                contentLength > 0
+                        ? ctx.alloc().buffer(contentLength)
+                        : ctx.alloc().buffer());
 
         setUserHandlers();
 
@@ -123,7 +127,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
-                Unpooled.copiedBuffer(array, offset, length));
+                ctx.alloc().buffer(length).writeBytes(array, offset, length));
 
         setUserHandlers();
 
@@ -137,7 +141,8 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
-                Unpooled.copiedBuffer(buffer));
+                // duplicated: writeBytes(ByteBuffer) would advance the caller's position
+                ctx.alloc().buffer(buffer.remaining()).writeBytes(buffer.duplicate()));
 
         setUserHandlers();
 
@@ -282,6 +287,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     }
 
     private void doError(final Exception error) {
+        // a response already built by the failed handler is never written now: its buffer comes from the
+        // channel's allocator, so it has to be handed back rather than left to the garbage collector
+        releaseResponse();
+
         final FullHttpResponseContent content;
         final HttpResponseStatus status;
 
@@ -314,7 +323,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 status,
-                content.toByteBuf());
+                content.toByteBuf(ctx.alloc()));
 
         setContentHeaders(
                 content.contentEncoding(),
@@ -332,9 +341,21 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         final HttpHeaders headers = response.headers();
         final int contentLengthHeader = headers.getInt(CONTENT_LENGTH, 0);
         if (contentLength != contentLengthHeader) {
-            throw new IllegalStateException("Expected content length: "
+            final IllegalStateException error = new IllegalStateException("Expected content length: "
                     + contentLengthHeader + ", in fact: " + contentLength);
+            // nothing will be written, so the content buffer goes back to the channel's allocator
+            releaseResponse();
+            throw error;
         }
+    }
+
+    private void releaseResponse() {
+        if (response == null) {
+            return;
+        }
+        final FullHttpResponse released = response;
+        response = null;
+        released.release();
     }
 
     private void doDone(final boolean close) {
@@ -350,7 +371,12 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
             headers.set(CONNECTION, CLOSE);
         }
 
-        final ChannelFuture f = ctx.writeAndFlush(response);
+        // ownership of the response, and of its buffer, passes to the pipeline here: whatever happens next
+        // must not release it a second time
+        final FullHttpResponse written = response;
+        response = null;
+
+        final ChannelFuture f = ctx.writeAndFlush(written);
         if (!stillKeepAlive) {
             f.addListener(ChannelFutureListener.CLOSE);
         }

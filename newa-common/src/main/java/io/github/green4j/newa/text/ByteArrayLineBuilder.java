@@ -92,6 +92,18 @@ public class ByteArrayLineBuilder implements LineAppendable {
         writer.clear();
     }
 
+    /**
+     * Size of the underlying buffer. The buffer grows to fit the largest text ever built and {@link #clear()}
+     * never shrinks it back, so a caller which pools line builders can use this to decide whether a builder
+     * is worth keeping.
+     *
+     * @return number of bytes the underlying buffer occupies
+     */
+    public int capacity() {
+        final byte[] array = writer.array();
+        return array == null ? 0 : array.length;
+    }
+
     @Override
     public String toString() {
         return writer.toString();

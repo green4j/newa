@@ -32,6 +32,19 @@ HTTP REST API routing and handlers built on Netty.
   the timeout (same rules apply inside the runnable for nested async hops). If you use an unrelated `ExecutorService` or
   client library callback thread, always hop back with `context.executor().execute(...)` before touching `result`. Never
   block the `EventLoop` waiting on external completion.
+- **Response memory**: JSON and plain-text handlers render into a thread-local buffer, which is what keeps
+  responses allocation-free. Such a buffer grows to the largest response ever rendered on the thread, so one
+  rare multi-megabyte response would otherwise leave every event loop thread that rendered one holding a
+  buffer of that size for the lifetime of the process. The buffer is therefore sized to the load: it is never
+  dropped and never falls below `ResponseBuffers.baseSize()` (64 KB by default, and where it starts, so
+  ordinary responses never grow it at all), and above that it follows the largest response seen in the last
+  `ResponseBuffers.observationWindowMillis()` (5 s by default) plus half of it again. Nothing counts requests
+  - under load a thread serves hundreds a second, and a per-request counter would have the buffer released
+  and re-grown constantly, turning a memory problem into a GC one. Both are overridable with the
+  `newa.rest.baseBufferSize` and `newa.rest.bufferObservationWindowMillis` system properties. The
+  rendered content is then copied into a buffer taken from the channel's allocator - direct, so the transport
+  writes it as is rather than copying it into a direct buffer of its own right before the socket write. See
+  **Large responses** below for what this does and does not solve.
 - **Path parameters**: If a path expression includes `{name}`, you must chain `.withPathParameterDescriptions(...)` on
   the returned `Endpoint` so the number of descriptions matches the parsed parameters (`Method.prepareMatcher` enforces
   this).
@@ -82,3 +95,46 @@ builder.get("/async", (context, result) ->
                     }
                 })));
 ```
+
+## Large responses
+
+Every response this API can produce is a `FullHttpResponse`: rendered in full, then written in one go. That
+holds for `Result.ok(...)` and equally for the incremental `Result.Content` returned by
+`ok(contentType, contentLength)` - `append(...)` fills the response buffer, it does not send anything. A
+response of tens or hundreds of megabytes therefore costs at least that much memory per request in flight,
+and a slow client keeps it there until the socket drains.
+
+What the library does to keep that cost at its floor rather than a multiple of it:
+
+- rendering buffers grown by a large response are not retained by the thread once the large responses stop
+  (see **Response memory** above);
+- content is copied once, into a buffer from the channel's allocator, instead of into a heap buffer the
+  transport would then copy again;
+- `ok(contentType, contentLength)` allocates the declared length up front rather than growing a buffer by
+  repeated doubling and copying.
+
+What it does not do: chunk the response, or apply backpressure when the peer stops reading. Until it does,
+serve large payloads within a budget you have actually measured:
+
+- **Page**. A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
+  client has to hold it too.
+- **Cap** the response size in the handler and answer `413`/`507` rather than degrading quietly.
+- **Configure the watermarks**, so a channel whose peer stopped reading reports itself unwritable:
+
+  ```java
+  bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+          new WriteBufferWaterMark(32 * 1024, 64 * 1024));
+  ```
+
+- **Size the container for direct memory, not just the heap.** Response buffers come from Netty's allocator
+  and live off-heap, where `-Xmx` does not bound them and the cgroup limit does. A container sized from the
+  heap alone is killed for its RSS instead of failing with `OutOfMemoryError`:
+
+  ```
+  -XX:MaxRAMPercentage=50
+  -XX:MaxDirectMemorySize=512m
+  -Dio.netty.maxDirectMemory=536870912
+  -XX:+ExitOnOutOfMemoryError
+  ```
+
+  The container limit has to cover heap plus direct memory plus metaspace, code cache and thread stacks.

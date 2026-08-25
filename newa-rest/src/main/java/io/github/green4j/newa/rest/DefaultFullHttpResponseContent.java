@@ -2,6 +2,7 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.util.AsciiString;
 
@@ -133,6 +134,23 @@ public class DefaultFullHttpResponseContent implements FullHttpResponseContent {
         }
         if (byteBuffer != null) {
             return Unpooled.copiedBuffer(byteBuffer);
+        }
+        return Unpooled.EMPTY_BUFFER;
+    }
+
+    @Override
+    public ByteBuf toByteBuf(final ByteBufAllocator allocator) {
+        if (array != null) {
+            if (arrayLength == 0) {
+                return Unpooled.EMPTY_BUFFER;
+            }
+            return allocator.buffer(arrayLength)
+                    .writeBytes(array, arrayOffset, arrayLength);
+        }
+        if (byteBuffer != null) {
+            final ByteBuffer source = byteBuffer.duplicate();
+            return allocator.buffer(source.remaining())
+                    .writeBytes(source);
         }
         return Unpooled.EMPTY_BUFFER;
     }

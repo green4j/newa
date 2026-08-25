@@ -14,9 +14,11 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpContentCompressor;
@@ -85,6 +87,11 @@ public class HelloRestServer {
 
         bootstrap.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
+                // a slow client must not let responses pile up in the channel's outbound buffer unnoticed:
+                // past the high mark the channel reports itself unwritable, which is the signal a handler
+                // producing large responses is expected to respect
+                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                        new WriteBufferWaterMark(32 * 1024, 64 * 1024))
                 .childHandler(new ChannelInitializer<>() {
                     @Override
                     protected void initChannel(final Channel ch) {

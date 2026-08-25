@@ -7,41 +7,43 @@ public final class RestApi implements RestRouter {
     public static final char SLASH_CHAR = '/';
     public static final String SLASH = "" + SLASH_CHAR;
 
-    private static final ThreadLocal<PathMatcher<RestHandle>> GET_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> POST_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> PUT_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> DELETE_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
-    private static final ThreadLocal<PathMatcher<RestHandle>> PATCH_MATCHER_THREAD_LOCAL = new ThreadLocal<>();
+    /**
+     * Per-thread copy of one method's matcher. The copies belong to the {@link RestApi} that owns the template:
+     * keyed by the class instead, two APIs served by the same thread would share whichever one got there first,
+     * and the other would answer 404 on its own paths.
+     */
+    private static final class ThreadLocalMatchers {
+        private final PathMatcher<RestHandle> template;
+        private final ThreadLocal<PathMatcher<RestHandle>> threadLocal;
 
-    private static PathMatcher<RestHandle> retrieveThreadLocal(final ThreadLocal<PathMatcher<RestHandle>> threadLocal,
-                                                               final PathMatcher<RestHandle> template) {
-        if (template == null) {
-            return null;
+        private ThreadLocalMatchers(final PathMatcher<RestHandle> template) {
+            this.template = template;
+            this.threadLocal = template == null
+                    ? null
+                    : ThreadLocal.withInitial(() -> new PathMatcher<>(template));
         }
-        PathMatcher<RestHandle> result = threadLocal.get();
-        if (result == null) {
-            result = new PathMatcher<>(template);
-            threadLocal.set(result);
+
+        private PathMatcher<RestHandle> get() {
+            return template == null ? null : threadLocal.get();
         }
-        return result;
     }
 
     private final RestApiBuilder builder;
 
-    private final PathMatcher<RestHandle> getMatcherTemplate;
-    private final PathMatcher<RestHandle> postMatcherTemplate;
-    private final PathMatcher<RestHandle> putMatcherTemplate;
-    private final PathMatcher<RestHandle> deleteMatcherTemplate;
-    private final PathMatcher<RestHandle> patchMatcherTemplate;
+    private final ThreadLocalMatchers getMatchers;
+    private final ThreadLocalMatchers postMatchers;
+    private final ThreadLocalMatchers putMatchers;
+    private final ThreadLocalMatchers deleteMatchers;
+    private final ThreadLocalMatchers patchMatchers;
 
     RestApi(final RestApiBuilder builder) {
         this.builder = builder;
 
-        getMatcherTemplate = builder.get().prepareMatcher();
-        postMatcherTemplate = builder.post().prepareMatcher();
-        putMatcherTemplate = builder.put().prepareMatcher();
-        deleteMatcherTemplate = builder.delete().prepareMatcher();
-        patchMatcherTemplate = builder.patch().prepareMatcher();
+        getMatchers = new ThreadLocalMatchers(builder.get().prepareMatcher());
+        postMatchers = new ThreadLocalMatchers(builder.post().prepareMatcher());
+        putMatchers = new ThreadLocalMatchers(builder.put().prepareMatcher());
+        deleteMatchers = new ThreadLocalMatchers(builder.delete().prepareMatcher());
+        patchMatchers = new ThreadLocalMatchers(builder.patch().prepareMatcher());
     }
 
     public boolean hasHelp() {
@@ -77,30 +79,15 @@ public final class RestApi implements RestRouter {
     private PathMatcher<RestHandle> getThreadLocalMethodPathMatcher(final String method) {
         switch (method) {
             case "GET":
-                return retrieveThreadLocal(
-                        GET_MATCHER_THREAD_LOCAL,
-                        getMatcherTemplate
-                );
+                return getMatchers.get();
             case "POST":
-                return retrieveThreadLocal(
-                        POST_MATCHER_THREAD_LOCAL,
-                        postMatcherTemplate
-                );
+                return postMatchers.get();
             case "PUT":
-                return retrieveThreadLocal(
-                        PUT_MATCHER_THREAD_LOCAL,
-                        putMatcherTemplate
-                );
+                return putMatchers.get();
             case "DELETE":
-                return retrieveThreadLocal(
-                        DELETE_MATCHER_THREAD_LOCAL,
-                        deleteMatcherTemplate
-                );
+                return deleteMatchers.get();
             case "PATCH":
-                return retrieveThreadLocal(
-                        PATCH_MATCHER_THREAD_LOCAL,
-                        patchMatcherTemplate
-                );
+                return patchMatchers.get();
             default:
                 break;
         }

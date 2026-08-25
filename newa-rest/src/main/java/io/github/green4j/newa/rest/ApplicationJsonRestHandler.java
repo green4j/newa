@@ -21,6 +21,10 @@ public abstract class ApplicationJsonRestHandler
             result.ok(new DefaultFullHttpResponseContent(contentType, content));
         } catch (final Exception e) {
             result.error(e);
+        } finally {
+            // the content has been copied into the response buffer by now, so an oversized
+            // rendering buffer can be shrunk rather than retained by this thread forever
+            responseRendered();
         }
     }
 
