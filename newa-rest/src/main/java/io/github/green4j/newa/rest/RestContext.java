@@ -4,6 +4,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.util.concurrent.EventExecutor;
 
@@ -15,7 +16,12 @@ import java.util.Map;
 public class RestContext {
     private final ChannelHandlerContext handlerContext;
     private final FullHttpRequest request;
-    private final NamedValues pathParameters;
+    private final RestHandling handling;
+    private final HttpHeaders responseHeaders;
+    private final ResponseChunks responseChunks;
+    private final RestApiObserver observer;
+
+    private boolean handled;
 
     private QueryStringDecoder queryStringDecoder;
     private MappedNamedMultiValues queryParameters;
@@ -24,10 +30,78 @@ public class RestContext {
 
     RestContext(final ChannelHandlerContext handlerContext,
                 final FullHttpRequest request,
-                final NamedValues pathParameters) {
+                final RestHandling handling,
+                final HttpHeaders responseHeaders,
+                final ResponseChunks responseChunks,
+                final RestApiObserver observer) {
         this.handlerContext = handlerContext;
         this.request = request;
-        this.pathParameters = pathParameters;
+        this.handling = handling;
+        this.responseHeaders = responseHeaders;
+        this.responseChunks = responseChunks;
+        this.observer = observer;
+    }
+
+    /**
+     * The handler has returned, so the matcher flyweight the path parameters come from is free to be reused
+     * by the next request on this thread.
+     */
+    void handled() {
+        handled = true;
+    }
+
+    /**
+     * Where a handler puts the headers its response should carry - the one way to do it, and the same one
+     * whether the response is built here or by one of the pre-built handlers, which never hand out the
+     * result they are building:
+     * <pre>{@code
+     * context.responseHeaders().set(CONTENT_DISPOSITION, ContentDisposition.attachment("rows.json.gz"));
+     * }</pre>
+     * The framework writes its own headers after these, so nothing set here can break the framing of the
+     * response. Nothing here reaches an error response either: these belong to the response the handler was
+     * building, and a handler which failed never sent it.
+     *
+     * @return the headers of the response being built
+     */
+    public HttpHeaders responseHeaders() {
+        return responseHeaders;
+    }
+
+    /**
+     * @return the expression the matched endpoint was declared with, {@code /v1/rows/{count}} rather than
+     *         {@code /v1/rows/17} - the label a metric wants, and safe to read at any time
+     */
+    public String pathExpression() {
+        return handling.pathExpression();
+    }
+
+    /**
+     * @return the method the request came in with. Outlives the request
+     */
+    public HttpMethod method() {
+        return request.method();
+    }
+
+    /**
+     * @return the URI the request came in on. Outlives the request
+     */
+    public String uri() {
+        return request.uri();
+    }
+
+    /**
+     * @return the chunked response policy this server was built with
+     */
+    public ResponseChunks responseChunks() {
+        return responseChunks;
+    }
+
+    /**
+     * @return what this request is reported to, or null if it is not observed, or observed only as far as
+     *         {@link HttpApiObserver} goes
+     */
+    public RestApiObserver observer() {
+        return observer;
     }
 
     public Channel channel() {
@@ -38,12 +112,29 @@ public class RestContext {
         return handlerContext.executor();
     }
 
+    /**
+     * @return the request. Its body is only there until the handler returns - after that the buffer has gone
+     *         back to the pool, and reading it throws
+     *         {@link io.netty.util.IllegalReferenceCountException}
+     */
     public FullHttpRequest request() {
         return request;
     }
 
+    /**
+     * The one thing here which would go wrong quietly: these are a matcher flyweight, and the next request on
+     * this thread writes its own parameters into it. So reading them after the handler has returned is
+     * refused rather than answered with somebody else's values.
+     *
+     * @return the path parameters of this request
+     * @throws IllegalStateException if the handler has already returned
+     */
     public NamedValues pathParameters() {
-        return pathParameters;
+        if (handled) {
+            throw new IllegalStateException("The handler has returned, so these path parameters now belong "
+                    + "to whatever request comes next on this thread. Read pathExpression() instead");
+        }
+        return handling.pathParameters();
     }
 
     public NamedMultiValues queryParameters() {

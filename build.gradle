@@ -282,7 +282,9 @@ configure(restProject) {
         api(groupDeps('io.netty', [
                 'netty-buffer',
                 'netty-codec',
-                'netty-codec-http'
+                'netty-codec-http',
+                // ChunkedWriteHandler, which pulls chunked responses only as fast as the peer takes them
+                'netty-handler'
         ], nettyVersion))
     }
 

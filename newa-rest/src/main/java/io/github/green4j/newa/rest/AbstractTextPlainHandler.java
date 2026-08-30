@@ -61,7 +61,7 @@ public abstract class AbstractTextPlainHandler {
      * Call this only once the rendered content has been copied out of the buffer.
      */
     protected final void responseRendered() {
-        lineBuilderThreadLocal().get().onResponseRendered();
+        lineBuilderThreadLocal().get().onRendered();
     }
 
     private ThreadLocal<RetainedBuffer<ByteArrayLineBuilder>> lineBuilderThreadLocal() {

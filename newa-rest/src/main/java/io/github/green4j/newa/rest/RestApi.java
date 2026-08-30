@@ -73,7 +73,7 @@ public final class RestApi implements RestRouter {
             throw new PathNotFoundException(qsd.path());
         }
 
-        return new RestHandling(match.handler(), match);
+        return new RestHandling(match.handler(), match, match.pathExpression());
     }
 
     private PathMatcher<RestHandle> getThreadLocalMethodPathMatcher(final String method) {

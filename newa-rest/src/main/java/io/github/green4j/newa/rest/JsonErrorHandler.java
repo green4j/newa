@@ -2,6 +2,7 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
+import io.netty.handler.codec.http.HttpResponseStatus;
 
 public class JsonErrorHandler extends AbstractApplicationJsonHandler implements ErrorHandler {
     private static final String ERROR = "error";
@@ -28,15 +29,20 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
 
     @Override
     public FullHttpResponseContent handle(final InternalServerErrorException error) {
+        if (!HttpResponseStatus.INTERNAL_SERVER_ERROR.equals(error.status())) {
+            // this exception also carries deliberate answers - a 503 when the server is at its limit, say.
+            // Those are not crashes, and a stack trace of the code which decided to send one says nothing
+            return dumpRestExceptionNoStacktrace(error);
+        }
         final ByteArrayJsonGenerator generator = jsonGenerator();
-        final JsonGenerator output = jsonGenerator().start();
+        final JsonGenerator output = generator.start();
         dumpThrowableWithStacktrace(ERROR, error, output);
         return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }
 
     private FullHttpResponseContent dumpRestExceptionNoStacktrace(final RestException error) {
         final ByteArrayJsonGenerator generator = jsonGenerator();
-        final JsonGenerator output = jsonGenerator().start();
+        final JsonGenerator output = generator.start();
         output.startObject();
         output.objectMember(ERROR);
         output.stringValue(error.getClass().getName());

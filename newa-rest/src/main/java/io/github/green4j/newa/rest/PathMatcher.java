@@ -71,6 +71,9 @@ public final class PathMatcher<T> {
 
         private final TreeSet<Jump> jumps = new TreeSet<>();
         private final List<T> handlers = new ArrayList<>();
+        // parallel to handlers: the expression a route was declared with, kept so a matched request can say
+        // which endpoint it hit rather than only which path it came in on
+        private final List<String> pathExpressions = new ArrayList<>();
 
         private int maxNumberOfParamsInPath = 0;
         private int currentState = INITIAL_STATE;
@@ -138,6 +141,7 @@ public final class PathMatcher<T> {
 
             addedJump.jump.routeIndex = handlers.size();
             handlers.add(handler);
+            pathExpressions.add(pathExpression);
 
             if (parameters.size() > maxNumberOfParamsInPath) {
                 maxNumberOfParamsInPath = parameters.size();
@@ -153,7 +157,7 @@ public final class PathMatcher<T> {
         }
 
         public PathMatcher<T> build() {
-            return new PathMatcher<>(jumps, handlers, maxNumberOfParamsInPath);
+            return new PathMatcher<>(jumps, handlers, pathExpressions, maxNumberOfParamsInPath);
         }
     }
 
@@ -163,6 +167,14 @@ public final class PathMatcher<T> {
 
         public T handler() {
             return handler;
+        }
+
+        /**
+         * @return the expression the matched route was declared with - {@code /v1/rows/{count}}, not
+         *         {@code /v1/rows/17} - so it can be used to label things without unbounded cardinality
+         */
+        public String pathExpression() {
+            return pathExpression;
         }
 
         @Override
@@ -228,6 +240,7 @@ public final class PathMatcher<T> {
     private final String[] staticSegments;
     private final String[] parameterSegments;
     private final T[] handlers;
+    private final String[] pathExpressions;
 
     // Mutable fields
     private final String[] parameterNames;
@@ -236,6 +249,7 @@ public final class PathMatcher<T> {
     private final Result result = new Result();
 
     private transient T handler;
+    private transient String pathExpression;
     private transient int numberOfParameters;
     private transient int currentState;
 
@@ -318,6 +332,7 @@ public final class PathMatcher<T> {
         staticSegments = from.staticSegments;
         parameterSegments = from.parameterSegments;
         handlers = from.handlers;
+        pathExpressions = from.pathExpressions;
 
         // mutable fields - new instances
         parameterNames = new String[from.parameterNames.length];
@@ -330,6 +345,7 @@ public final class PathMatcher<T> {
     @SuppressWarnings("unchecked")
     private PathMatcher(final TreeSet<Builder.Jump> jumps,
                         final List<T> handlers,
+                        final List<String> pathExpressions,
                         final int maxNumberOfParametersInPath) {
         stateJumps = new int[jumps.size() << 1];
         staticSegments = new String[jumps.size()];
@@ -351,6 +367,7 @@ public final class PathMatcher<T> {
         }
 
         this.handlers = (T[]) handlers.toArray(new Object[0]); // unchecked
+        this.pathExpressions = pathExpressions.toArray(new String[0]);
 
         parameterNames = new String[maxNumberOfParametersInPath];
         parameterValues = new StringBuilder[maxNumberOfParametersInPath + 1]; // to parse static as well
@@ -361,6 +378,7 @@ public final class PathMatcher<T> {
 
     public Result match(final CharSequence path) {
         handler = null;
+        pathExpression = null;
         numberOfParameters = 0;
         currentState = INITIAL_STATE;
 
@@ -372,6 +390,7 @@ public final class PathMatcher<T> {
 
         final int index = toRouteIndex(currentState);
         handler = handlers[index];
+        pathExpression = pathExpressions[index];
         return result;
     }
 

@@ -1,93 +1,80 @@
 # newa-rest
 
-HTTP REST API routing and handlers built on Netty.
-
-## Goals
-
-- Provide a small API for declaring versioned REST endpoints (`RestApiBuilder`, `RestApi`, `RestApiHandler`).
-- Support JSON and plain-text responses through typed handles (`JsonRestHandle`, `TxtRestHandle`) and structured
-  errors (`JsonErrorHandler`, `ErrorHandler`).
-- Support path templates with `{parameters}` and fluent registration on the builder.
-
-## Architecture principles
-
-- **Routing**: `RestApi` resolves each `FullHttpRequest` using `PathMatcher`; routes are grouped by HTTP method inside
-  `RestApiBuilder`.
-- **Default path prefix**: For API version `n`, routes registered on the builder live under `/v<n>/...`. Use
-  `RestApiBuilder.root()` to register endpoints without that prefix (for example a top-level `/version` route).
-- **Embedding**: This library supplies routing types only; your application owns `ServerBootstrap`, event loop groups,
-  and the channel pipeline. A typical child pipeline order is: `HttpServerCodec`, then `HttpObjectAggregator`,
-  optionally `HttpContentCompressor`, then `RestApiHandler`.
-- **RestContext**: Every handler receives a `RestContext` that bundles the Netty channel, request, and parameter
-  accessors. Available accessors: `context.channel()`, `context.executor()`, `context.request()`,
-  `context.pathParameters()`, `context.queryParameters()`, `context.formParameters()`, `context.headers()`. Query
-  parameters, form parameters, and headers are parsed lazily on first access.
-- **Async responses**: `RestApiHandler` invokes `RestHandle.handle(RestContext, Result)` on the channel `EventLoop`.
-  Handlers registered via `getJson` / `getTxt` / etc. are expected to finish synchronously inside `doHandle`. When work
-  completes later (`CompletableFuture`, remote callbacks, or time-delayed work), keep `RestContext` and
-  `RestHandle.Result`, then finish the HTTP response on the context executor: use
-  `context.executor().execute(() -> { ... result.ok(...) / result.error(...) / streaming ... done(); })` so Netty writes
-  on the correct thread. For delays without blocking threads, use
-  `context.executor().schedule(() -> { ... }, delay, TimeUnit)` so the runnable still runs on the same `EventLoop` after
-  the timeout (same rules apply inside the runnable for nested async hops). If you use an unrelated `ExecutorService` or
-  client library callback thread, always hop back with `context.executor().execute(...)` before touching `result`. Never
-  block the `EventLoop` waiting on external completion.
-- **Response memory**: JSON and plain-text handlers render into a thread-local buffer, which is what keeps
-  responses allocation-free. Such a buffer grows to the largest response ever rendered on the thread, so one
-  rare multi-megabyte response would otherwise leave every event loop thread that rendered one holding a
-  buffer of that size for the lifetime of the process. The buffer is therefore sized to the load: it is never
-  dropped and never falls below `ResponseBuffers.baseSize()` (64 KB by default, and where it starts, so
-  ordinary responses never grow it at all), and above that it follows the largest response seen in the last
-  `ResponseBuffers.observationWindowMillis()` (5 s by default) plus half of it again. Nothing counts requests
-  - under load a thread serves hundreds a second, and a per-request counter would have the buffer released
-  and re-grown constantly, turning a memory problem into a GC one. Both are overridable with the
-  `newa.rest.baseBufferSize` and `newa.rest.bufferObservationWindowMillis` system properties. The
-  rendered content is then copied into a buffer taken from the channel's allocator - direct, so the transport
-  writes it as is rather than copying it into a direct buffer of its own right before the socket write. See
-  **Large responses** below for what this does and does not solve.
-- **Path parameters**: If a path expression includes `{name}`, you must chain `.withPathParameterDescriptions(...)` on
-  the returned `Endpoint` so the number of descriptions matches the parsed parameters (`Method.prepareMatcher` enforces
-  this).
-- **Type-safe parameter access**: `NamedValues` and `NamedMultiValues` provide default methods for typed value access:
-  `valueRequiredAsInt(name)`, `valueAsInt(name, defaultValue)`, and similar for `byte`, `short`, `long`, `float`,
-  `double`, `BigDecimal`, and `boolean`. Boolean parsing accepts `true/yes/y/1` (case-insensitive). Unparseable values
-  throw `BadRequestException` (HTTP 400).
-
-Request flow:
+HTTP REST API routing and handlers built on Netty. The library supplies routing and response types only: your
+application owns `ServerBootstrap`, the event loop groups and the pipeline.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> RestApiHandler --> RestHandle / ErrorHandler
+Client --> HttpServerCodec --> HttpObjectAggregator --> [HttpContentCompressor] --> RestApiHandler
 ```
 
-## API usage patterns
-
-1. Create a builder: `new RestApiBuilder(name, description, version, buildVersion)`.
-2. Register handlers with `getJson`, `getTxt`, `postJson`, `putJson`, and related methods. For paths with `{id}`, add
-   `.withPathParameterDescriptions("id - ...")` after registration.
-3. Optionally call `buildWithHelp(helpFactory)` (for example `Json_Help.factory()` in examples) to expose a help
-   endpoint.
-4. Build the router: `RestApi api = apiBuilder.build()` or `buildWithHelp(...)`.
-5. Install `new RestApiHandler(api, new JsonErrorHandler(), channelErrorHandler)` on each accepted socket channel.
-6. **Deferred completion**: Register a full `RestHandle` via `get(...)`, `post(...)`, etc. Use `context.executor()` to
-   schedule asynchronous work, then finish the HTTP response as described under **Async responses** above.
-
-Minimal illustration:
+## Getting started
 
 ```java
 RestApiBuilder builder = new RestApiBuilder("My API", "Desc", 1, "1.0.0");
+
 builder.getJson("/hello/{name}", (context, output) ->
         output.stringValue("Hello " + context.pathParameters().valueRequired("name"))
 ).withPathParameterDescriptions("name - Greeting target");
-RestApi api = builder.build();
-// pipeline: ... addLast(new RestApiHandler(api, new JsonErrorHandler(), errorHandler));
+
+RestApi api = builder.build();                       // or buildWithHelp(Json_Help.factory())
+
+pipeline.addLast(new RestApiHandler(api, new JsonErrorHandler(), channelErrorHandler));
 ```
 
-Asynchronous downstream call (sketch): complete off-thread, then hop back:
+`getJson` / `getTxt` / `postJson` / ... register handles which render a response and return. `get` / `post` /
+... register a full `RestHandle`, which is given the `Result` and may finish it later.
+
+## Routing
+
+`RestApi` resolves each `FullHttpRequest` with `PathMatcher`; routes are grouped by method inside
+`RestApiBuilder`.
+
+- **Version prefix**: routes registered on a builder of version `n` live under `/v<n>/...`.
+  `RestApiBuilder.root()` registers without it - a top-level `/version`, say.
+- **Path templates**: `{name}` in a path expression requires a matching `.withPathParameterDescriptions(...)`
+  on the returned `Endpoint`; the count is enforced when the API is built.
+- **Typed access**: `NamedValues` and `NamedMultiValues` offer `valueRequiredAsInt(name)`,
+  `valueAsInt(name, default)` and the same for `byte`, `short`, `long`, `float`, `double`, `BigDecimal` and
+  `boolean` (`true/yes/y/1`, case-insensitive). An unparseable value throws `BadRequestException` - HTTP 400.
+
+## RestContext
+
+Every handler is given one: `channel()`, `executor()`, `request()`, `pathExpression()`, `method()`, `uri()`,
+`pathParameters()`, `queryParameters()`, `formParameters()`, `headers()`, `responseHeaders()`. Query
+parameters, form parameters and headers are parsed on first access.
+
+Two of these do not outlive the handler. The request's body goes back to the pool when `handle` returns, and
+`pathParameters()` is a matcher flyweight the next request on that thread overwrites - it throws
+`IllegalStateException` rather than answering with somebody else's values. Everything else, including
+`pathExpression()`, stays valid.
+
+## Response headers
+
+One way, the same in every handler - including the pre-built ones, which never hand out the result they are
+building:
+
+```java
+context.responseHeaders().set(CONTENT_DISPOSITION, ContentDisposition.attachment("rows.json.gz"));
+```
+
+It is Netty's `HttpHeaders`, so `add()` works and a response can carry two `Set-Cookie` lines.
+`ContentDisposition.attachment(name)` builds the value once and refuses a name which would not survive being
+quoted.
+
+`Content-Length`, `Transfer-Encoding` and `Connection` are dropped before the response goes out: how a
+response is framed is not something a handler decides by accident. An error response carries none of these
+headers either - they belonged to the response the handler never sent.
+
+## Async responses
+
+`RestHandle.handle` runs on the channel's `EventLoop`, and so must everything that finishes the response.
+Handles registered through `getJson` / `getTxt` finish inside the call; a full `RestHandle` may keep the
+`RestContext` and `Result` and finish later, but always back on the loop:
 
 ```java
 builder.get("/async", (context, result) ->
         remote.load().whenComplete((value, error) ->
-                context.executor().execute(() -> {
+                context.executor().execute(() -> {          // hop back before touching result
                     if (error != null) {
                         result.error(error);
                     } else {
@@ -96,39 +83,42 @@ builder.get("/async", (context, result) ->
                 })));
 ```
 
+`context.executor().schedule(...)` delays without blocking. Never block the `EventLoop` waiting for anything.
+
+## Response memory
+
+JSON and text handlers render into a thread-local buffer, which is what keeps responses allocation-free. Such
+a buffer grows to the largest response the thread ever rendered, so one rare multi-megabyte response would
+otherwise leave every event loop thread holding a buffer that size for the life of the process.
+
+So the buffer is sized to the load: never dropped, never below `ResponseBuffers.baseSize()` (64 KB, and where
+it starts, so ordinary responses never grow it), and above that it follows the largest response of the last
+`ResponseBuffers.observationWindowMillis()` (5 s) plus half again. Nothing counts requests - a thread serves
+hundreds a second, and a per-request counter would release and re-grow the buffer constantly, turning a memory
+problem into a GC one. Both are overridable: `newa.rest.baseBufferSize`,
+`newa.rest.bufferObservationWindowMillis`.
+
+The rendered content is then copied once into a buffer from the channel's allocator - direct, so the transport
+writes it as is.
+
 ## Large responses
 
-Every response this API can produce is a `FullHttpResponse`: rendered in full, then written in one go. That
-holds for `Result.ok(...)` and equally for the incremental `Result.Content` returned by
-`ok(contentType, contentLength)` - `append(...)` fills the response buffer, it does not send anything. A
-response of tens or hundreds of megabytes therefore costs at least that much memory per request in flight,
-and a slow client keeps it there until the socket drains.
+Everything but a chunked response is a `FullHttpResponse`: rendered in full, then written in one go. That
+holds for the incremental `Result.Content` too - `append(...)` fills the response buffer, it sends nothing. A
+response of hundreds of megabytes costs that much memory per request in flight, and a slow client keeps it
+there until the socket drains.
 
-What the library does to keep that cost at its floor rather than a multiple of it:
+The library keeps that at its floor rather than a multiple of it - the buffer policy above, one copy instead
+of two, and `ok(contentType, contentLength)` allocating the declared length up front instead of doubling and
+copying. Keeping it *low* is yours:
 
-- rendering buffers grown by a large response are not retained by the thread once the large responses stop
-  (see **Response memory** above);
-- content is copied once, into a buffer from the channel's allocator, instead of into a heap buffer the
-  transport would then copy again;
-- `ok(contentType, contentLength)` allocates the declared length up front rather than growing a buffer by
-  repeated doubling and copying.
-
-What it does not do: chunk the response, or apply backpressure when the peer stops reading. Until it does,
-serve large payloads within a budget you have actually measured:
-
-- **Page**. A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
+- **Page.** A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
   client has to hold it too.
-- **Cap** the response size in the handler and answer `413`/`507` rather than degrading quietly.
-- **Configure the watermarks**, so a channel whose peer stopped reading reports itself unwritable:
-
-  ```java
-  bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
-          new WriteBufferWaterMark(32 * 1024, 64 * 1024));
-  ```
-
-- **Size the container for direct memory, not just the heap.** Response buffers come from Netty's allocator
-  and live off-heap, where `-Xmx` does not bound them and the cgroup limit does. A container sized from the
-  heap alone is killed for its RSS instead of failing with `OutOfMemoryError`:
+- **Cap** the size in the handler and answer `413`/`507` rather than degrading quietly.
+- **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx`
+  does not bound them and the cgroup limit does; a container sized from the heap alone is killed for its RSS
+  instead of failing with `OutOfMemoryError`. The limit has to cover heap plus direct memory plus metaspace,
+  code cache and thread stacks:
 
   ```
   -XX:MaxRAMPercentage=50
@@ -137,4 +127,192 @@ serve large payloads within a budget you have actually measured:
   -XX:+ExitOnOutOfMemoryError
   ```
 
-  The container limit has to cover heap plus direct memory plus metaspace, code cache and thread stacks.
+When none of that is enough, do not build the response at all.
+
+## Chunked responses
+
+A response sent a piece at a time instead of being rendered in full. Everything runs on the event loop, so a
+peer which stops reading costs one suspended source and no thread - and nothing bounds how many such responses
+are in flight.
+
+Two shapes, differing in who decides that the next piece exists:
+
+|                             | **Pull**                                                               | **Push**                                  |
+|-----------------------------|------------------------------------------------------------------------|-------------------------------------------|
+| The source                  | always has more                                                        | has nothing until something happens       |
+| Next piece                  | the framework asks, the cursor answers                                 | the source produces it, then flushes      |
+| Ends when                   | the cursor says so                                                     | the peer goes away                        |
+| Paced by                    | the channel's write watermark                                          | whatever produces the content             |
+| Counted by `maxOpenCursors` | yes                                                                    | no                                        |
+| Written as                  | `ChunkedJsonRestHandler`, `ChunkedTxtRestHandler`, `ChunkedRestHandler` | `PushedResponseBody` given to `Result.ok` |
+| Typically                   | rows from a database, a report                                         | a clock, a queue, a feed                  |
+
+`ChunkedWriteHandler` is put in front of `RestApiHandler` by the first chunked response on a channel: nothing
+to add to the pipeline, nothing to forget.
+
+### Pull
+
+The framework steps the cursor until a chunk is full, hands the chunk to the channel and steps it again - and
+stops while the channel is over its write watermark.
+
+```java
+builder.get("/rows/{count}", new ChunkedJsonRestHandler(context -> new RowCursor(
+        context.pathParameters().valueRequiredAsInt("count"))
+)).withPathParameterDescriptions("count - How many rows to send");
+
+final class RowCursor implements ChunkedJsonRestHandle.Cursor {
+    @Override
+    public boolean writeNext(JsonGenerator output) {
+        if (!started) { started = true; output.startArray(); }   // left open: the framework ends the document
+        // ... write a batch of rows ...
+        return more;
+    }
+
+    @Override
+    public void close() { /* release the underlying cursor */ }
+}
+```
+
+`ChunkedJsonRestHandler` and `ChunkedTxtRestHandler` take cursors writing to a `JsonGenerator` or a
+`LineAppendable`; `ChunkedRestHandler` takes a content type and a cursor writing raw bytes into the chunk's
+`ByteBuf`, which reaches the channel without a copy. Content which is already a file or a stream needs no
+cursor at all: `Result.ok(contentType, ChunkedInput<ByteBuf>)` takes Netty's `ChunkedFile`, `ChunkedNioFile`
+or `ChunkedStream` directly.
+
+`open(RestContext)` is where the request is validated: nothing has been sent yet, so anything thrown there
+still becomes an ordinary error response. Once the first chunk is out the status is on the wire and a failure
+can only truncate the body. `Cursor.close()` runs exactly once whatever the outcome - finished, threw,
+disconnected, or given up on by the watchdog.
+
+### Push
+
+`next` answers `null` when there is nothing yet, which suspends the transfer rather than ending it; the next
+`flush()` resumes it.
+
+```java
+final class ClockBody extends PushedResponseBody {
+    private boolean due = true;
+
+    private void onTick() {          // scheduled on context.executor(): runs on this channel's loop
+        due = true;
+        channel.flush();             // wakes the transfer, which asks next() again
+    }
+
+    @Override
+    protected ByteBuf next(ByteBufAllocator allocator) {
+        if (!due) {
+            return null;
+        }
+        due = false;
+        return ...;
+    }
+
+    @Override
+    public void close() { tick.cancel(false); }   // called however the response ends
+}
+
+builder.get("/clock", (context, result) -> result.ok(TEXT_EVENT_STREAM, new ClockBody(context)));
+```
+
+`PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, the end which never comes by
+itself, and the progress the stall watchdog reads.
+
+Two differences from pull. `maxOpenCursors` does not count these - it counts what `ChunkedRestHandler` and its
+siblings open, not what you hand to `Result.ok`. And `stallTimeoutMillis` measures time without a chunk, so it
+has to exceed the gap between two of them.
+
+### Settings
+
+Built once, when the server is assembled, and handed to every `RestApiHandler`:
+
+```java
+ResponseChunks chunks = ResponseChunks.builder()
+        .size(64 * 1024)          // bytes a chunk is filled to
+        .stallTimeoutMillis(30_000)
+        .maxOpenCursors(256)      // unlimited by default
+        .build();
+
+pipeline.addLast(new RestApiHandler(api, errorHandler, channelErrorHandler, chunks, observers));
+
+bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,   // where the backpressure is read from
+        new WriteBufferWaterMark(32 * 1024, 64 * 1024));
+```
+
+- **`size()`** is a floor, not a cap: the framework asks for more until the buffer has *crossed* it, so a
+  chunk overshoots by up to one step. Memory is bounded by `size()` plus one step, and the step is the real
+  knob - one that writes a hundred rows costs a hundred rows, whatever the collection behind it holds.
+- **`stallTimeoutMillis()`** (30 s, zero to disable) - a response which has not got a single chunk out within
+  it is abandoned and its connection closed. Counting chunks rather than bytes catches both the peer which
+  stopped dead and the one reading at a trickle, and never punishes a response which is merely large. Without
+  it a cursor - a snapshot, a file handle, a lock - is held for as long as a half-open connection lingers,
+  which can be hours.
+- **`maxOpenCursors()`** (unlimited by default) - a request which would open one cursor too many is answered
+  `503` *before* its cursor is opened, so the resource is never taken. Unlimited because what a cursor holds
+  is yours to know.
+
+`chunks.openCursors()` reports how many are open right now, across every channel.
+
+## Observing
+
+The library keeps no metrics. It reports, and what that turns into is yours. One observer per request, made by
+a factory:
+
+```java
+public class AccessLog implements HttpApiObserver {
+    private HttpMethod method;
+    private String uri;
+
+    @Override
+    public void onRequestReceived(ChannelHandlerContext ctx, HttpRequest request) {
+        method = request.method();   // the only stage given these: copy what the later ones need
+        uri = request.uri();
+    }
+
+    @Override
+    public void onRequestNotRouted(RestException cause) { }
+
+    @Override
+    public void onRequestCompleted(HttpResponseStatus status, long bytes, long durationNanos) {
+        log.info("{} {} {} {}b {}ns", method, uri, status.code(), bytes, durationNanos);
+    }
+}
+
+new RestApiHandler(api, errorHandler, channelErrorHandler, chunks, AccessLog::new);
+```
+
+`onRequestCompleted` fires **exactly once per request**, in every form the response can take, so counting
+requests never means adding two events up. `bytes` is the body as the source produced it, without the framing
+the transfer encoding adds.
+
+`RestApiObserver extends HttpApiObserver` adds the stages after routing - pass a `RestApiObserverFactory` to
+get them:
+
+```
+not routed:     onRequestReceived -> onRequestNotRouted -> onRequestCompleted (404 | 405)
+in one piece:   onRequestReceived -> onHandlingStarted  -> onRequestCompleted
+handler failed: onRequestReceived -> onHandlingStarted  -> onResponseFailed -> onRequestCompleted
+chunked:        onRequestReceived -> onHandlingStarted  -> onCursorOpened
+                                  -> onChunkWritten*    -> onCursorClosed -> onRequestCompleted
+refused (503):  onRequestReceived -> onHandlingStarted  -> onCursorRefused
+                                  -> onResponseFailed   -> onRequestCompleted
+```
+
+Every method has a no-op default. Calls come from event loop threads, so do not block in them.
+
+Nothing is repeated after the opening stages, and that is the point: the channel and the request come with
+`onRequestReceived`, the `RestContext` with `onHandlingStarted`, and neither survives what follows. Copy what
+a later stage needs - `context.pathExpression()` is a plain string and the label a metric wants, where the URI
+is one of unboundedly many.
+
+`newObserver()` may return a shared instance instead, and then telling the requests apart is yours. Return
+null and the request is not observed at all - not even the clock is read for it.
+
+## Runnable examples
+
+In `newa-example`, package `io.github.green4j.newa.example.rest`:
+
+- **`hello.HelloRestServer`** - the smallest thing that serves a route.
+- **`chunked.ChunkedRestServer`** - pull: JSON and text rows, a gzipped download, the cursor limit, the
+  observer.
+- **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
+  events.

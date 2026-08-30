@@ -70,9 +70,10 @@ final class RetainedBuffer<T> {
     }
 
     /**
-     * Reports that a response has been rendered and copied out. Call once per response.
+     * Reports that something has been rendered and copied out - a whole response, or one chunk of a chunked
+     * one. Call once per such unit.
      */
-    void onResponseRendered() {
+    void onRendered() {
         final int rendered = length.applyAsInt(buffer);
         final long now = clock.getAsLong();
 

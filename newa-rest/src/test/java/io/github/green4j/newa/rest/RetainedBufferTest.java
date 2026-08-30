@@ -43,7 +43,7 @@ class RetainedBufferTest {
 
     private void respond(final int size) {
         buffer.render(size);
-        retained.onResponseRendered();
+        retained.onRendered();
     }
 
     private void elapse(final long nanos) {
@@ -166,11 +166,11 @@ class RetainedBufferTest {
         );
 
         buffer.render(32 * BASE_SIZE);
-        counted.onResponseRendered();
+        counted.onRendered();
         // 1000 responses spread over exactly one window, so ten bucket boundaries are crossed
         for (int i = 0; i < 1000; i++) {
             buffer.render(64);
-            counted.onResponseRendered();
+            counted.onRendered();
             elapse(BUCKET_NANOS / 100);
         }
 

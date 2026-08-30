@@ -59,7 +59,7 @@ public abstract class AbstractApplicationJsonHandler {
      * Call this only once the rendered content has been copied out of the buffer.
      */
     protected final void responseRendered() {
-        generatorThreadLocal().get().onResponseRendered();
+        generatorThreadLocal().get().onRendered();
     }
 
     private ThreadLocal<RetainedBuffer<ByteArrayJsonGenerator>> generatorThreadLocal() {

@@ -3,6 +3,7 @@ package io.github.green4j.newa.rest;
 import io.github.green4j.jelly.ByteArray;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.stream.ChunkedInput;
 import io.netty.util.AsciiString;
 
 import java.nio.ByteBuffer;
@@ -20,8 +21,6 @@ public interface RestHandle {
 
             void doneAndClose();
         }
-
-        RestHandle.Result addHeader(AsciiString header, AsciiString value);
 
         void respond(HttpResponseStatus statusCode);
 
@@ -65,6 +64,26 @@ public interface RestHandle {
 
         Content ok(AsciiString contentType,
                    int contentLength);
+
+        /**
+         * Sends a response whose body is pulled from {@code body} a chunk at a time, framed by chunked
+         * transfer encoding, and only as fast as the peer takes it. Neither the length nor the content has to
+         * be known up front, and neither is ever held in full.
+         * <p>
+         * Nothing is pulled while the channel is over its write watermark, so configure
+         * {@link io.netty.channel.ChannelOption#WRITE_BUFFER_WATER_MARK} - that is where the backpressure
+         * comes from.
+         *
+         * @param statusCode of the response
+         * @param contentType of the response, or null
+         * @param body to pull the response from; closed however the response ends
+         */
+        void respond(HttpResponseStatus statusCode,
+                     AsciiString contentType,
+                     ChunkedInput<ByteBuf> body);
+
+        void ok(AsciiString contentType,
+                ChunkedInput<ByteBuf> body);
 
         void okAndClose();
 
