@@ -41,8 +41,7 @@ public abstract class AbstractApplicationJsonHandler {
     }
 
     protected AbstractApplicationJsonHandler(final Charset responseCharset) {
-        contentType = AsciiString.of(HttpHeaderValues.APPLICATION_JSON
-                + "; charset=" + responseCharset.charset());
+        contentType = responseCharset.toContentType(HttpHeaderValues.APPLICATION_JSON);
         this.responseCharset = responseCharset;
     }
 

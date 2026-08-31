@@ -156,7 +156,7 @@ public class ScheduledChunkedRestServer {
             result.ok(TEXT_EVENT_STREAM, new ClockBody(context));
         }).withDescription("The current time, one line a second, until the peer goes away.");
 
-        apiBuilder.get("/clock.html", new StaticRestHandler(TEXT_HTML, CLOCK_PAGE))
+        apiBuilder.get("/clock.html", new StaticRestHandler(TEXT_HTML, CLOCK_PAGE.getBytes(StandardCharsets.UTF_8)))
                 .withDescription("The same clock, for a browser to render.");
 
         return apiBuilder.build();

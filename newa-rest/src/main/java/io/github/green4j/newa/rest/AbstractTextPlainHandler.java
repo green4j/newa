@@ -41,8 +41,7 @@ public abstract class AbstractTextPlainHandler {
     }
 
     protected AbstractTextPlainHandler(final Charset responseCharset) {
-        contentType = AsciiString.cached(HttpHeaderValues.TEXT_PLAIN
-                + "; " + HttpHeaderValues.CHARSET + "=" + responseCharset.charset());
+        contentType = responseCharset.toContentType(HttpHeaderValues.TEXT_PLAIN);
         this.responseCharset = responseCharset;
     }
 
