@@ -11,13 +11,30 @@ public class ChannelB extends Channel<ChannelB.ChannelBEntitySubscriptions> {
     }
 
     public static class ChannelBEntitySubscriptions extends EntitySubscriptions {
+        private static final int NO_VALUE = -1;
+
+        private volatile int lastValue = NO_VALUE; // written before publish(), read by a snapshot
+
         ChannelBEntitySubscriptions(final String entityId) {
             super(entityId);
         }
 
+        // The state must be mutated before the fan-out, that ordering is what makes
+        // the update visible to a session subscribing at the very same moment.
+        void publishValue(final int value) {
+            lastValue = value;
+            publish(session -> session.send(entityId + "=" + value));
+        }
+
         @Override
-        protected void onClientSessionSubscribed(final ClientSession session) {
+        protected void onClientSessionSubscribed(final ClientSession session,
+                                                 final long publicationSequence) {
             System.out.printf("%s subscribed to ChannelB@%s%n", session.toString(), entityId);
+
+            final int value = lastValue;
+            if (value != NO_VALUE) { // the snapshot goes out before any concurrent update
+                session.send(entityId + "=" + value + " @" + publicationSequence);
+            }
         }
 
         @Override

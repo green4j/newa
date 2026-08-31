@@ -3,7 +3,6 @@ package io.github.green4j.newa.example.ws.subscriptions;
 import io.github.green4j.newa.websocket.ClientSession;
 import io.github.green4j.newa.websocket.Receiver;
 import io.github.green4j.newa.websocket.subscriptions.Channel;
-import io.github.green4j.newa.websocket.subscriptions.EntitySubscriptions;
 
 import java.io.Closeable;
 import java.util.Arrays;
@@ -119,26 +118,21 @@ public class Channels implements Receiver, Closeable {
         }
     }
 
+    // Runs on a single thread - publications of one entity must be serialized,
+    // two concurrent publishers of the same entity would have no defined order.
     private void publishAnUpdate() {
         final ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         final String entityId = ENTITY_IDS[rnd.nextInt(0, ENTITY_IDS.length)];
-
-        final Channel<?> targetChannel = rnd.nextBoolean() ? channelA : channelB;
-
-        final EntitySubscriptions entitySubscriptions = targetChannel.getEntitySubscriptions(entityId);
-
-        assert entitySubscriptions != null; // since we have applied all the entities in the constructor,
-        // we already must have appropriate instance of EntitySubscriptions for any of them.
-        // Another option is to call getOrCreateEntitySubscriptions(entityId) to add
-        // an instance of EntitySubscriptions on-the-fly
-
         final int valueToPublish = rnd.nextInt(0, 100);
 
-        entitySubscriptions.forEachSession(
-                session -> {
-                    session.send(entityId + "=" + valueToPublish);
-                }
-        );
+        // since we have applied all the entities in the constructor, we already must have
+        // an appropriate instance of EntitySubscriptions for any of them. Another option
+        // is to call getOrCreateEntitySubscriptions(entityId) to add one on-the-fly
+        if (rnd.nextBoolean()) {
+            channelA.getEntitySubscriptions(entityId).publishValue(valueToPublish);
+        } else {
+            channelB.getEntitySubscriptions(entityId).publishValue(valueToPublish);
+        }
     }
 }

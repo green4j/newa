@@ -1,6 +1,6 @@
 package io.github.green4j.newa.example.ws.broadcast;
 
-import io.github.green4j.newa.example.ws.StdOutWsApiListener;
+import io.github.green4j.newa.example.ws.StdOutWsApiObserverFactory;
 import io.github.green4j.newa.lang.Work;
 import io.github.green4j.newa.lang.Worker;
 import io.github.green4j.newa.websocket.SimpleWsApiBuilder;
@@ -37,7 +37,7 @@ public class BroadcastWsServer {
         )
                 .withPathPrefix("ws")
                 .withPingIntervalMs(10_000)
-                .withListener(new StdOutWsApiListener());
+                .withObservers(new StdOutWsApiObserverFactory());
 
         final WsApi api = apiBuilder.build();
 

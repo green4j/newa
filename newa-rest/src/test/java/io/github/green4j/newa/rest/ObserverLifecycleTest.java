@@ -158,6 +158,56 @@ class ObserverLifecycleTest {
         return count;
     }
 
+    /**
+     * Serves the same requests through a handler which observes nothing, and asserts every one of them is
+     * answered all the same.
+     *
+     * @param observers the factory to build the handler with, null for no factory at all.
+     */
+    private static void serveWithoutObserving(final HttpApiObserverFactory observers) {
+        final EmbeddedChannel unobserved = new EmbeddedChannel(
+                new RestApiHandler(
+                        buildTestApi(),
+                        new JsonErrorHandler(),
+                        (ch, cause) -> { },
+                        ResponseChunks.defaults(),
+                        observers
+                )
+        );
+
+        try {
+            for (final String path : List.of("/v1/ping", "/v1/boom", "/v1/chunked", "/v1/nowhere")) {
+                unobserved.writeInbound(new DefaultFullHttpRequest(
+                        HttpVersion.HTTP_1_1,
+                        HttpMethod.GET,
+                        path
+                ));
+
+                int written = 0;
+                Object outbound;
+                while ((outbound = unobserved.readOutbound()) != null) {
+                    written++;
+                    ReferenceCountUtil.release(outbound);
+                }
+
+                Assertions.assertTrue(written > 0, "nothing was answered for " + path);
+            }
+        } finally {
+            unobserved.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void testAnUnobservedRequestIsServedJustTheSame() {
+        serveWithoutObserving(null); // no factory at all
+
+        serveWithoutObserving(() -> null); // a factory is free to observe no request, and the clock is
+        // not even read for one
+
+        Assertions.assertEquals(List.of(), events,
+                "a handler of its own must report nothing to the observer of this one");
+    }
+
     @Test
     public void testAResponseWrittenInOnePieceReportsTheWholeSequence() {
         get("/v1/ping");

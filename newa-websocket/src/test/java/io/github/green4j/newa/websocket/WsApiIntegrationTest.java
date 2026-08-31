@@ -22,32 +22,43 @@ import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 class WsApiIntegrationTest {
     private static final String HOST = "127.0.0.1";
 
+    private static final class Observed implements WsApiObserver {
+        private final List<String> stages = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public void onSessionOpened(final ClientSession session) {
+            stages.add("opened");
+        }
+
+        @Override
+        public void onFrameReceived(final int bytes) {
+            stages.add("received:" + bytes);
+        }
+
+        @Override
+        public void onFrameSent(final int bytes) {
+            stages.add("sent:" + bytes);
+        }
+
+        @Override
+        public void onSessionClosed(final long durationNanos) {
+            stages.add("closed");
+        }
+    }
+
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private Channel serverChannel;
 
-    private static final class NoOpWsApiListener implements WsApiListener {
-
-        @Override
-        public void onWriteBackPressure(final ClientSession session) {
-            // no-op
-        }
-
-        @Override
-        public void onSessionOpened(final ClientSession session) {
-            // no-op
-        }
-
-        @Override
-        public void onSessionClosed(final ClientSession session) {
-            // no-op
-        }
-    }
+    private final List<Observed> observers = Collections.synchronizedList(new ArrayList<>());
 
     private static void initPipeline(final ChannelPipeline pipeline,
                                      final WsApi api) {
@@ -75,7 +86,11 @@ class WsApiIntegrationTest {
         final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(1)
                 .withPathPrefix("ws")
                 .withPingIntervalMs(0)
-                .withListener(new NoOpWsApiListener());
+                .withObservers(() -> {
+                    final Observed observer = new Observed();
+                    observers.add(observer);
+                    return observer;
+                });
         final WsApi api = apiBuilder.build();
 
         final ServerBootstrap bootstrap = new ServerBootstrap();
@@ -149,6 +164,21 @@ class WsApiIntegrationTest {
         Assertions.assertEquals(
                 "echo-check",
                 receivedText.get(10, TimeUnit.SECONDS)
+        );
+
+        // one session, and the frame it echoed reported in both directions, before it went away
+        Assertions.assertEquals(1, observers.size());
+
+        final Observed observer = observers.get(0);
+        final long deadline = System.currentTimeMillis() + 10_000L;
+        while (System.currentTimeMillis() < deadline
+                && !observer.stages.contains("closed")) {
+            Thread.sleep(5);
+        }
+
+        Assertions.assertEquals(
+                List.of("opened", "received:10", "sent:10", "closed"),
+                new ArrayList<>(observer.stages)
         );
     }
 }

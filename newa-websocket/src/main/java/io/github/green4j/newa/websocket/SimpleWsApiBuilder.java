@@ -8,9 +8,10 @@ public class SimpleWsApiBuilder extends WsApiBuilder<SimpleWsApiBuilder> {
 
     public WsApi build() {
         return new WsApi(
-                listener,
+                observers,
                 websocketPath(),
-                pingIntervalMs
+                pingIntervalMs,
+                skipOnBackPressure
         );
     }
 }

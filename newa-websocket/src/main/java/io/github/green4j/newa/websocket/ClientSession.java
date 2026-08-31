@@ -17,34 +17,47 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class ClientSession implements Sender, Closeable {
     private static final Charset DEFAULT_CHARSET = CharsetUtil.UTF_8;
     private static final ByteBuf PING_TEXT = Unpooled.copiedBuffer("ping", DEFAULT_CHARSET);
 
     private final long createTimeMs = WallClock.currentTimeMillis();
+    private final long createTimeNanos = System.nanoTime();
 
     private final ClientSessions owner;
     private final ClientSessionContext context;
+    private final WsApiObserver observer; // null when the session is not observed
 
     private final Cancelable pinger;
 
     private volatile long lastWriteTimeMs;
     private volatile long lastReadTimeMs;
 
-    private volatile boolean closed;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
-    private volatile Object userData;
+    private final AtomicReference<Object> userData = new AtomicReference<>();
+
+    private volatile boolean lagging; // set by a publisher when a frame is skipped,
+    // cleared on the event loop once the channel is writable again
 
     ClientSession(final ClientSessions owner,
-                  final ClientSessionContext context) {
+                  final ClientSessionContext context,
+                  final WsApiObserver observer) {
         this.owner = owner;
         this.context = context;
+        this.observer = observer;
 
         final long pingIntervalMs = context.pingIntervalMs();
         if (pingIntervalMs > 0) {
             pinger = scheduler().scheduleWithFixedDelay(
                     () -> {
+                        if (!context.channel().isWritable()) {
+                            return; // a channel with data still pending needs no keep-alive,
+                            // and pinging it would only trip the back pressure handling
+                        }
                         final long now = WallClock.currentTimeMillis();
                         if (now - lastWriteTimeMs > pingIntervalMs) {
                             ping(PING_TEXT.retain());
@@ -62,6 +75,13 @@ public class ClientSession implements Sender, Closeable {
         return createTimeMs;
     }
 
+    /**
+     * @return the observer of this session, null if it is not observed.
+     */
+    public WsApiObserver observer() {
+        return observer;
+    }
+
     public long lastWriteTimeMs() {
         return lastWriteTimeMs;
     }
@@ -72,22 +92,18 @@ public class ClientSession implements Sender, Closeable {
 
     @SuppressWarnings("unchecked")
     public <T> T getUserData() {
-        return (T) userData;
+        return (T) userData.get();
     }
 
-    public synchronized <T> T putUserData(final T userData) {
-        final T old = getUserData();
-        this.userData = userData;
-        return old;
+    @SuppressWarnings("unchecked")
+    public <T> T putUserData(final T userData) {
+        return (T) this.userData.getAndSet(userData);
     }
 
-    public synchronized <T> T putUserDataIfAbsent(final T userData) {
-        final T old = getUserData();
-        if (old != null) {
-            return old;
-        }
-        this.userData = userData;
-        return userData;
+    @SuppressWarnings("unchecked")
+    public <T> T putUserDataIfAbsent(final T userData) {
+        final Object old = this.userData.compareAndExchange(null, userData);
+        return old == null ? userData : (T) old;
     }
 
     public io.netty.channel.Channel channel() {
@@ -104,9 +120,16 @@ public class ClientSession implements Sender, Closeable {
     }
 
     public void ping(final CharSequence frame) {
-        send(frame, CharsetUtil.UTF_8);
+        ping(frame, DEFAULT_CHARSET);
     }
 
+    /**
+     * Sends the buffer as one text frame and takes it over: it is released whatever happens to it - written,
+     * skipped because the session can not keep up, or dropped because the channel is gone. Fanning one
+     * buffer out to several sessions means a {@link ByteBuf#retainedDuplicate()} per session.
+     *
+     * @param frame to send.
+     */
     public void send(final ByteBuf frame) {
         writeAndFlush(new TextWebSocketFrame(frame));
     }
@@ -119,6 +142,12 @@ public class ClientSession implements Sender, Closeable {
     @Override
     public void send(final CharSequence frame) {
         send(frame, DEFAULT_CHARSET);
+    }
+
+    void frameReceived(final int bytes) {
+        if (observer != null) {
+            observer.onFrameReceived(bytes);
+        }
     }
 
     public void receive(final CharSequence frame) {
@@ -146,16 +175,22 @@ public class ClientSession implements Sender, Closeable {
     }
 
     public boolean isClosed() {
-        return closed;
+        return closed.get();
     }
+
+    boolean clearLagging() { // called on the event loop only
+        if (!lagging) {
+            return false;
+        }
+        lagging = false;
+        return true;
+    }
+
 
     @Override
     public final void close() {
-        synchronized (this) {
-            if (closed) {
-                return;
-            }
-            closed = true;
+        if (!closed.compareAndSet(false, true)) {
+            return;
         }
 
         try {
@@ -168,21 +203,39 @@ public class ClientSession implements Sender, Closeable {
                 c.close();
             }
         } finally {
-            owner.onClientSessionClosed(this);
+            owner.onClientSessionClosed(this); // reports the last of whatever the session was still
+            // subscribed to, before the terminal event below
+
+            if (observer != null) {
+                observer.onSessionClosed(System.nanoTime() - createTimeNanos);
+            }
         }
     }
 
     private void writeAndFlush(final WebSocketFrame frame) {
+        final int bytes = frame.content().readableBytes(); // the frame belongs to the channel once
+        // it is written, so its size is read here, while it is still ours
+
         final io.netty.channel.Channel channel = context.channel();
         if (!channel.isWritable()) {
+            frame.release(); // it never reached the channel, so releasing it is ours: a frame built
+            // from a pooled buffer, or from one shared by a fan-out, is leaked otherwise
+
             if (!channel.isOpen()) {
                 context.writingResult().onWriteError(this, new IOException("Channel closed"));
                 return;
+            }
+            lagging = true;
+            if (observer != null) {
+                observer.onWriteBackPressure(bytes);
             }
             context.writingResult().onWriteBackPressure(this);
             return;
         }
         channel.writeAndFlush(frame);
+        if (observer != null) {
+            observer.onFrameSent(bytes);
+        }
         context.writingResult().onWriteSuccess(this); // A kind of optimistic result notification.
         // We do not check the real result of writeAndFlush() with a FutureListener
         // to leave things simple enough, so, detection of any problem is, in fact,

@@ -1,41 +1,56 @@
 package io.github.green4j.newa.websocket.subscriptions;
 
-import io.github.green4j.newa.collections.CharSequenceToObjectMap;
+import io.github.green4j.newa.collections.CharSequenceToObjectMapConcurrent;
+import io.github.green4j.newa.collections.ObjectListReadSafe;
 import io.github.green4j.newa.lang.CloseHelper;
 import io.github.green4j.newa.websocket.ClientSession;
 
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-import static io.github.green4j.newa.websocket.subscriptions.ChannelWsApiListener.getClientSessionSubscriptions;
+import static io.github.green4j.newa.websocket.subscriptions.ClientSessionSubscriptions.getClientSessionSubscriptions;
+import static io.github.green4j.newa.websocket.subscriptions.ClientSessionSubscriptions.onSessionEventLoop;
 
+/**
+ * A channel owning an {@link EntitySubscriptions} per entity.
+ *
+ * <p>Lookups and iterations take no lock. The only lock left guards creation and removal of an entity -
+ * a rare path, usually taken at start-up - and it keeps the exactly-once contract of
+ * {@link #newEntitySubscriptions(String)}. It holds no more than the entry it adds, so filling a channel
+ * with a hundred thousand entities costs what they are rather than their square. Nothing on the publishing
+ * path takes a lock.
+ *
+ * <p>{@link #subscribe} and {@link #unsubscribe} run inline when called on the event loop
+ * of the session, otherwise they are scheduled onto it, the same way {@link #unsubscribeAll}
+ * is. Being on that event loop is what lets a snapshot sent from
+ * {@link EntitySubscriptions#onClientSessionSubscribed(ClientSession, long)} precede
+ * every concurrent update.
+ */
 public abstract class Channel<S extends EntitySubscriptions> implements Closeable {
-    private final CharSequenceToObjectMap<S> entitySubscriptionsMap =
-            new CharSequenceToObjectMap<>(); // guarded by this
+    // An entity goes into the list before it goes into the map, and leaves the map before it leaves the
+    // list, so whatever walks the entities of this channel never misses one which can already be found by
+    // its id. Both are written under the lock of this channel and read without it.
+    private final ObjectListReadSafe<S> entities = new ObjectListReadSafe<>();
+    private final CharSequenceToObjectMapConcurrent<S> entitiesById = new CharSequenceToObjectMapConcurrent<>();
 
-    private volatile List<S> allSubscriptions = new ArrayList<>(); // can be accessed by
-    // multiple threads
-
-    private boolean started; // guarded by this
-    private boolean closed; // guarded by this
+    private final AtomicBoolean started = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     protected Channel() {
     }
 
     public final void start() {
-        synchronized (this) {
-            if (closed) {
-                throw new IllegalStateException("Closed");
-            }
-
-            if (started) {
-                throw new IllegalStateException("Already started");
-            }
-
-            started = true;
+        if (closed.get()) {
+            throw new IllegalStateException("Closed");
         }
+
+        if (!started.compareAndSet(false, true)) {
+            throw new IllegalStateException("Already started");
+        }
+
         onStarted();
     }
 
@@ -48,8 +63,17 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
         );
     }
 
-    // subscribe and unsubscribe for one session must be called from one single thread
-    // unsubscribeAll can be called from another thread
+    /**
+     * The returned value and {@code unknownEntityIds} are only meaningful when called
+     * on the event loop of the session. Called from any other thread the work is scheduled
+     * onto that event loop, 0 is returned and the outcome is reported through the callbacks
+     * of {@link EntitySubscriptions} only.
+     *
+     * @param session the session to apply the change to.
+     * @param entityIds the ids to apply the change for.
+     * @param unknownEntityIds collects the ids no EntitySubscriptions is known for.
+     * @return the number of the entities subscribed.
+     */
     public final int subscribe(final ClientSession session,
                                final List<CharSequence> entityIds,
                                final List<CharSequence> unknownEntityIds) {
@@ -70,8 +94,14 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
         );
     }
 
-    // subscribe and unsubscribe for one session must be called from one single thread
-    // unsubscribeAll can be called from another thread
+    /**
+     * @see #subscribe(ClientSession, List, List) for the threading contract.
+     *
+     * @param session the session to apply the change to.
+     * @param entityIds the ids to apply the change for.
+     * @param unknownEntityIds collects the ids no EntitySubscriptions is known for.
+     * @return the number of the entities subscribed.
+     */
     public final int subscribeForKnownOnly(final ClientSession session,
                                            final List<CharSequence> entityIds,
                                            final List<CharSequence> unknownEntityIds) {
@@ -87,6 +117,18 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
                             final List<CharSequence> entityIds,
                             final List<CharSequence> unknownEntityIds,
                             final boolean knownOnly) {
+        if (!onSessionEventLoop(session)) {
+            final List<CharSequence> ids = new ArrayList<>(entityIds); // the caller may reuse its list
+            session.executor().execute(
+                    () -> doSubscribe(session, ids, new ArrayList<>(), knownOnly)
+            );
+            return 0;
+        }
+
+        // fails fast when the api was not built with SubscriptionWsApiBuilder: without the bookkeeping
+        // of the session nothing would ever unsubscribe it
+        final SubscriptionsWsApiObserver observer = getClientSessionSubscriptions(session).observer();
+
         int subscribed = 0;
         for (int i = 0; i < entityIds.size(); i++) {
             final CharSequence id = entityIds.get(i);
@@ -96,16 +138,14 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
 
             if (subscriptions == null) {
                 unknownEntityIds.add(id);
+                if (observer != null) {
+                    observer.onUnknownEntity(this, id);
+                }
                 continue;
             }
 
             subscriptions.add(session);
             subscribed++;
-        }
-
-        if (subscribed > 0) {
-            final ClientSessionSubscriptions subscriptions = getClientSessionSubscriptions(session);
-            subscriptions.onSubscribed(this);
         }
 
         return subscribed;
@@ -120,83 +160,109 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
         );
     }
 
-    // subscribe and unsubscribe for one session must be called from one single thread
-    // unsubscribeAll can be called from another thread
+    /**
+     * @see #subscribe(ClientSession, List, List) for the threading contract.
+     *
+     * @param session the session to apply the change to.
+     * @param entityIds the ids to apply the change for.
+     * @param notSubscribedEntityIds collects the ids the session was not subscribed to.
+     * @return the number of the entities unsubscribed.
+     */
     public final int unsubscribe(final ClientSession session,
                                  final List<CharSequence> entityIds,
                                  final List<CharSequence> notSubscribedEntityIds) {
+        if (!onSessionEventLoop(session)) {
+            final List<CharSequence> ids = new ArrayList<>(entityIds); // the caller may reuse its list
+            session.executor().execute(
+                    () -> unsubscribe(session, ids, new ArrayList<>())
+            );
+            return 0;
+        }
+
         int unsubscribed = 0;
         for (int i = 0; i < entityIds.size(); i++) {
             final CharSequence id = entityIds.get(i);
 
             final S subscriptions = getEntitySubscriptions(id);
-            if (subscriptions == null) {
+            if (subscriptions == null || !subscriptions.remove(session)) {
                 notSubscribedEntityIds.add(id);
                 continue;
             }
 
-            subscriptions.remove(session);
-            unsubscribed--;
+            unsubscribed++;
         }
         return unsubscribed;
     }
 
-    // subscribe and unsubscribe for one session must be called from one single thread
-    // unsubscribeAll can be called from another thread. So, we schedule its execution
-    // on the same thread subscribe and unsubscribe are working in
+    /**
+     * Unsubscribes the session from every entity of this channel. Runs inline on the event loop of the
+     * session and is scheduled onto it from anywhere else - the same contract {@link #subscribe} and
+     * {@link #unsubscribe} keep.
+     *
+     * <p>This walks the whole channel, so it is meant to be asked for. A session which goes away
+     * unsubscribes itself through what it is actually subscribed to instead.
+     *
+     * @param session to unsubscribe.
+     */
     public final void unsubscribeAll(final ClientSession session) {
-        session.executor().execute(() -> {
-            final List<S> currentSubscriptions = allSubscriptions;
-            for (int i = 0; i < currentSubscriptions.size(); i++) {
-                final S subscriptions = currentSubscriptions.get(i);
-                subscriptions.remove(session);
+        if (!onSessionEventLoop(session)) {
+            session.executor().execute(() -> unsubscribeAll(session));
+            return;
+        }
+
+        final ObjectListReadSafe.Snapshot<S> snapshot = entities.snapshot();
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final S subscriptions = snapshot.get(i);
+            if (subscriptions == null) { // an entity which was removed, and left the slot behind
+                continue;
             }
-        });
+            subscriptions.remove(session);
+        }
     }
 
     public final S getOrCreateEntitySubscriptions(final CharSequence entityId) {
-        S result;
-
-        synchronized (this) {
-            result = entitySubscriptionsMap.get(entityId);
-            if (result == null) {
-
-                if (closed) { // we prevent creating new EntitySubscriptions after close
-                    throw new IllegalStateException("Channel closed");
-                }
-
-                final String sid = entityId.toString();
-                result = newEntitySubscriptions(sid);
-                if (result == null) {
-                    return null;
-                }
-
-                entitySubscriptionsMap.put(sid, result);
-
-                final List<S> newEntitySubscriptions = new ArrayList<>(allSubscriptions);
-                newEntitySubscriptions.add(result);
-                allSubscriptions = newEntitySubscriptions;
-            }
+        final S existing = entitiesById.get(entityId); // the fast path takes no lock
+        if (existing != null) {
+            return existing;
         }
 
-        return result;
+        synchronized (this) {
+            if (closed.get()) { // we prevent creating new EntitySubscriptions after close
+                throw new IllegalStateException("Channel closed");
+            }
+
+            S result = entitiesById.get(entityId);
+            if (result != null) {
+                return result;
+            }
+
+            final String sid = entityId.toString();
+            result = newEntitySubscriptions(sid);
+            if (result == null) {
+                return null;
+            }
+
+            entities.add(result);
+            entitiesById.put(sid, result); // findable only once it is walkable
+
+            return result;
+        }
     }
 
     public final S getEntitySubscriptions(final CharSequence entityId) {
-        synchronized (this) {
-            return entitySubscriptionsMap.get(entityId);
-        }
+        return entitiesById.get(entityId);
     }
 
     public final S removeEntitySubscriptions(final CharSequence entityId) {
         final S result;
+
         synchronized (this) {
-            result = entitySubscriptionsMap.remove(entityId);
-            if (result != null) {
-                final List<S> newEntitySubscriptions = new ArrayList<>(allSubscriptions);
-                newEntitySubscriptions.remove(result);
-                allSubscriptions = newEntitySubscriptions;
+            result = entitiesById.remove(entityId); // unfindable before it stops being walkable
+            if (result == null) {
+                return null;
             }
+
+            entities.remove(result);
         }
 
         CloseHelper.closeQuiet(result);
@@ -205,9 +271,12 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
     }
 
     public final boolean isSubscribed(final ClientSession session) {
-        final List<S> currentSubscriptions = allSubscriptions;
-        for (int i = 0; i < currentSubscriptions.size(); i++) {
-            final S subscriptions = currentSubscriptions.get(i);
+        final ObjectListReadSafe.Snapshot<S> snapshot = entities.snapshot();
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final S subscriptions = snapshot.get(i);
+            if (subscriptions == null) {
+                continue;
+            }
             if (subscriptions.contains(session)) {
                 return true;
             }
@@ -216,32 +285,40 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
     }
 
     public final int forEachSubscription(final Consumer<S> consumer) {
-        final List<S> currentSubscriptions = allSubscriptions;
-        currentSubscriptions.forEach(consumer);
-        return currentSubscriptions.size();
+        final ObjectListReadSafe.Snapshot<S> snapshot = entities.snapshot();
+        int walked = 0;
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final S subscriptions = snapshot.get(i);
+            if (subscriptions == null) {
+                continue;
+            }
+            consumer.accept(subscriptions);
+            walked++;
+        }
+        return walked;
     }
 
     public boolean isEmpty() {
-        return allSubscriptions.isEmpty();
+        return entities.size() == 0;
     }
 
     @Override
     public final void close() {
-        final List<S> currentSubscriptions;
-        synchronized (this) {
-            if (closed) {
-                return;
-            }
-            closed = true;
-
-            currentSubscriptions = allSubscriptions;
-
-            entitySubscriptionsMap.clear();
-            allSubscriptions = new ArrayList<>();
+        if (!closed.compareAndSet(false, true)) {
+            return;
         }
 
-        for (int i = 0; i < currentSubscriptions.size(); i++) {
-            final S subscriptions = currentSubscriptions.get(i);
+        final ObjectListReadSafe.Snapshot<S> gone;
+        synchronized (this) {
+            gone = entities.close();
+            entitiesById.clear();
+        }
+
+        for (int i = 0; i < gone.limit(); i++) {
+            final S subscriptions = gone.get(i);
+            if (subscriptions == null) {
+                continue;
+            }
             CloseHelper.closeQuiet(subscriptions);
         }
 

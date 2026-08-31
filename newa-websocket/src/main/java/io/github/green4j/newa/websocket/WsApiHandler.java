@@ -10,8 +10,7 @@ import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import java.util.List;
 
 public class WsApiHandler extends WebSocketServerProtocolHandler {
-    private final ClientSessionFactory sessionFactory;
-    private final WritingResult writingResult;
+    private final WsApi wsApi;
     private final Receiver receiver;
     private final long pingIntervalMs;
     private final ChannelErrorHandler channelErrorHandler;
@@ -32,9 +31,7 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
                         final ChannelErrorHandler channelErrorHandler) {
         super(wsApi.websocketPath(), null, true);
 
-        sessionFactory = wsApi;
-        writingResult = wsApi;
-
+        this.wsApi = wsApi;
         this.receiver = receiver;
         this.pingIntervalMs = wsApi.pingIntervalMs();
         this.channelErrorHandler = channelErrorHandler;
@@ -44,9 +41,9 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
     public void userEventTriggered(final ChannelHandlerContext ctx,
                                    final Object evt) throws Exception {
         if (evt instanceof WebSocketServerProtocolHandler.HandshakeComplete) {
-            session = sessionFactory.newSession(
+            session = wsApi.newSession(
                     new ClientSessionContext(
-                            writingResult,
+                            wsApi,
                             receiver,
                             ctx.channel(),
                             pingIntervalMs
@@ -54,6 +51,14 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
             );
         }
         super.userEventTriggered(ctx, evt);
+    }
+
+    @Override
+    public void channelWritabilityChanged(final ChannelHandlerContext ctx) throws Exception {
+        if (session != null && ctx.channel().isWritable()) {
+            wsApi.writeResumed(session);
+        }
+        super.channelWritabilityChanged(ctx);
     }
 
     @Override
@@ -65,6 +70,9 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
         }
 
         if (frame instanceof TextWebSocketFrame) {
+            session.frameReceived(frame.content().readableBytes()); // the payload as it came off
+            // the wire, before it is decoded into the text below
+
             final String request = ((TextWebSocketFrame) frame).text();
             session.receive(request);
             // don't add to out - we consumed it

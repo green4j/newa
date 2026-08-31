@@ -1,73 +1,109 @@
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.newa.collections.ObjectListReadSafe;
 import io.netty.buffer.ByteBuf;
 
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.List;
 
 public class ClientSessions implements ClientSessionFactory {
     private final ClientSessionsListener listener;
+    private final WsApiObserverFactory observers;
 
-    private volatile List<ClientSession> sessions = new ArrayList<>(); // guarded by this
+    // Neither opening nor closing a session copies it, so a storm of clients arriving or reconnecting
+    // costs what it is, not its square. A broadcast walks a snapshot of it by index, taking no lock.
+    private final ObjectListReadSafe<ClientSession> sessions = new ObjectListReadSafe<>();
 
     public ClientSessions(final ClientSessionsListener listener) {
+        this(listener, null);
+    }
+
+    /**
+     * @param listener notified of the sessions coming and going, null for none.
+     * @param observers asked for an observer per session, null to observe nothing.
+     */
+    public ClientSessions(final ClientSessionsListener listener,
+                          final WsApiObserverFactory observers) {
         this.listener = listener;
+        this.observers = observers;
     }
 
     @Override
     public final ClientSession newSession(final ClientSessionContext context) {
-        final ClientSession session = new ClientSession(this, context);
+        final WsApiObserver observer = observers != null
+                ? observers.newObserver()
+                : null;
 
-        synchronized (this) {
-            final List<ClientSession> newSessions = new ArrayList<>(sessions);
-            newSessions.add(session);
-            sessions = newSessions;
+        final ClientSession session = new ClientSession(this, context, observer);
+
+        sessions.add(session);
+
+        if (listener != null) {
+            listener.onSessionOpened(session); // whatever the api keeps per session is put in place
+            // first, so that the observer below sees a session which is fully assembled
         }
 
-        listener.onSessionOpened(session);
+        if (observer != null) {
+            observer.onSessionOpened(session);
+        }
 
         return session;
     }
 
     public void broadcast(final CharSequence text) {
         // TODO: check Thread.currentThread().isInterrupted() while iterating?
-        final List<ClientSession> currentSessions = sessions;
-        for (int i = 0; i < currentSessions.size(); i++) {
-            currentSessions.get(i).send(text); // TODO: wrap with try/catch?
+        final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final ClientSession session = snapshot.get(i);
+            if (session == null) { // a session which closed, and left the slot behind
+                continue;
+            }
+            session.send(text); // TODO: wrap with try/catch?
         }
     }
 
     public void broadcast(final CharSequence text,
                           final Charset charset) {
         // TODO: check Thread.currentThread().isInterrupted() while iterating?
-        final List<ClientSession> currentSessions = sessions;
-        for (int i = 0; i < currentSessions.size(); i++) {
-            currentSessions.get(i).send(text, charset); // TODO: wrap with try/catch?
+        final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final ClientSession session = snapshot.get(i);
+            if (session == null) {
+                continue;
+            }
+            session.send(text, charset); // TODO: wrap with try/catch?
         }
     }
 
+    /**
+     * Sends the buffer to every open session and takes it over: each session is given a retained
+     * duplicate of it, with its own reader index, and the buffer itself is released here.
+     *
+     * @param text to send.
+     */
     public void broadcast(final ByteBuf text) {
         // TODO: check Thread.currentThread().isInterrupted() while iterating?
-        final List<ClientSession> currentSessions = sessions;
-        for (int i = 0; i < currentSessions.size(); i++) {
-            currentSessions.get(i).send(text); // TODO: wrap with try/catch?
+        try {
+            final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
+            for (int i = 0; i < snapshot.limit(); i++) {
+                final ClientSession session = snapshot.get(i);
+                if (session == null) {
+                    continue;
+                }
+                session.send(text.retainedDuplicate()); // a session consumes the frame it is given,
+                // so one buffer can not be handed to all of them
+            }
+        } finally {
+            text.release();
         }
     }
 
     void onClientSessionClosed(final ClientSession session) {
-        final boolean removed;
-
-        synchronized (this) {
-            final List<ClientSession> newSessions = new ArrayList<>(sessions);
-            removed = newSessions.remove(session);
-            sessions = newSessions;
-        }
-
-        if (!removed) {
+        if (!sessions.remove(session)) {
             return;
         }
 
-        listener.onSessionClosed(session);
+        if (listener != null) {
+            listener.onSessionClosed(session);
+        }
     }
 }

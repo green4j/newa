@@ -1,6 +1,6 @@
 package io.github.green4j.newa.example.ws.subscriptions;
 
-import io.github.green4j.newa.example.ws.StdOutWsApiListener;
+import io.github.green4j.newa.example.ws.StdOutWsApiObserverFactory;
 import io.github.green4j.newa.lang.Work;
 import io.github.green4j.newa.lang.Worker;
 import io.github.green4j.newa.websocket.WsApi;
@@ -36,7 +36,9 @@ public class SubscriptionsWsServer {
         )
                 .withPathPrefix("ws")
                 .withPingIntervalMs(10_000)
-                .withListener(new StdOutWsApiListener());
+                .withObservers(new StdOutWsApiObserverFactory())
+                .withSkipOnBackPressure(); // both channels here restore a session with
+        // a snapshot, so one which can not keep up is re-synchronized, not disconnected
 
         final WsApi api = apiBuilder.build();
 

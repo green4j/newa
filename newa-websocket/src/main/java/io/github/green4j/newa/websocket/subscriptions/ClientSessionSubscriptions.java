@@ -1,85 +1,153 @@
 package io.github.green4j.newa.websocket.subscriptions;
 
+import io.github.green4j.newa.collections.ObjectListReadSafe;
 import io.github.green4j.newa.websocket.ClientSession;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
-public class ClientSessionSubscriptions {
+/**
+ * What one session is subscribed to. The api built by {@link SubscriptionWsApiBuilder} attaches one of
+ * these to every session it opens.
+ *
+ * <p>The registry is the session's own, and {@link EntitySubscriptions} keeps it up to date itself. Two
+ * things follow. Re-synchronizing a session which fell behind, and unsubscribing one which goes away, walk
+ * the entities that session actually subscribed to rather than every entity of every channel it ever
+ * touched - the difference between the handful it reads and the tens of thousands a channel may hold. And a
+ * session added to an entity directly, without going through a {@link Channel}, is unsubscribed on its way
+ * out all the same, instead of being left behind in that entity forever.
+ */
+public final class ClientSessionSubscriptions {
+    static ClientSessionSubscriptions getClientSessionSubscriptions(final ClientSession session) {
+        final ClientSessionSubscriptions subscriptions = session.getUserData();
+        if (subscriptions == null) {
+            throw new IllegalStateException("ClientSessionSubscriptions not found in the user data for the session: "
+                    + session + ". Please, make sure you have properly constructed WebApi. "
+                    + "For example, use SubscriptionWsApiBuilder.");
+        }
+        return subscriptions;
+    }
+
+    /**
+     * Lenient on purpose: {@link EntitySubscriptions} is usable on its own, with sessions no api of this
+     * package ever attached anything to.
+     *
+     * @param session to look them up for.
+     * @return the subscriptions of the session, null if it keeps none.
+     */
+    static ClientSessionSubscriptions of(final ClientSession session) {
+        final Object subscriptions = session.getUserData();
+        if (!(subscriptions instanceof ClientSessionSubscriptions)) {
+            return null;
+        }
+        return (ClientSessionSubscriptions) subscriptions;
+    }
+
+    static ClientSessionSubscriptions attach(final ClientSession session,
+                                             final SubscriptionsWsApiObserver observer) {
+        final ClientSessionSubscriptions result = new ClientSessionSubscriptions(session, observer);
+        session.putUserData(result);
+        return result;
+    }
+
+    static boolean onSessionEventLoop(final ClientSession session) {
+        return session.channel().eventLoop().inEventLoop();
+    }
+
     private final ClientSession session;
+    private final SubscriptionsWsApiObserver observer; // null when the session is not observed
 
-    private volatile List<Channel<?>> channelsSubscribedAllTheTime = new ArrayList<>(); // stores
-    // all Channels the session was subscribed at least once. Can be accessed by
-    // multiple threads
+    // Walked by index, without a lock and without an iterator, by everything a session does to all of
+    // its subscriptions at once - re-synchronizing them and unsubscribing them.
+    private final ObjectListReadSafe<EntitySubscriptions> subscribedEntities = new ObjectListReadSafe<>();
 
-    private volatile Object userData;
+    private final AtomicReference<Object> userData = new AtomicReference<>();
 
-    ClientSessionSubscriptions(final ClientSession session) {
+    private ClientSessionSubscriptions(final ClientSession session,
+                                       final SubscriptionsWsApiObserver observer) {
         this.session = session;
+        this.observer = observer;
     }
 
     public ClientSession session() {
         return session;
     }
 
-    public int numberOfSubscribedChannels() {
-        final List<Channel<?>> channels = channelsSubscribedAllTheTime;
-        int result = 0;
-        for (int i = 0; i < channels.size(); i++) {
-            final Channel<?> channel = channels.get(i);
-            if (channel.isSubscribed(session)) {
-                result++;
-            }
-        }
-        return result;
+    /**
+     * @return the number of the entities the session is subscribed to, across every channel.
+     */
+    public int numberOfSubscribedEntities() {
+        return subscribedEntities.size();
     }
 
     @SuppressWarnings("unchecked")
     public <T> T getUserData() {
-        return (T) userData;
+        return (T) userData.get();
     }
 
-    public synchronized <T> T putUserData(final T userData) {
-        final T old = getUserData();
-        this.userData = userData;
-        return old;
+    @SuppressWarnings("unchecked")
+    public <T> T putUserData(final T userData) {
+        return (T) this.userData.getAndSet(userData);
     }
 
-    public synchronized <T> T putUserDataIfAbsent(final T userData) {
-        final T old = getUserData();
-        if (old != null) {
-            return old;
+    @SuppressWarnings("unchecked")
+    public <T> T putUserDataIfAbsent(final T userData) {
+        final Object old = this.userData.compareAndExchange(null, userData);
+        return old == null ? userData : (T) old;
+    }
+
+    SubscriptionsWsApiObserver observer() {
+        return observer;
+    }
+
+    boolean isSubscribedTo(final EntitySubscriptions entity) {
+        return subscribedEntities.contains(entity);
+    }
+
+    void onSubscribed(final EntitySubscriptions entity) {
+        subscribedEntities.add(entity);
+    }
+
+    void onUnsubscribed(final EntitySubscriptions entity) {
+        subscribedEntities.remove(entity);
+    }
+
+    void resync() {
+        final ObjectListReadSafe.Snapshot<EntitySubscriptions> snapshot = subscribedEntities.snapshot();
+
+        int entities = 0;
+        for (int i = 0; i < snapshot.limit(); i++) {
+            final EntitySubscriptions entity = snapshot.get(i);
+            if (entity == null) { // an entity this session unsubscribed from, slot and all
+                continue;
+            }
+            entity.resync(session);
+            entities++;
         }
-        this.userData = userData;
-        return userData;
+
+        if (observer != null) {
+            observer.onResynced(entities);
+        }
     }
 
-    void onSubscribed(final Channel<?> channel) {
-        List<Channel<?>> channels = channelsSubscribedAllTheTime;
-        if (channels.contains(channel)) {
+    // Runs inline on the event loop of the session and is scheduled onto it from anywhere else - the same
+    // contract subscribing and unsubscribing keep. Being inline is what puts the unsubscriptions of a
+    // session which is closing before the terminal event of its observer: a session closed on its own event
+    // loop, which is how the channel going away closes one, is done unsubscribing by the time close()
+    // reports it.
+    void unsubscribeAll() {
+        if (!onSessionEventLoop(session)) {
+            session.executor().execute(this::unsubscribeAll);
             return;
         }
 
-        synchronized (this) {
-            channels = channelsSubscribedAllTheTime;
-            if (channels.contains(channel)) {
-                return;
+        // taken out in one go, so that the removals below find nothing left to take out one at a time
+        final ObjectListReadSafe.Snapshot<EntitySubscriptions> gone = subscribedEntities.clear();
+        for (int i = 0; i < gone.limit(); i++) {
+            final EntitySubscriptions entity = gone.get(i);
+            if (entity == null) {
+                continue;
             }
-
-            final List<Channel<?>> newChannels = new ArrayList<>(channels);
-            newChannels.add(channel);
-            channelsSubscribedAllTheTime = newChannels;
+            entity.remove(session);
         }
-    }
-
-    void unsubscribeAll() {
-        final List<Channel<?>> channels = channelsSubscribedAllTheTime;
-        for (final Channel<?> channel : channels) {
-            channel.unsubscribeAll(session);
-        }
-        // we are not going to clean up the list of the subscribed Channels
-        // to don't make concurrent things complicated. We should be fine
-        // with strategy like that, since number of Channels in a server
-        // is relatively small, and the list shouldn't grow significantly
     }
 }

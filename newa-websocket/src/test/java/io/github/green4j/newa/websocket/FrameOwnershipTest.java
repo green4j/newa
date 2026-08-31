@@ -1,0 +1,138 @@
+package io.github.green4j.newa.websocket;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Who owns the buffer of a frame handed to a session. A frame which never reaches the channel is released
+ * by the session, and a fan-out gives every session a frame of its own - one buffer written to several
+ * channels would be released by the first of them.
+ */
+class FrameOwnershipTest {
+    private static final int WRITABILITY_FLAG = 1;
+
+    private final List<EmbeddedChannel> channels = new ArrayList<>();
+
+    private static ByteBuf text(final String text) {
+        return Unpooled.copiedBuffer(text, StandardCharsets.UTF_8);
+    }
+
+    private static void setWritable(final EmbeddedChannel channel,
+                                    final boolean writable) {
+        channel.unsafe().outboundBuffer().setUserDefinedWritability(WRITABILITY_FLAG, writable);
+        Assertions.assertEquals(writable, channel.isWritable());
+    }
+
+    private ClientSession newSession(final WsApi api) {
+        final EmbeddedChannel channel = new EmbeddedChannel();
+        channels.add(channel);
+
+        return api.newSession(
+                new ClientSessionContext(
+                        api,
+                        null,
+                        channel,
+                        0 // no pinger
+                )
+        );
+    }
+
+    @AfterEach
+    void tearDown() {
+        channels.forEach(EmbeddedChannel::finishAndReleaseAll);
+        channels.clear();
+    }
+
+    @Test
+    void shouldReleaseAFrameWhichWasSkipped() {
+        final WsApi api = new SimpleWsApiBuilder(1)
+                .withSkipOnBackPressure()
+                .build();
+
+        final ClientSession session = newSession(api);
+        final EmbeddedChannel channel = channels.get(0);
+
+        setWritable(channel, false);
+
+        final ByteBuf frame = text("abc");
+        session.send(frame);
+
+        Assertions.assertEquals(0, frame.refCnt(), "the skipped frame is released, not leaked");
+        Assertions.assertFalse(session.isClosed(), "skipping keeps the session");
+
+        setWritable(channel, true);
+    }
+
+    @Test
+    void shouldReleaseAFrameWrittenToAChannelWhichIsGone() {
+        final WsApi api = new SimpleWsApiBuilder(1).build();
+
+        final ClientSession session = newSession(api);
+        channels.get(0).close();
+
+        final ByteBuf frame = text("abc");
+        session.send(frame);
+
+        Assertions.assertEquals(0, frame.refCnt(), "a frame which could not be written is released");
+        Assertions.assertTrue(session.isClosed());
+    }
+
+    @Test
+    void shouldGiveEveryBroadcastSessionAFrameOfItsOwn() {
+        final WsApi api = new SimpleWsApiBuilder(1).build();
+
+        newSession(api);
+        newSession(api);
+        newSession(api);
+
+        final ByteBuf frame = text("hello");
+        api.broadcast(frame);
+
+        Assertions.assertEquals(3, frame.refCnt(),
+                "one retained duplicate per session, and the buffer itself already released");
+
+        for (int i = 0; i < channels.size(); i++) {
+            final TextWebSocketFrame written = channels.get(i).readOutbound();
+            Assertions.assertNotNull(written, "every session must have got the frame");
+            Assertions.assertEquals("hello", written.text());
+            written.release();
+        }
+
+        Assertions.assertEquals(0, frame.refCnt(), "every duplicate is accounted for");
+    }
+
+    @Test
+    void shouldReleaseABroadcastNoSessionIsThereToTake() {
+        final WsApi api = new SimpleWsApiBuilder(1).build();
+
+        final ByteBuf frame = text("hello");
+        api.broadcast(frame);
+
+        Assertions.assertEquals(0, frame.refCnt());
+    }
+
+    @Test
+    void shouldPingWithAPingFrame() {
+        final WsApi api = new SimpleWsApiBuilder(1).build();
+
+        final ClientSession session = newSession(api);
+        session.ping("are you there");
+
+        final Object written = channels.get(0).readOutbound();
+        Assertions.assertInstanceOf(PingWebSocketFrame.class, written,
+                "a ping must not go out as a text frame");
+        Assertions.assertEquals("are you there",
+                ((PingWebSocketFrame) written).content().toString(StandardCharsets.UTF_8));
+        ((PingWebSocketFrame) written).release();
+    }
+}
