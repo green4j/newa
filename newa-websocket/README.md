@@ -77,8 +77,8 @@ to everyone and tells a new session nothing about what it missed. That is what c
 
 ```
 Channel<S extends EntitySubscriptions>     one per stream: prices, order books, rooms
-    └── EntitySubscriptions                one per entity id, owns the sessions subscribed to it
-            └── ClientSession, ...
+    `-- EntitySubscriptions                one per entity id, owns the sessions subscribed to it
+            `-- ClientSession, ...
 ```
 
 Build the api with `SubscriptionWsApiBuilder` - it attaches the per-session bookkeeping every channel expects,

@@ -126,7 +126,7 @@ class ObserverLifecycleTest {
 
         final ClientSession session = newSession(sessions);
 
-        final String text = "héllo"; // six bytes of UTF-8, five characters
+        final String text = "h\u00e9llo"; // six bytes of UTF-8, five characters
         Assertions.assertEquals(6, text.getBytes(StandardCharsets.UTF_8).length);
 
         session.send(text);

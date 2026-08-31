@@ -94,6 +94,11 @@ def addDepsFromProjects(pom, projects) {
 ext {
     newaSrcJavaVersion = JavaVersion.toVersion(srcJavaVersion)
 
+    // Sources are pure ASCII, and are never decoded with whatever encoding the build machine
+    // happens to default to. javac reports any non-ASCII byte as an unmappable character. Write
+    // one in a literal as \\uXXXX, and in javadoc as its ASCII equivalent ("--").
+    newaSourceEncoding = 'US-ASCII'
+
     isRelease = !projectVersion.endsWith('-SNAPSHOT')
 
     sonatypeReleasesRepoUrl = isRelease
@@ -198,9 +203,16 @@ configure([commonProject,
         sourceCompatibility = newaSrcJavaVersion
         targetCompatibility = newaSrcJavaVersion
 
+        // --release rather than -source/-target alone: it also pins the API, and it keeps the
+        // "bootstrap class path not set" note -- which -Werror turns into a failure -- off newer JDKs.
+        options.release = newaSrcJavaVersion.majorVersion as Integer
         options.compilerArgs.addAll(['-Xlint:all', '-Werror']) // enable all warnings and treat them as errors
-        options.encoding = 'UTF-8'
+        options.encoding = newaSourceEncoding
         options.deprecation = true
+    }
+
+    compileTestJava {
+        options.encoding = newaSourceEncoding
     }
 
     checkstyle {

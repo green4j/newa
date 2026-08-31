@@ -186,7 +186,8 @@ class ResponseHeadersTest {
 
     @Test
     public void testAFileNameWhichWouldNotSurviveTheHeaderIsRefusedWhereItIsBuilt() {
-        for (final String name : new String[] {"", "отчёт.gz", "rows\r\nX-Injected: 1.gz"}) {
+        final String cyrillicName = "\u043e\u0442\u0447\u0451\u0442.gz"; // "otchet.gz" in Cyrillic
+        for (final String name : new String[] {"", cyrillicName, "rows\r\nX-Injected: 1.gz"}) {
             Assertions.assertThrows(IllegalArgumentException.class,
                     () -> ContentDisposition.attachment(name),
                     "a file name of \"" + name + "\" must not reach a response head");
