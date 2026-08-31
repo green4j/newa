@@ -96,7 +96,7 @@ class FrameOwnershipTest {
         newSession(api);
 
         final ByteBuf frame = text("hello");
-        api.broadcast(frame);
+        api.broadcastAndRelease(frame);
 
         Assertions.assertEquals(3, frame.refCnt(),
                 "one retained duplicate per session, and the buffer itself already released");
@@ -116,9 +116,33 @@ class FrameOwnershipTest {
         final WsApi api = new SimpleWsApiBuilder(1).build();
 
         final ByteBuf frame = text("hello");
-        api.broadcast(frame);
+        api.broadcastAndRelease(frame);
 
         Assertions.assertEquals(0, frame.refCnt());
+    }
+
+    @Test
+    void shouldLeaveABroadcastFrameToTheCallerWhenItIsNotHandedOver() {
+        final WsApi api = new SimpleWsApiBuilder(1).build();
+
+        newSession(api);
+        newSession(api);
+
+        final ByteBuf frame = text("hello");
+        api.broadcast(frame);
+        api.broadcast(frame); // the same buffer again, which handing it over would have made impossible
+
+        for (int i = 0; i < channels.size(); i++) {
+            for (int j = 0; j < 2; j++) {
+                final TextWebSocketFrame written = channels.get(i).readOutbound();
+                Assertions.assertNotNull(written);
+                Assertions.assertEquals("hello", written.text());
+                written.release();
+            }
+        }
+
+        Assertions.assertEquals(1, frame.refCnt(), "the buffer is still the caller's");
+        frame.release();
     }
 
     @Test

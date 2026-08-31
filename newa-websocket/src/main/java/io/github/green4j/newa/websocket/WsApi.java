@@ -72,7 +72,17 @@ public class WsApi implements ClientSessionFactory, WritingResult {
      * Sends the buffer to every open session and takes it over: each session is given a retained duplicate
      * of it, and the buffer itself is released once the fan-out is done.
      *
-     * @param text to send.
+     * @param text to send. Released here whatever happens to it.
+     */
+    public void broadcastAndRelease(final ByteBuf text) {
+        clientSessions.broadcastAndRelease(text);
+    }
+
+    /**
+     * Sends the buffer to every open session and leaves it to the caller: each session is given a retained
+     * duplicate of it, and the reference of the caller is neither taken nor released.
+     *
+     * @param text to send. Stays the caller's to release.
      */
     public void broadcast(final ByteBuf text) {
         clientSessions.broadcast(text);

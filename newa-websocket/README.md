@@ -65,9 +65,10 @@ api.broadcast("hello");        // every open session
 ```
 
 A broadcast walks the sessions without a lock and without making anything wait, and opening or closing a
-session neither copies that list nor blocks a broadcast. `broadcast(CharSequence)` encodes the text once per session;
-`broadcast(ByteBuf)` encodes nothing at all - it gives every session a retained duplicate of the buffer and
-releases the buffer itself once the fan-out is done.
+session neither copies that list nor blocks a broadcast. `broadcast(CharSequence)` encodes the text once per
+session; the `ByteBuf` forms encode nothing at all - they give every session a retained duplicate of the
+buffer. `broadcastAndRelease(ByteBuf)` takes the buffer over and releases it once the fan-out is done;
+`broadcast(ByteBuf)` leaves it to the caller, so the same buffer can be sent again or kept.
 
 For anything with state behind it - a price, a room, an order book - broadcasting is the wrong shape: it sends
 to everyone and tells a new session nothing about what it missed. That is what channels are for.
@@ -252,19 +253,21 @@ it counts as slow - that is where the memory a slow peer costs is bounded, and w
 starts to matter. Everything else here is downstream of it.
 
 **Encode a fan-out once.** `send(CharSequence)` encodes UTF-8 per session, which for a publication reaching
-thousands of subscribers is most of the work. Render the frame once and give it to `publish(ByteBuf)`, which
-hands every session a retained duplicate of it and releases the buffer when the fan-out is done - a session
-releases the frame it was given whatever becomes of it, written or skipped:
+thousands of subscribers is most of the work. Render the frame once and give it to
+`publishAndRelease(ByteBuf)`, which hands every session a retained duplicate of it and releases the buffer
+when the fan-out is done - a session releases the frame it was given whatever becomes of it, written or
+skipped:
 
 ```java
 ByteBuf encoded = allocator.buffer();
 // ... render the update into it ...
-entity.publish(encoded);   // rendered once, a duplicate per session, released here
+entity.publishAndRelease(encoded);   // rendered once, a duplicate per session, released here
 ```
 
-It is `broadcast(ByteBuf)` for one entity instead of every open session. `forEachSession(ByteBuf)` is the same
-thing for an administrative frame which is not a change of the state, and `publish(session -> ...)` stays for
-the case where a session needs a frame of its own.
+It is `broadcastAndRelease(ByteBuf)` for one entity instead of every open session. `publish(ByteBuf)` is the
+same fan-out without taking the buffer over - for a frame the publisher keeps, pools or sends to more than
+one entity. Each has a `forEachSession` twin for an administrative frame which is not a change of the state,
+and `publish(session -> ...)` stays for the case where a session needs a frame of its own.
 
 **Keep the snapshot cheap.** `onClientSessionSubscribed` runs inline on the event loop of the subscribing
 session; a heavy snapshot delays every other session sharing that loop. Build it from state that is already in

@@ -33,7 +33,7 @@ public class ChannelA extends Channel<ChannelA.ChannelAEntitySubscriptions> {
             }
 
             // rendered once, every session gets a duplicate of it
-            publish(Unpooled.copiedBuffer(entityId + "=" + value, CharsetUtil.UTF_8));
+            publishAndRelease(Unpooled.copiedBuffer(entityId + "=" + value, CharsetUtil.UTF_8));
         }
 
         @Override

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * A publication rendered once for every subscriber: who owns the buffer handed to
- * {@link EntitySubscriptions#publish(ByteBuf)}, and that nothing of it is left behind.
+ * {@link EntitySubscriptions#publishAndRelease(ByteBuf)}, and that nothing of it is left behind.
  */
 class PublishedFrameOwnershipTest {
     private static final int WRITABILITY_FLAG = 1;
@@ -72,7 +72,7 @@ class PublishedFrameOwnershipTest {
         subscriptions.add(three);
 
         final ByteBuf frame = text("E=1");
-        final long sequence = subscriptions.publish(frame);
+        final long sequence = subscriptions.publishAndRelease(frame);
 
         assertEquals(1, sequence, "a publication is numbered whichever way it is made");
         assertEquals(3, frame.refCnt(),
@@ -89,7 +89,7 @@ class PublishedFrameOwnershipTest {
     void shouldReleaseAFrameNoSessionIsThereToTake() {
         final ByteBuf frame = text("E=1");
 
-        assertEquals(1, subscriptions.publish(frame),
+        assertEquals(1, subscriptions.publishAndRelease(frame),
                 "the state changed, so the publication is numbered even with nobody to send it to");
         assertEquals(0, frame.refCnt(), "the buffer is released, not leaked");
     }
@@ -105,7 +105,7 @@ class PublishedFrameOwnershipTest {
         setWritable(channelOf(lagging), false);
 
         final ByteBuf frame = text("E=1");
-        subscriptions.publish(frame);
+        subscriptions.publishAndRelease(frame);
 
         assertEquals(1, frame.refCnt(),
                 "the skipped duplicate is released by the session it was given to");
@@ -127,7 +127,7 @@ class PublishedFrameOwnershipTest {
         subscriptions.add(two);
 
         final ByteBuf frame = text("notice");
-        final int walked = subscriptions.forEachSession(frame);
+        final int walked = subscriptions.forEachSessionAndRelease(frame);
 
         assertEquals(2, walked);
         assertEquals(2, frame.refCnt(),
@@ -145,8 +145,31 @@ class PublishedFrameOwnershipTest {
     void shouldReleaseAWalkedFrameNoSessionIsThereToTake() {
         final ByteBuf frame = text("notice");
 
-        assertEquals(0, subscriptions.forEachSession(frame));
+        assertEquals(0, subscriptions.forEachSessionAndRelease(frame));
         assertEquals(0, frame.refCnt(), "the buffer is released, not leaked");
+    }
+
+    @Test
+    void shouldLeaveTheFrameToTheCallerWhenItIsNotHandedOver() {
+        final ClientSession one = sessions.newSession();
+        final ClientSession two = sessions.newSession();
+
+        subscriptions.add(one);
+        subscriptions.add(two);
+
+        final ByteBuf frame = text("E=1");
+        subscriptions.publish(frame);
+        subscriptions.forEachSession(frame);
+
+        assertEquals("E=1", readText(one));
+        assertEquals("E=1", readText(one));
+        assertEquals("E=1", readText(two));
+        assertEquals("E=1", readText(two));
+
+        assertEquals(1, frame.refCnt(), "the same buffer, sent twice, is still the caller's");
+
+        frame.release();
+        assertEquals(0, frame.refCnt());
     }
 
     @Test
@@ -159,7 +182,7 @@ class PublishedFrameOwnershipTest {
         subscriptions.remove(gone);
 
         final ByteBuf frame = text("E=2");
-        subscriptions.publish(frame);
+        subscriptions.publishAndRelease(frame);
 
         assertEquals(1, frame.refCnt(), "only the session still subscribed took a duplicate");
 

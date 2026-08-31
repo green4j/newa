@@ -78,9 +78,9 @@ public class ClientSessions implements ClientSessionFactory {
      * Sends the buffer to every open session and takes it over: each session is given a retained
      * duplicate of it, with its own reader index, and the buffer itself is released here.
      *
-     * @param text to send.
+     * @param text to send. Released here whatever happens to it.
      */
-    public void broadcast(final ByteBuf text) {
+    public void broadcastAndRelease(final ByteBuf text) {
         // TODO: check Thread.currentThread().isInterrupted() while iterating?
         try {
             final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
@@ -95,6 +95,18 @@ public class ClientSessions implements ClientSessionFactory {
         } finally {
             text.release();
         }
+    }
+
+    /**
+     * Sends the buffer to every open session and leaves it to the caller: each session is given a retained
+     * duplicate of it, with its own reader index, and the reference of the caller is neither taken nor
+     * released, so the buffer can be sent again or kept.
+     *
+     * @param text to send. Stays the caller's to release.
+     */
+    public void broadcast(final ByteBuf text) {
+        broadcastAndRelease(text.retain()); // the reference taken below is the one added here,
+        // so the caller keeps its own
     }
 
     void onClientSessionClosed(final ClientSession session) {

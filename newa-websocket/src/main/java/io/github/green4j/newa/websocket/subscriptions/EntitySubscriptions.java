@@ -17,10 +17,10 @@ import java.util.function.Consumer;
  * an event loop. Subscribing and unsubscribing take a short lock of this entity, and neither copies the set:
  * a popular entity thousands of clients arrive at costs what they are, not their square.
  *
- * <p>A state change must go through {@link #publish(Consumer)}, or {@link #publish(ByteBuf)} when the
- * frame is rendered once for all of the subscribers, which numbers it so that
+ * <p>A state change must go through {@link #publish(Consumer)}, or {@link #publishAndRelease(ByteBuf)}
+ * when the frame is rendered once for all of the subscribers, which numbers it so that
  * a subscriber can tell a hole from a duplicate. {@link #forEachSession(Consumer)} and
- * {@link #forEachSession(ByteBuf)} are for
+ * {@link #forEachSessionAndRelease(ByteBuf)} are for
  * everything else - inspection, administrative broadcasts - and carry the same barrier,
  * so they can not lose a session which subscribes while they run.
  *
@@ -179,29 +179,32 @@ public class EntitySubscriptions implements Closeable {
      * subscribers is most of the work. The state of the entity must be mutated <b>before</b> this call,
      * the same way {@link #publish(Consumer)} requires.
      *
-     * @param frame to send.
+     * @param frame to send. Released here whatever happens to it.
      * @return the sequence number assigned to this publication.
      */
-    public final long publish(final ByteBuf frame) {
-        // The bump must precede the read of the subscribers below - it is the write
-        // a concurrently subscribing session synchronizes with. See add().
-        final long sequence = publicationSequence.incrementAndGet();
-
+    public final long publishAndRelease(final ByteBuf frame) {
         try {
-            final ObjectListReadSafe.Snapshot<ClientSession> snapshot = subscribedSessions.snapshot();
-            for (int i = 0; i < snapshot.limit(); i++) {
-                final ClientSession session = snapshot.get(i);
-                if (session == null) { // a session which unsubscribed, and left the slot behind
-                    continue;
-                }
-                session.send(frame.retainedDuplicate()); // a session consumes the frame it is given,
-                // so one buffer can not be handed to all of them
-            }
+            return publish(
+                    session -> session.send(frame.retainedDuplicate()) // a session consumes the frame it
+                    // is given, so one buffer can not be handed to all of them
+            );
         } finally {
             frame.release();
         }
+    }
 
-        return sequence;
+    /**
+     * Publishes one already rendered frame to every subscribed session and leaves it to the caller: each
+     * session is given a retained duplicate of it, and the reference of the caller is neither taken nor
+     * released, so the buffer can be sent again or kept. Use {@link #publishAndRelease(ByteBuf)} when the
+     * frame was rendered for this publication and nothing else.
+     *
+     * @param frame to send. Stays the caller's to release.
+     * @return the sequence number assigned to this publication.
+     */
+    public final long publish(final ByteBuf frame) {
+        return publishAndRelease(frame.retain()); // the reference taken below is the one added here,
+        // so the caller keeps its own
     }
 
     /**
@@ -236,34 +239,37 @@ public class EntitySubscriptions implements Closeable {
 
     /**
      * Sends one already rendered frame to every subscribed session without numbering anything, and takes
-     * it over the way {@link #publish(ByteBuf)} does: each session is given a retained duplicate of it,
-     * and the buffer itself is released once the walk is done. Use it for an administrative broadcast to
-     * the subscribers of this entity; a change of its state must go through {@link #publish(ByteBuf)}
-     * instead, so that a subscriber can detect a hole by the sequence number.
+     * it over the way {@link #publishAndRelease(ByteBuf)} does: each session is given a retained duplicate
+     * of it, and the buffer itself is released once the walk is done. Use it for an administrative
+     * broadcast to the subscribers of this entity; a change of its state must go through
+     * {@link #publishAndRelease(ByteBuf)} instead, so that a subscriber can detect a hole by the sequence
+     * number.
      *
-     * @param frame to send.
+     * @param frame to send. Released here whatever happens to it.
      * @return the number of the sessions walked.
      */
-    public final int forEachSession(final ByteBuf frame) {
-        // The same barrier publish() relies on, without moving the counter. See forEachSession(Consumer).
-        publicationSequence.getAndAdd(0);
-
+    public final int forEachSessionAndRelease(final ByteBuf frame) {
         try {
-            final ObjectListReadSafe.Snapshot<ClientSession> snapshot = subscribedSessions.snapshot();
-            int walked = 0;
-            for (int i = 0; i < snapshot.limit(); i++) {
-                final ClientSession session = snapshot.get(i);
-                if (session == null) {
-                    continue;
-                }
-                session.send(frame.retainedDuplicate()); // a session consumes the frame it is given,
-                // so one buffer can not be handed to all of them
-                walked++;
-            }
-            return walked;
+            return forEachSession(
+                    session -> session.send(frame.retainedDuplicate()) // a session consumes the frame it
+                    // is given, so one buffer can not be handed to all of them
+            );
         } finally {
             frame.release();
         }
+    }
+
+    /**
+     * Sends one already rendered frame to every subscribed session without numbering anything, and leaves
+     * it to the caller the way {@link #publish(ByteBuf)} does: each session is given a retained duplicate
+     * of it, and the reference of the caller is neither taken nor released.
+     *
+     * @param frame to send. Stays the caller's to release.
+     * @return the number of the sessions walked.
+     */
+    public final int forEachSession(final ByteBuf frame) {
+        return forEachSessionAndRelease(frame.retain()); // the reference taken below is the one added
+        // here, so the caller keeps its own
     }
 
     /**
