@@ -19,7 +19,7 @@ public final class PathMatcher<T> {
     }
 
     public static final class Builder<T> {
-        private static class Jump implements Comparable<Jump> {
+        private static final class Jump implements Comparable<Jump> {
             private int from = INITIAL_STATE;
             private int to = INITIAL_STATE;
             private String segment;

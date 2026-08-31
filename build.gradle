@@ -30,6 +30,8 @@ plugins {
 
 defaultTasks 'clean', 'build'
 
+def projectVersion = file('version.txt').text.trim()
+
 def getConfigProperty(final String propertyName) {
     String value = project.findProperty(propertyName)
     if (!value) {
