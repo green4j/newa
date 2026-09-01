@@ -233,18 +233,12 @@ Both halves are optional. `withObservers` may be left out entirely, and `newObse
 a session that is not worth observing - then not even the clock is read for it. A shared instance is allowed
 too, and then telling the sessions apart is yours.
 
-## Tuning for high load
+## Memory budget
 
-**Watermarks are the real knob.** `WRITE_BUFFER_WATER_MARK` decides how much a session may fall behind before
-it counts as slow - that is where the memory a slow peer costs is bounded, and where `withSkipOnBackPressure`
-starts to matter. Everything else here is downstream of it. There is no queue of ours behind it: a frame the
-channel cannot take is never queued, it is released, and the session is closed or marked lagging there and
-then.
-
-**Size it in time, not in bytes.** How much room a number buys depends entirely on what a session subscribed
-to: 64 KB is a second and a half of a subscriber taking 200 messages a second and fourteen milliseconds of
-one taking 20 000. Decide instead how far behind a subscriber may be and still be worth serving - call it the
-lag - and derive the mark from the stream that subscriber is actually sent:
+**Size the watermark in time, not in bytes.** How much room a number buys depends entirely on what a session
+subscribed to: 64 KB is a second and a half of a subscriber taking 200 messages a second, and fourteen
+milliseconds of one taking 20 000. Decide instead how far behind a subscriber may be and still be worth
+serving - call it the lag - and derive the mark from the stream that subscriber is actually sent:
 
 ```
 high = lag (seconds) x SUM over the entities one session subscribes to of (publications/s x frame bytes)
@@ -309,6 +303,13 @@ ch.closeFuture().addListener(f -> open.decrementAndGet());
 ```
 
 Refusing a connection is the cheap failure.
+
+## Tuning for high load
+
+**Watermarks are the real knob.** `WRITE_BUFFER_WATER_MARK` decides how much a session may fall behind before
+it counts as slow, and everything else here is downstream of it - see `Memory budget` above for the number to
+put in it. There is no queue of ours behind it: a frame the channel cannot take is never queued, it is
+released, and the session is closed or marked lagging there and then.
 
 **Encode a fan-out once.** `send(CharSequence)` encodes UTF-8 per session, which for a publication reaching
 thousands of subscribers is most of the work. Render the frame once and give it to

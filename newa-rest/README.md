@@ -353,52 +353,7 @@ null and the request is not observed at all - not even the clock is read for it.
 
 ## Serving files
 
-Reading a file into a buffer to write it back out is the one thing `## Memory budget
-
-CPU divides itself: give a container fewer cores and everything simply gets slower. Memory does not - past the
-limit the process is dead, by `OutOfMemoryError` or by the cgroup killer. So bound it explicitly, from the
-largest exchange you are willing to serve, and refuse what does not fit:
-
-```
-peak  ~  N x (largest request + largest response)     in flight, direct
-       + workers x render buffer                      per event loop, max(64 KB, largest response x 1.5)
-N     =  (budget - workers x render buffer) / (largest request + largest response)
-```
-
-At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the render buffers are 4 x 12 MB =
-48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
-
-- **The request** - `HttpObjectAggregator` caps it and nothing else does:
-
-  ```java
-  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // largest request
-  ```
-
-- **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
-  yours, in the initializer:
-
-  ```java
-  if (open.incrementAndGet() > 46) { ch.close(); return; }            // AtomicInteger open
-  ch.closeFuture().addListener(f -> open.decrementAndGet());
-  ```
-
-- **Chunked responses** are not covered by `N`, so cap the cursors - a request past the cap is answered `503`
-  before its cursor is opened:
-
-  ```java
-  ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
-  ```
-
-- **Then size the process for it**:
-
-  ```
-  -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
-  -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError
-  ```
-
-Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
-
-## Large responses` above says not to do.
+Reading a file into a buffer to write it back out is the one thing `## Large responses` above says not to do.
 `FileServerHandler` sends it from the page cache to the socket instead - `sendfile(2)`, which Netty offers as
 `FileRegion` - so the bytes never enter the process. It is a handler of your pipeline, not a route of your
 API, and a request whose path it does not own is passed on untouched:
