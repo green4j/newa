@@ -8,3 +8,9 @@ include(
         'newa-example'
 )
 
+// Spring Boot 3, which the performance benchmark measures newa against, needs Java 17, while newa itself is
+// built and released on Java 11. Rather than hold the whole build to 17, the benchmark module simply is not
+// part of it on an older JDK: 'clean build' stays green on every JDK the CI matrix sweeps.
+if (JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_17)) {
+    include('newa-performance')
+}

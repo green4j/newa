@@ -80,7 +80,8 @@ public class ChunkedJsonRestHandler
     }
 
     private static final class Body extends RenderedResponseBody {
-        private final JsonGenerator generator = new JsonGenerator();
+        // compact, as everywhere else newa generates JSON
+        private final JsonGenerator generator = new JsonGenerator(false);
         private final ChunkedJsonRestHandle.Cursor cursor;
 
         private Body(final RestContext context,

@@ -101,6 +101,51 @@ problem into a GC one. Both are overridable: `newa.rest.baseBufferSize`,
 The rendered content is then copied once into a buffer from the channel's allocator - direct, so the transport
 writes it as is.
 
+## Memory budget
+
+CPU divides itself: give a container fewer cores and everything simply gets slower. Memory does not - past the
+limit the process is dead, by `OutOfMemoryError` or by the cgroup killer. So bound it explicitly, from the
+largest exchange you are willing to serve, and refuse what does not fit:
+
+```
+peak  ~  N x (largest request + largest response)     in flight, direct
+       + workers x render buffer                      per event loop, max(64 KB, largest response x 1.5)
+N     =  (budget - workers x render buffer) / (largest request + largest response)
+```
+
+At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the render buffers are 4 x 12 MB =
+48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
+
+- **The request** - `HttpObjectAggregator` caps it and nothing else does:
+
+  ```java
+  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // largest request
+  ```
+
+- **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
+  yours, in the initializer:
+
+  ```java
+  if (open.incrementAndGet() > 46) { ch.close(); return; }            // AtomicInteger open
+  ch.closeFuture().addListener(f -> open.decrementAndGet());
+  ```
+
+- **Chunked responses** are not covered by `N`, so cap the cursors - a request past the cap is answered `503`
+  before its cursor is opened:
+
+  ```java
+  ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
+  ```
+
+- **Then size the process for it**:
+
+  ```
+  -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
+  -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError
+  ```
+
+Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
+
 ## Large responses
 
 Everything but a chunked response is a `FullHttpResponse`: rendered in full, then written in one go. That
@@ -115,8 +160,7 @@ copying. Keeping it *low* is yours:
 - **Page.** A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
   client has to hold it too.
 - **Cap** the size in the handler and answer `413`/`507` rather than degrading quietly.
-- **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx`
-  does not bound them and the cgroup limit does; a container sized from the heap alone is killed for its RSS
+- **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx` does not bound them and the cgroup limit does; a container sized from the heap alone is killed for its RSS
   instead of failing with `OutOfMemoryError`. The limit has to cover heap plus direct memory plus metaspace,
   code cache and thread stacks:
 
@@ -307,6 +351,110 @@ is one of unboundedly many.
 `newObserver()` may return a shared instance instead, and then telling the requests apart is yours. Return
 null and the request is not observed at all - not even the clock is read for it.
 
+## Serving files
+
+Reading a file into a buffer to write it back out is the one thing `## Memory budget
+
+CPU divides itself: give a container fewer cores and everything simply gets slower. Memory does not - past the
+limit the process is dead, by `OutOfMemoryError` or by the cgroup killer. So bound it explicitly, from the
+largest exchange you are willing to serve, and refuse what does not fit:
+
+```
+peak  ~  N x (largest request + largest response)     in flight, direct
+       + workers x render buffer                      per event loop, max(64 KB, largest response x 1.5)
+N     =  (budget - workers x render buffer) / (largest request + largest response)
+```
+
+At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the render buffers are 4 x 12 MB =
+48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
+
+- **The request** - `HttpObjectAggregator` caps it and nothing else does:
+
+  ```java
+  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // largest request
+  ```
+
+- **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
+  yours, in the initializer:
+
+  ```java
+  if (open.incrementAndGet() > 46) { ch.close(); return; }            // AtomicInteger open
+  ch.closeFuture().addListener(f -> open.decrementAndGet());
+  ```
+
+- **Chunked responses** are not covered by `N`, so cap the cursors - a request past the cap is answered `503`
+  before its cursor is opened:
+
+  ```java
+  ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
+  ```
+
+- **Then size the process for it**:
+
+  ```
+  -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
+  -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError
+  ```
+
+Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
+
+## Large responses` above says not to do.
+`FileServerHandler` sends it from the page cache to the socket instead - `sendfile(2)`, which Netty offers as
+`FileRegion` - so the bytes never enter the process. It is a handler of your pipeline, not a route of your
+API, and a request whose path it does not own is passed on untouched:
+
+```
+Client --> HttpServerCodec --> HttpObjectAggregator --> FileServerHandler --> RestApiHandler
+```
+
+```java
+FileSet files = FileSet.builder()
+        .serve("/files", Paths.get("/var/www"),          // a tree: the rest of the path resolves under it
+                PathMask.including("img/**", "*.css")
+                        .and(PathMask.excluding("internal/**")))
+        .file("/download/report.pdf", Paths.get("/var/data/report.pdf"))   // one file, named here
+        .index("index.html")                             // without one, a directory is a 404
+        .build();
+
+pipeline.addLast(new FileServerHandler(files));          // in initChannel, before the API handler
+```
+
+- **Matching** is one walk of the path, longest prefix first, nothing copied out of it to compare.
+  `/files/img/logo.png` is `img/logo.png` under the root of `/files`.
+- **A filter is any rule about a file**, given the path relative to the root and the real `Path` it resolved
+  to - the name, the size, the owner, anything. A root takes one or none; `FileFilter.and(...)` makes two into
+  one. `PathMask` is the ready one: `?` a character, `*` a segment, `**` any number of them.
+- **Everything refused is refused the same way.** Missing, filtered out, outside the root, reached through
+  `..`, an encoded `..` or a symbolic link: all `404`, so asking cannot tell them apart. Encoded separators
+  are refused outright, filters are asked about the name the file system answers to rather than the one the
+  request spelled, and a file a more specific mapping serves has to be asked for by that mapping's path.
+- **The file is opened before a header is written**, and answered from the descriptor rather than the path.
+  One which cannot be opened is a `404` while that can still be said honestly; one replaced or unlinked
+  mid-response is still the file which was measured; one *truncated* after it was measured cannot keep the
+  `Content-Length` it promised, so the connection is closed rather than left never ending.
+- **`GET` and `HEAD`**, `405` with `Allow` otherwise. A single-range `Range` gets `206`, a range past the end
+  `416`, anything odder is ignored and the whole file sent. `Last-Modified` always, `If-Modified-Since` `304`.
+
+### Zero-copy, or not
+
+A `FileRegion` skips every outbound handler which wants the bytes, and not every channel can write one. The
+handler asks once per connection - none of this changes under a live channel - and otherwise reads the file
+through NIO, a chunk at a time and no faster than the peer takes it. Same response, different cost.
+
+`FileServerHandler.zeroCopySupported(channel)` is false when the channel is not a socket, or an `SslHandler`
+or an `HttpContentEncoder` stands **between the handler and the socket**. Only that stretch counts, which is
+what lets compressed API responses and zero-copy files share a pipeline - a compressor added behind the file
+handler never sees a file:
+
+```
+Client --> HttpServerCodec --> HttpObjectAggregator --> FileServerHandler --> HttpContentCompressor --> RestApiHandler
+```
+
+Put it in front instead and every file falls back to being pumped: correct, just slower. That path installs a
+`ChunkedWriteHandler` once per channel and reads on the event loop, so set
+`ChannelOption.WRITE_BUFFER_WATER_MARK` - that is where its backpressure comes from. A transfer whose peer
+stops taking it is given up on, either way, after `FileServerHandler.DEFAULT_STALL_TIMEOUT_MILLIS`.
+
 ## Runnable examples
 
 In `newa-example`, package `io.github.green4j.newa.example.rest`:
@@ -316,3 +464,5 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
   events.
+- **`files.FileServer`** - files from the page cache, filtered, with ranges and an index, and the REST API
+  behind them answering everything they do not own.

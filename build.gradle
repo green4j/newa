@@ -146,6 +146,8 @@ def restProject = project(':newa-rest')
 def websocketProject = project(':newa-websocket')
 def allProject = project(':newa-all')
 def exampleProject = project(':newa-example')
+// Absent on a JDK older than 17 - see settings.gradle. Everything about it is therefore conditional.
+def performanceProject = findProject(':newa-performance')
 
 subprojects {
     apply plugin: 'java-library'
@@ -200,7 +202,6 @@ configure([commonProject,
            websocketProject,
            exampleProject]) {
     apply plugin: 'checkstyle'
-    apply plugin: 'jacoco'
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
 
@@ -249,10 +250,19 @@ configure([commonProject,
         }
     }
 
+}
+
+// Coverage is for the published libraries only. The example servers exist to be read and run, and the
+// benchmark in newa-performance is a measuring instrument - a coverage figure over either would be a number
+// nobody should act on.
+configure([commonProject,
+           restProject,
+           websocketProject]) {
+    apply plugin: 'jacoco'
+
     check {
         dependsOn jacocoTestReport
     }
-
 }
 
 configure(commonProject) {
@@ -449,6 +459,144 @@ configure(exampleProject) {
         implementation commonProject
         implementation restProject
         implementation websocketProject
+    }
+}
+
+if (performanceProject != null) {
+    configure(performanceProject) {
+        // Checkstyle, but deliberately no jacoco and no maven-publish: this module is a measuring
+        // instrument, not a library. Its tests exist to stop the benchmark lying - the two servers still
+        // answer the same bytes, the transport is not half native - not to cover it.
+        apply plugin: 'checkstyle'
+
+        def perfJavaVersion = JavaVersion.toVersion(project.perfJavaVersion)
+
+        dependencies {
+            implementation restProject
+            implementation websocketProject
+            implementation platform("org.springframework.boot:spring-boot-dependencies:${springBootVersion}")
+            implementation 'org.springframework.boot:spring-boot-starter-web'
+            // the fan-out benchmark's two Spring servers: the raw handler and the STOMP broker both come
+            // from this one starter, which is how anybody adds websockets to a Boot application
+            implementation 'org.springframework.boot:spring-boot-starter-websocket'
+            implementation "org.hdrhistogram:HdrHistogram:${hdrHistogramVersion}"
+
+            // Native transports, so the benchmark is not held to what NIO can push. The classes live in the
+            // plain artifacts and the shared libraries in the classified ones; all four platforms are listed
+            // because nothing here is published and a benchmark should run wherever it is checked out.
+            implementation(groupDeps('io.netty', [
+                    'netty-transport-native-kqueue',
+                    'netty-transport-native-kqueue:osx-x86_64',
+                    'netty-transport-native-kqueue:osx-aarch_64',
+                    'netty-transport-native-epoll',
+                    'netty-transport-native-epoll:linux-x86_64',
+                    'netty-transport-native-epoll:linux-aarch_64'
+            ], nettyVersion))
+
+            testImplementation "org.junit.jupiter:junit-jupiter:${jupiterVersion}"
+            testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+            checkstyle "com.puppycrawl.tools:checkstyle:${checkstyleVersion}"
+        }
+
+        compileJava {
+            sourceCompatibility = perfJavaVersion
+            targetCompatibility = perfJavaVersion
+
+            options.release = perfJavaVersion.majorVersion as Integer
+            options.compilerArgs.addAll(['-Xlint:all', '-Werror'])
+            options.encoding = newaSourceEncoding
+            options.deprecation = true
+        }
+
+        compileTestJava {
+            sourceCompatibility = perfJavaVersion
+            targetCompatibility = perfJavaVersion
+
+            options.release = perfJavaVersion.majorVersion as Integer
+            options.encoding = newaSourceEncoding
+        }
+
+        checkstyle {
+            toolVersion = "${checkstyleVersion}"
+        }
+
+        test {
+            useJUnitPlatform()
+
+            testLogging {
+                events 'skipped', 'failed'
+                showStandardStreams = true
+                exceptionFormat = 'full'
+            }
+        }
+
+        // Nothing here is published, so the artifacts the other modules owe Maven Central are dead weight
+        // on every build.
+        [tasks.named('javadoc'), tasks.named('javadocJar'), tasks.named('sourcesJar')].each {
+            it.configure { enabled = false }
+        }
+
+        // -P properties are how a run is shaped; they reach the forked JVMs as system properties, and
+        // ServerProcess passes on whatever it was given.
+        def perfProperties = { JavaExec task ->
+            ['server', 'servers', 'target', 'mode', 'clients', 'workers', 'rate', 'warmup', 'duration',
+             'port', 'heap', 'transport', 'channels', 'message', 'outbound', 'lag'].each { name ->
+                def value = project.findProperty(name)
+                if (value != null) {
+                    task.systemProperty("newa.perf.${name}", value.toString())
+                }
+            }
+        }
+
+        tasks.register('restBenchmark', JavaExec) {
+            group = 'verification'
+            description = 'Runs the REST benchmark against every server, forking each one in its own JVM.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.rest.RestBenchmark'
+            perfProperties(it)
+        }
+
+        tasks.register('restServer', JavaExec) {
+            group = 'application'
+            description = 'Starts one REST server and leaves it running: -Pserver=newa|spring.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.rest.RestServerMain'
+            perfProperties(it)
+        }
+
+        tasks.register('restClient', JavaExec) {
+            group = 'verification'
+            description = 'Runs the load client alone against an already running server: -Ptarget=host:port.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.rest.RestClientMain'
+            perfProperties(it)
+        }
+
+        tasks.register('wsBenchmark', JavaExec) {
+            group = 'verification'
+            description = 'Runs the WebSocket fan-out benchmark against every server, forking each one.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.ws.WsBenchmark'
+            perfProperties(it)
+        }
+
+        tasks.register('wsServer', JavaExec) {
+            group = 'application'
+            description = 'Starts one publishing server and leaves it running: '
+                    + '-Pserver=newa|spring|spring-stomp.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.ws.WsServerMain'
+            perfProperties(it)
+        }
+
+        tasks.register('wsClient', JavaExec) {
+            group = 'verification'
+            description = 'Subscribes to an already running publishing server: -Ptarget=host:port.'
+            classpath = sourceSets.main.runtimeClasspath
+            mainClass = 'io.github.green4j.newa.performance.ws.WsClientMain'
+            perfProperties(it)
+        }
     }
 }
 

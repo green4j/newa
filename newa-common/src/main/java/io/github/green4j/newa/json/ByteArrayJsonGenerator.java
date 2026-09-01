@@ -5,7 +5,12 @@ import io.github.green4j.jelly.ClearableByteArrayBufferingWriter;
 import io.github.green4j.jelly.JsonGenerator;
 
 public class ByteArrayJsonGenerator {
-    private final JsonGenerator generator = new JsonGenerator();
+    /**
+     * Compact rather than green-jelly's indented default. Whitespace on the wire costs bandwidth on every
+     * response and buys nothing a client wants: a document meant to be read by a person is piped through
+     * something which formats it anyway.
+     */
+    private final JsonGenerator generator = new JsonGenerator(false);
     private final ClearableByteArrayBufferingWriter writer;
 
     public ByteArrayJsonGenerator(final ClearableByteArrayBufferingWriter writer) {

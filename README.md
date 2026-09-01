@@ -1,28 +1,35 @@
 ## Netty-based Web API (NeWA)
 
-Netty-based minimalistic REST and WebSocket server framework.
+Netty-based minimalistic REST and WebSocket server framework, built to serve a large number of clients 
+with perfect performance we can achieve with Netty framework.
+
+On the WebSocket side it also provides what a general purpose stack leaves to the application: channels and
+subscriptions - a subscriber joins an entity, is given its snapshot (optionally), and is then promised every publication
+after it, in order and with no holes, with an explicit policy for one which cannot keep up. This feature allows to build
+highly customizable and well-looking event subscription protocols.
+
+### Against Spring Boot, at both sides' defaults
+
+Measured in [newa-performance](newa-performance/README.md), with each side written the way its own framework
+is normally written - newa rendering into a reused buffer, Spring returning objects for Jackson to serialise.
+
+- **REST**: about **2.9x** as many requests per second of server processor time, at a seventh of the allocation
+  per request with programming style canonical for the project. At 20 000 req/s offered, p99 is 191 us 
+  against 627 us on loopback interface.
+- **WebSocket fan-out**: a higher sustained rate per subscription, and the gap widens with the number of
+  subscribers. From a hundred subscribers to a thousand newa goes from 250 000 to 300 000 events total a second
+  while Spring's own handler falls from 200 000 to under 120 000 - 2 500 events a second per subscription
+  against 2 000, and 300 against 121 on loopback interface.
+- **STOMP**: Spring's simple broker is the only subscription mechanism it ships, and it delivers an ordered
+  stream only with its outbound channel pinned to one thread, which caps it at 100 000 events total a second
+  whatever the number of subscribers on loopback interface. Left at Boot's default pool it is faster and delivers a destination out
+  of order, which is not a subscription at all.
 
 ### Module documentation
 
 - [newa-rest/README.md](newa-rest/README.md) - HTTP REST routing and handlers on Netty.
 - [newa-websocket/README.md](newa-websocket/README.md) - WebSocket sessions, broadcasting and subscription channels on Netty.
+- [newa-performance/README.md](newa-performance/README.md) - the benchmarks the numbers above come from.
 
 Other Gradle modules: `newa-common` (shared utilities used by REST and WebSocket), `newa-all` (combined artifact), and
 `newa-example` (runnable demo servers).
-
-### REST Server
-
-```
-io.github.green4j.newa.example.rest.hello.HelloRestServer
-```
-
-### Websocket Server
-
-```
-io.github.green4j.newa.example.ws.echo.EchoWsServer
-
-io.github.green4j.newa.example.ws.broadcast.BroadcastWsServer
-
-io.github.green4j.newa.example.ws.subscriptions.SubscriptionsWsServer
-
-```

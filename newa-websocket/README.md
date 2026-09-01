@@ -151,19 +151,6 @@ publications of one entity. Two concurrent publishers of the same entity have no
 nothing here can invent one. `forEachSession` walks the subscribers without numbering anything - for
 inspection and administrative sends, not for state.
 
-### Housekeeping
-
-`getOrCreateEntitySubscriptions`, `getEntitySubscriptions`, `removeEntitySubscriptions`, `isSubscribed`,
-`forEachSubscription`, `isEmpty`, `numberOfSubscribedSessions`. Lookups and iteration take no lock; creating
-or removing an entity takes the one of the channel, and subscribing takes a short one of the entity, which is
-why entities are best created up front and publishing never waits for either.
-`ClientSessionSubscriptions.numberOfSubscribedEntities()` answers the same question from the session's side.
-
-A session keeps its own registry of the entities it is subscribed to, and `EntitySubscriptions` maintains it:
-`EntitySubscriptions.add(session)` on its own - for an application which owns its routing and wants no channel
-in the way - is unsubscribed when the session goes away just as a channel subscription is, and is re-sent its
-snapshot when the session catches up.
-
 ## Slow consumers
 
 A frame is dropped by the transport the moment the channel is over its write watermark. What happens next is
@@ -250,7 +237,78 @@ too, and then telling the sessions apart is yours.
 
 **Watermarks are the real knob.** `WRITE_BUFFER_WATER_MARK` decides how much a session may fall behind before
 it counts as slow - that is where the memory a slow peer costs is bounded, and where `withSkipOnBackPressure`
-starts to matter. Everything else here is downstream of it.
+starts to matter. Everything else here is downstream of it. There is no queue of ours behind it: a frame the
+channel cannot take is never queued, it is released, and the session is closed or marked lagging there and
+then.
+
+**Size it in time, not in bytes.** How much room a number buys depends entirely on what a session subscribed
+to: 64 KB is a second and a half of a subscriber taking 200 messages a second and fourteen milliseconds of
+one taking 20 000. Decide instead how far behind a subscriber may be and still be worth serving - call it the
+lag - and derive the mark from the stream that subscriber is actually sent:
+
+```
+high = lag (seconds) x SUM over the entities one session subscribes to of (publications/s x frame bytes)
+low  = high / 2
+```
+
+**Worked example.** A hundred subscribers, one entity published 2 000 times a second, frames of 200 bytes, and
+a decision that a subscriber more than 100 ms behind is no longer being served:
+
+```
+one session is sent   2 000 x 200            = 400 KB/s
+high                  0.1 x 400 KB/s         =  40 KB   -> 200 frames of slack
+low                   high / 2               =  20 KB
+```
+
+The number of subscribers does not enter the mark: it is set by the stream *one* session is sent, and a
+session subscribing to several entities is sent the sum of them.
+
+**What that costs the process.** The frames waiting for a session are direct memory - Netty writes from direct
+buffers whatever the buffer you published was - and how much of it depends on whether laggards share a stream:
+
+```
+one entity, everyone on it     the pending frames are shared, so the bound is one session's
+                               high, about 40 KB whatever the number of subscribers
+an entity per subscriber       the pending sets are disjoint: high x sessions, 100 x 40 KB = 4 MB
+```
+
+Give `-XX:MaxDirectMemorySize` the disjoint figure with room to spare unless you know the subscriptions
+overlap, and remember the floor: the pooled allocator reserves in chunks (4 MB in Netty 4.2) across roughly
+two arenas per core, so a small budget still costs that much. On the heap the same backlog costs only its
+bookkeeping - one duplicate object per pending frame per session, tens of bytes each, so the 20 000 duplicates
+of the worst case above are a couple of megabytes.
+
+The lag is therefore the memory budget as well as the deadline, which is the point of choosing it rather than
+a byte count: raising it does not make a server keep up, it makes a subscriber which cannot keep up survive
+longer and hold that much more while it does.
+
+**Work it the other way round for a container.** CPU divides itself - fewer cores only means slower - while
+memory past the limit is a dead process, by `OutOfMemoryError` or by the cgroup killer, and nothing degrades
+automatically. So fix the two numbers you control and derive the rest:
+
+```
+high      = lag x (publications/s x frame bytes)         per session, from the deadline you chose
+peak      = high x streams that can lag at once          one entity: high. One per session: high x sessions
+sessions  = (budget - peak) / per-session overhead       what is left over caps the connections
+```
+
+The example above - 100 sessions, 2 000 x 200 B, 100 ms - needs 40 KB per session and 4 MB in the worst case.
+What enforces it - the library bounds what one session may hold, not how many sessions there are:
+
+```java
+bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+        new WriteBufferWaterMark(20 * 1024, 40 * 1024));              // low = high / 2
+
+if (open.incrementAndGet() > 100) { ch.close(); return; }             // AtomicInteger open
+ch.closeFuture().addListener(f -> open.decrementAndGet());
+```
+
+```
+-XX:MaxDirectMemorySize=64m -Dio.netty.maxDirectMemory=67108864
+-XX:+ExitOnOutOfMemoryError
+```
+
+Refusing a connection is the cheap failure.
 
 **Encode a fan-out once.** `send(CharSequence)` encodes UTF-8 per session, which for a publication reaching
 thousands of subscribers is most of the work. Render the frame once and give it to
