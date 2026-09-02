@@ -1,5 +1,30 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 package io.github.green4j.newa.rest.files;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.rest.ErrorHandler;
 import io.github.green4j.newa.rest.FullHttpResponseContent;
 import io.github.green4j.newa.rest.HttpApiObserver;
@@ -89,6 +114,12 @@ import static io.netty.handler.codec.http.HttpHeaderValues.KEEP_ALIVE;
  * Serves {@code GET} and {@code HEAD}, answers {@code 405} to anything else on a path it owns, honours a
  * single-range {@code Range} and an {@code If-Modified-Since}, and answers a file it may not serve exactly as
  * it answers one which is not there.
+ * <p>
+ * A channel which fails ends here: the cause goes to the {@link ChannelErrorHandler} this was given and the
+ * connection is closed, which is what releases a response still on its way out - a queued {@link FileRegion},
+ * or a body a {@link ChunkedWriteHandler} is still pumping, and the open file in either of them. The event is
+ * not passed on, so a handler behind this one is never told about it twice - give both of them the same
+ * {@link ChannelErrorHandler} and one failure is reported once, wherever it was caught.
  */
 public class FileServerHandler extends ChannelInboundHandlerAdapter {
     /**
@@ -157,6 +188,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
     private final FileSet files;
     private final ErrorHandler errorHandler;
+    private final ChannelErrorHandler channelErrorHandler;
     private final HttpApiObserverFactory observerFactory;
     private final int chunkSize;
     private final int stallTimeoutMillis;
@@ -173,34 +205,41 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param files this handler owns the paths of
      */
     public FileServerHandler(final FileSet files) {
-        this(files, new TextErrorHandler(), null, DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
+        this(files, new TextErrorHandler(), ChannelErrorHandler.printingToStdErr(), null,
+                DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
     }
 
     /**
      * @param files this handler owns the paths of
      * @param errorHandler rendering what a refused request is answered with
+     * @param channelErrorHandler told about a channel which failed, or null to say nothing
      * @param observerFactory asked for an observer per request, or null to observe nothing
      */
     public FileServerHandler(final FileSet files,
                              final ErrorHandler errorHandler,
+                             final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory) {
-        this(files, errorHandler, observerFactory, DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
+        this(files, errorHandler, channelErrorHandler, observerFactory,
+                DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
     }
 
     /**
      * @param files this handler owns the paths of
      * @param errorHandler rendering what a refused request is answered with
+     * @param channelErrorHandler told about a channel which failed, or null to say nothing
      * @param observerFactory asked for an observer per request, or null to observe nothing
      * @param chunkSize a file is read in when it cannot be sent from the page cache
      * @param stallTimeoutMillis a transfer may go without a byte reaching the peer, zero to wait forever
      */
     public FileServerHandler(final FileSet files,
                              final ErrorHandler errorHandler,
+                             final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory,
                              final int chunkSize,
                              final int stallTimeoutMillis) {
         this.files = files;
         this.errorHandler = errorHandler;
+        this.channelErrorHandler = channelErrorHandler;
         this.observerFactory = observerFactory;
         this.chunkSize = chunkSize;
         this.stallTimeoutMillis = stallTimeoutMillis;
@@ -246,6 +285,27 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
             answer(ctx, request);
         } finally {
             ReferenceCountUtil.release(msg);
+        }
+    }
+
+    /**
+     * Ends the connection whatever went wrong with it. A response half written cannot be taken back and the
+     * next one on the same connection would be framed against the wrong offset, so there is nothing to
+     * salvage here; and closing is what releases what the response still holds - the region or the body being
+     * pumped, and the file open inside it.
+     *
+     * @param ctx of this handler
+     * @param cause the channel failed with
+     */
+    @Override
+    public void exceptionCaught(final ChannelHandlerContext ctx,
+                                final Throwable cause) {
+        try {
+            if (channelErrorHandler != null) {
+                channelErrorHandler.onError(ctx.channel(), cause);
+            }
+        } finally {
+            ctx.close();
         }
     }
 

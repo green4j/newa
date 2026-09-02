@@ -1,3 +1,27 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 package io.github.green4j.newa.rest.handles;
 
 import com.sun.management.OperatingSystemMXBean;
@@ -13,14 +37,14 @@ import java.lang.management.RuntimeMXBean;
 import java.util.Comparator;
 import java.util.List;
 
-import static io.github.green4j.newa.rest.handles.Json_JvmInfo.getCpuLoad;
-import static io.github.green4j.newa.rest.handles.Json_JvmInfo.getFreeMemorySize;
-import static io.github.green4j.newa.rest.handles.Json_JvmInfo.getTotalMemorySize;
+import static io.github.green4j.newa.rest.handles.JsonJvmInfo.getCpuLoad;
+import static io.github.green4j.newa.rest.handles.JsonJvmInfo.getFreeMemorySize;
+import static io.github.green4j.newa.rest.handles.JsonJvmInfo.getTotalMemorySize;
 import static io.github.green4j.newa.rest.handles.Util.formatUtcToIso8601;
 import static io.github.green4j.newa.rest.handles.Util.toDuration;
 import static io.github.green4j.newa.rest.handles.Util.toMemorySize;
 
-public class Txt_JvmInfo implements TxtRestHandle {
+public class TxtJvmInfo implements TxtRestHandle {
 
     @Override
     public void doHandle(final RestContext context,

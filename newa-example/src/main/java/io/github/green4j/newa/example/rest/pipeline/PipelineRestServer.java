@@ -1,5 +1,30 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 package io.github.green4j.newa.example.rest.pipeline;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.JsonErrorHandler;
 import io.github.green4j.newa.rest.RestApi;
@@ -8,7 +33,7 @@ import io.github.green4j.newa.rest.RestApiHandler;
 import io.github.green4j.newa.rest.RestServer;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
-import io.github.green4j.newa.rest.handles.Json_Help;
+import io.github.green4j.newa.rest.handles.JsonHelp;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -127,15 +152,18 @@ public class PipelineRestServer {
         // /v1/zero-copy is where its cost shows up
         pipeline.addLast(new HttpContentCompressor());
 
-        pipeline.addLast(new FileServerHandler(files));
+        // one for both: whichever of them catches a failed channel closes it and reports it exactly once
+        final ChannelErrorHandler channelErrors = (channel, cause) -> System.err.printf(
+                "An error %s in the channel: %s%n", cause.getMessage(), channel);
+
+        pipeline.addLast(new FileServerHandler(files, new JsonErrorHandler(), channelErrors, null));
 
         // no ChunkedWriteHandler: the first response which needs one puts it in front of the handler below
         pipeline.addLast(
                 new RestApiHandler(
                         api,
                         new JsonErrorHandler(),
-                        (channel, cause) -> System.err.printf(
-                                "An error %s in the channel: %s%n", cause.getMessage(), channel)
+                        channelErrors
                 )
         );
     }
@@ -162,7 +190,7 @@ public class PipelineRestServer {
                                 ? "files are sent with sendfile(2)"
                                 : "files are pumped through NIO"));
 
-        return apiBuilder.buildWithHelp(Json_Help.factory());
+        return apiBuilder.buildWithHelp(JsonHelp.factory());
     }
 
     private static Path createContent() throws IOException {

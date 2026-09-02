@@ -1,9 +1,33 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 package io.github.green4j.newa.rest.handles;
 
 import com.sun.management.ThreadMXBean;
-import io.github.green4j.jelly.JsonGenerator;
-import io.github.green4j.newa.rest.JsonRestHandle;
 import io.github.green4j.newa.rest.RestContext;
+import io.github.green4j.newa.rest.TxtRestHandle;
+import io.github.green4j.newa.text.LineAppendable;
 
 import java.lang.management.LockInfo;
 import java.lang.management.ManagementFactory;
@@ -15,22 +39,22 @@ import java.util.Map;
 import static io.github.green4j.newa.rest.handles.Util.inSleep;
 import static io.github.green4j.newa.rest.handles.Util.toDuration;
 
-public class Json_JvmThreadDump implements JsonRestHandle {
+public class TxtJvmThreadDump implements TxtRestHandle {
 
     @Override
     public void doHandle(final RestContext context,
-                         final JsonGenerator output) {
+                         final LineAppendable output) {
+
         final ThreadMXBean threadMXBean =
                 (ThreadMXBean) ManagementFactory.getThreadMXBean(); // unchecked
         final ThreadInfo[] threadInfos = threadMXBean.dumpAllThreads(true, true);
         final Map<Long, String> threadDescriptions = new HashMap<>();
 
-        output.startObject();
+        output.append("threads [").append(Integer.toString(threadInfos.length)).appendln(']');
 
-        output.objectMember("threads");
-        output.startArray();
+        for (int i = 0; i < threadInfos.length; i++) {
+            final ThreadInfo threadInfo = threadInfos[i];
 
-        for (final ThreadInfo threadInfo : threadInfos) {
             final Thread.State ts = threadInfo.getThreadState();
             final StackTraceElement[] stack = threadInfo.getStackTrace();
 
@@ -72,61 +96,55 @@ public class Json_JvmThreadDump implements JsonRestHandle {
                 }
             }
 
-            output.startObject();
-            output.objectMember("thread");
-            output.stringValue(sb, true);
+            output.tab(1).append(sb);
 
             threadDescriptions.put(threadInfo.getThreadId(), sb.toString());
 
             switch (ts) {
                 case BLOCKED:
-                    output.objectMember("blockedCount");
-                    output.numberValue(threadInfo.getBlockedCount());
+                    output.append(" blockedCount: ");
+                    output.append(Long.toString(threadInfo.getBlockedCount()));
                     break;
                 case WAITING:
                 case TIMED_WAITING:
-                    output.objectMember("waitedCount");
-                    output.numberValue(threadInfo.getWaitedCount());
+                    output.append(" waitedCount: ");
+                    output.append(Long.toString(threadInfo.getWaitedCount()));
                     break;
                 default:
                     break;
             }
 
-            addStackTrace(output, threadInfo, sb);
+            output.appendln();
 
-            output.endObject();
+            addStackTrace(output, threadInfo, sb);
         }
-        output.endArray();
 
         final long[] dlt = threadMXBean.findDeadlockedThreads();
-        output.objectMember("deadlocks");
-        output.startArray();
+        output.append("deadlocks [").append(
+                dlt != null ? Integer.toString(dlt.length) : "0"
+        ).append("]\n");
         if (dlt != null) {
             for (final long tid : dlt) {
                 final String td = threadDescriptions.get(tid);
                 if (td == null) {
-                    output.stringValue("#" + tid);
+                    output.tab(1).append("#").appendln(Long.toString(tid));
                     continue;
                 }
-                output.stringValue(td, true);
+                output.tab(1).appendln(td);
             }
         }
-        output.endArray();
-        output.endObject();
     }
 
-    private static void addStackTrace(final JsonGenerator to,
+    private static void addStackTrace(final LineAppendable to,
                                       final ThreadInfo threadInfo,
                                       final StringBuilder sb) {
         final Thread.State ts = threadInfo.getThreadState();
         final LockInfo lock = threadInfo.getLockInfo();
 
-        to.objectMember("stack");
-        to.startObject(); // stack
-        to.objectMember("at");
-        to.startArray();
-
         final StackTraceElement[] stackTrace = threadInfo.getStackTrace();
+
+        to.tab(2).append("stack [").append(Integer.toString(stackTrace.length)).appendln(']');
+
         for (int i = 0; i < stackTrace.length; i++) {
             final StackTraceElement ste = stackTrace[i];
             sb.setLength(0);
@@ -162,19 +180,15 @@ public class Json_JvmThreadDump implements JsonRestHandle {
                     sb.append(" - locked ").append(mi);
                 }
             }
-            to.stringValue(sb, true);
+            to.tab(3).appendln(sb);
         }
-        to.endArray();
 
         final LockInfo[] locks = threadInfo.getLockedSynchronizers();
         if (locks.length > 0) {
-            to.objectMember("lockedSynchronizers");
-            to.startArray();
+            to.tab(2).append("lockedSynchronizers [").append(Integer.toString(locks.length)).appendln("]");
             for (final LockInfo li : locks) {
-                to.stringValue(li.toString(), true);
+                to.tab(3).appendln(li.toString());
             }
-            to.endArray();
         }
-        to.endObject(); // stack
     }
 }

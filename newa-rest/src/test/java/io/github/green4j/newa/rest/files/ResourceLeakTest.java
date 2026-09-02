@@ -1,3 +1,27 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 package io.github.green4j.newa.rest.files;
 
 import com.sun.management.UnixOperatingSystemMXBean;
@@ -105,6 +129,43 @@ class ResourceLeakTest {
         }
     }
 
+    /**
+     * Fails the channel behind the request, the way anything in front of the file handler would: the handler
+     * closes the connection itself, and whatever the response opened has to go with it.
+     */
+    private static final class Failer extends ChannelInboundHandlerAdapter {
+        @Override
+        public void channelRead(final ChannelHandlerContext ctx,
+                                final Object msg) {
+            ctx.fireChannelRead(msg);
+            // an IOException, so that the default channel error handler stays quiet about a peer going away
+            ctx.fireExceptionCaught(new IOException("gone"));
+        }
+    }
+
+    /**
+     * The response is written and then the channel fails under it.
+     *
+     * @param files to serve
+     * @param request to answer before the failure
+     */
+    private void runFailing(final FileSet files,
+                            final HttpRequest request) {
+        final EmbeddedChannel channel = new EmbeddedChannel(new Failer(), new FileServerHandler(files));
+        try {
+            channel.writeInbound(request);
+            channel.flushOutbound();
+            Object outbound;
+            while ((outbound = channel.readOutbound()) != null) {
+                ReferenceCountUtil.release(outbound);
+            }
+        } catch (final Exception expectedOnAClosedChannel) {
+            // the failure took the connection with it, which is the point of that run
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
     private HttpRequest request(final HttpMethod method,
                                 final String uri) {
         return new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, uri);
@@ -138,6 +199,9 @@ class ResourceLeakTest {
             // and the branch where the response cannot be written at all: whatever the handler opened for it
             // is its own to close, because nothing downstream ever got hold of it
             run(files, request(HttpMethod.GET, "/files/img/a.bin"), true);
+
+            // and the one where the channel fails with the response already on its way out
+            runFailing(files, request(HttpMethod.GET, "/files/img/a.bin"));
         }
     }
 
@@ -148,7 +212,7 @@ class ResourceLeakTest {
         hammer(files, 5); // whatever the first run of each branch opens once, it opens before the count
 
         final long before = openFiles();
-        hammer(files, REQUESTS / 11);
+        hammer(files, REQUESTS / 12);
         final long after = openFiles();
 
         Assertions.assertTrue(after - before < TOLERANCE,

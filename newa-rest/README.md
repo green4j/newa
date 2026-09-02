@@ -21,7 +21,7 @@ builder.getJson("/hello/{name}", (context, output) ->
         output.stringValue("Hello " + context.pathParameters().valueRequired("name"))
 ).withPathParameterDescriptions("name - Greeting target");
 
-RestApi api = builder.build();                       // or buildWithHelp(Json_Help.factory())
+RestApi api = builder.build();                       // or buildWithHelp(JsonHelp.factory())
 
 new Life().run(() -> RestServer.start(9009, api));   // and it is serving
 ```
@@ -79,7 +79,7 @@ nothing else for the handle to hold.
 ```java
 final Life life = new Life();
 
-apiBuilder.postJson("/shutdown", new Json_Execute(() -> life.end("Called by REST API")));
+apiBuilder.postJson("/shutdown", new JsonExecute(() -> life.end("Called by REST API")));
 
 life.run(() -> RestServer.of(apiBuilder.build()).start(9009));
 ```
@@ -468,6 +468,12 @@ FileSet files = FileSet.builder()
 RestServer.of(api).withFiles(files);                     // put in front of the API handler
 pipeline.addLast(new FileServerHandler(files));          // the same by hand, in initChannel
 ```
+
+A channel which fails ends at whichever handler catches it: the file handler reports the cause to its own
+`ChannelErrorHandler` and closes the connection, which is what releases a file still being written. It does
+not pass the event on, so assembling by hand means giving the file handler and the API handler the same
+`ChannelErrorHandler` - `RestServer` does that for you, and `new FileServerHandler(files)` alone prints
+what is not an `IOException` to stderr.
 
 - **Matching** is one walk of the path, longest prefix first, nothing copied out of it to compare.
   `/files/img/logo.png` is `img/logo.png` under the root of `/files`.

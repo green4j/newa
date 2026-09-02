@@ -13,6 +13,12 @@
         <property name="acceptOnMatch" value="false"/>
     </module>
 
+    <!-- every .java file carries the MIT notice; the template is the single source of truth for it -->
+    <module name="Header">
+        <property name="headerFile" value="${config_loc}/java.header"/>
+        <property name="fileExtensions" value="java"/>
+    </module>
+
     <module name="FileTabCharacter">
         <property name="eachLine" value="true"/>
     </module>
@@ -59,9 +65,7 @@
 
         <module name="StaticVariableName"/>
 
-        <module name="TypeName">
-            <property name="format" value="^[A-Z][a-zA-Z0-9_]*$"/>
-        </module>
+        <module name="TypeName"/>
 
         <module name="RedundantImport"/>
 
