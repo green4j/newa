@@ -1,32 +1,24 @@
 package io.github.green4j.newa.example.rest.hello;
 
-import io.github.green4j.newa.lang.Work;
-import io.github.green4j.newa.lang.Worker;
-import io.github.green4j.newa.rest.JsonErrorHandler;
+import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
-import io.github.green4j.newa.rest.RestApiHandler;
+import io.github.green4j.newa.rest.RestServer;
 import io.github.green4j.newa.rest.handles.Json_Execute;
 import io.github.green4j.newa.rest.handles.Json_Help;
 import io.github.green4j.newa.rest.handles.Json_JvmInfo;
 import io.github.green4j.newa.rest.handles.Json_JvmThreadDump;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.WriteBufferWaterMark;
-import io.netty.channel.nio.NioIoHandler;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpContentCompressor;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
+import io.github.green4j.newa.server.NettyServer;
+import io.github.green4j.newa.server.NettyServerBuilder;
 
-import java.net.InetAddress;
-
+/**
+ * The api is the whole of this example: {@link RestServer} assembles the pipeline and
+ * {@link NettyServerBuilder} the bootstrap under it, so the only lines here which are not routes are the
+ * ones that start it.
+ * <p>
+ * See {@code rest.pipeline.PipelineRestServer} for the same server with both written out by hand, which is
+ * what you want as soon as the pipeline itself needs changing.
+ */
 public class HelloRestServer {
     public static final String API_NAME = "Hello API";
     public static final String API_DESCRIPTION = "My Hello API Server";
@@ -38,7 +30,8 @@ public class HelloRestServer {
     public static final String LOCAL_SERVER_ADDRESS = String.format("http://%s:%d", LOCAL_IFC, PORT);
 
     public static void main(final String[] args) throws Exception {
-        final Worker worker = new Worker();
+        // named for its role rather than its type: "end.end(...)" below would read badly
+        final Life shutdown = new Life();
 
         final RestApiBuilder apiBuilder = new RestApiBuilder(
                 API_NAME,
@@ -62,9 +55,7 @@ public class HelloRestServer {
         apiBuilder.postJson(
                 "/shutdown",
                 new Json_Execute(
-                        () -> worker
-                                .stopper()
-                                .stop("Called by REST API")
+                        () -> shutdown.end("Called by REST API")
                 )
         );
 
@@ -80,70 +71,22 @@ public class HelloRestServer {
 
         final RestApi api = apiBuilder.buildWithHelp(Json_Help.factory());
 
-        final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        shutdown.run(() -> {
+            final NettyServer server = RestServer.of(api)
+                    .withCompression()
+                    .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-        final ServerBootstrap bootstrap = new ServerBootstrap();
+            System.out.printf(
+                    "Server started and listening on %s. Help is available on %s%s%n",
+                    LOCAL_SERVER_ADDRESS,
+                    LOCAL_SERVER_ADDRESS,
+                    api.helpPath()
+            );
 
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                // a slow client must not let responses pile up in the channel's outbound buffer unnoticed:
-                // past the high mark the channel reports itself unwritable, which is the signal a handler
-                // producing large responses is expected to respect
-                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
-                        new WriteBufferWaterMark(32 * 1024, 64 * 1024))
-                .childHandler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(final Channel ch) {
-                        final ChannelPipeline pipeline = ch.pipeline();
-                        pipeline.addLast(new HttpServerCodec());
-                        pipeline.addLast(new HttpContentCompressor());
-                        pipeline.addLast(new HttpObjectAggregator(
-                                65536,
-                                true
-                        ));
-                        pipeline.addLast(
-                                new RestApiHandler(
-                                        api,
-                                        new JsonErrorHandler(),
-                                        (channel, cause) -> {
-                                            System.err.printf(
-                                                    "An error %s in the channel: %s%n",
-                                                    cause.getMessage(),
-                                                    channel.toString());
-                                            cause.printStackTrace(System.err);
-                                        }
-                                )
-                        );
-                    }
-                });
+            // End owns the lifecycle: it parks this thread until the end is asked for, adds the JVM shutdown
+            // hook, and closes the server here rather than on the event loop the /shutdown endpoint runs on
 
-        worker.doWork(new Work() {
-            @Override
-            public ChannelFuture doWork() throws Exception {
-                final ChannelFuture bindFuture = bootstrap.bind(
-                                InetAddress.getByName(LOCAL_IFC),
-                                PORT
-                        )
-                        .sync();
-
-                System.out.printf(
-                        "Server started and listening on %s. Help is available on %s%s%n",
-                        LOCAL_SERVER_ADDRESS,
-                        LOCAL_SERVER_ADDRESS,
-                        api.helpPath()
-                );
-
-                return bindFuture
-                        .channel()
-                        .closeFuture();
-            }
-
-            @Override
-            public void close() {
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
+            return server;
         });
 
         System.out.println("Server stopped");

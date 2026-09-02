@@ -1,11 +1,16 @@
 # newa-rest
 
-HTTP REST API routing and handlers built on Netty. The library supplies routing and response types only: your
-application owns `ServerBootstrap`, the event loop groups and the pipeline.
+HTTP REST API routing and handlers built on Netty.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> [HttpContentCompressor] --> RestApiHandler
+Client --> HttpServerCodec --> HttpObjectAggregator --> [FileServerHandler] --> [HttpContentCompressor]
+           --> RestApiHandler
 ```
+
+`RestServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is
+one line. Neither hides anything: they are made of the same public handlers, and the pipeline and the
+bootstrap are still yours to take over the moment either needs changing - see [Starting a
+server](#starting-a-server).
 
 ## Getting started
 
@@ -18,11 +23,83 @@ builder.getJson("/hello/{name}", (context, output) ->
 
 RestApi api = builder.build();                       // or buildWithHelp(Json_Help.factory())
 
-pipeline.addLast(new RestApiHandler(api, new JsonErrorHandler(), channelErrorHandler));
+new Life().run(() -> RestServer.start(9009, api));   // and it is serving
 ```
 
 `getJson` / `getTxt` / `postJson` / ... register handles which render a response and return. `get` / `post` /
 ... register a full `RestHandle`, which is given the `Result` and may finish it later.
+
+## Starting a server
+
+`RestServer.start(port, api)` is the whole server. Anything it needs told is a `with...` on the builder form,
+and everything below the pipeline stays on `NettyServerBuilder`:
+
+```java
+NettyServer server = RestServer.of(api)
+        .withCompression()                       // off by default
+        .withFiles(fileSet)                      // served in front of the api
+        .withResponseChunks(chunks)              // see Chunked responses
+        .withObservers(observers)                // see Observing
+        .withErrorHandler(new JsonErrorHandler())
+        .withChannelErrorHandler(ChannelErrorHandler.printingToStdErr())
+        .withMaxContentLength(65536)
+        .withHandler(() -> new AuthFilter())     // in front of the api handler, one per channel
+        .start(new NettyServerBuilder()
+                .port(9009)
+                .host("127.0.0.1")               // every interface by default
+                .workerThreads(8)                // a worker per core by default
+                .writeBufferWaterMark(32 * 1024, 64 * 1024)
+                .transport(Transport.auto()));   // kqueue, epoll, or NIO
+```
+
+`withHandler` puts a handler *in front of* `RestApiHandler`, which is the only place one can still act:
+the api handler answers every request it sees, with a 404 when nothing routed, so nothing behind it would
+ever run.
+
+`NettyServer` is what you get back, and it is an `AutoCloseable` and nothing more: `port()` (the one thing
+worth having after binding to port 0), `channel()`, `workerGroup()` for periodic work on the loops the
+connections already live on, and `close()`.
+
+What runs it is `Life`. It opens the server, parks the calling thread until the end is asked for, closes it,
+and registers a JVM shutdown hook for the length of the run:
+
+```java
+new Life().run(() -> RestServer.start(9009, api));
+```
+
+Note that the server is **opened by** `run`, not handed to it. That is what leaves no window: there is no
+instant at which the server is accepting requests and nothing yet owns it.
+
+### Ending it from a request
+
+A `Life` is an `Ender` from the moment it is constructed, and that is the whole point: a `/shutdown` endpoint
+has to be registered before the api is built, and the server does not exist until after that, so there is
+nothing else for the handle to hold.
+
+```java
+final Life life = new Life();
+
+apiBuilder.postJson("/shutdown", new Json_Execute(() -> life.end("Called by REST API")));
+
+life.run(() -> RestServer.of(apiBuilder.build()).start(9009));
+```
+
+`end(...)` does no I/O: it releases `run` and returns, so the request handler is free immediately and the
+closing happens on the thread which called `run`. That is not a detail. Closing a server from one of its own
+event loops - which is where a request handler runs - makes that loop wait for a shutdown it is itself
+holding up, and costs the full timeout every time.
+
+It is also safe before the server is open, and idempotent: asked for first, nothing is started at all; asked
+for while the server is being opened, it is honoured the instant opening returns.
+
+`Transport.auto()` uses kqueue on macOS and epoll on Linux when the matching Netty artifact is on the
+classpath, and falls back to NIO in silence when it is not - nothing reports that you meant to run on epoll
+and did not, so print `Transport.auto().name()` at startup if it matters. `Transport.nio()` asks for the
+portable one on purpose, which is also what a GraalVM native image wants.
+
+To keep this pipeline but bootstrap it yourself, hand `RestServer.pipeline()` to a `ServerBootstrap` of your
+own. To change the pipeline, write it out - `rest.pipeline.PipelineRestServer` in `newa-example` is that,
+and says which four things made it worth doing.
 
 ## Routing
 
@@ -119,11 +196,13 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
 - **The request** - `HttpObjectAggregator` caps it and nothing else does:
 
   ```java
-  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // largest request
+  RestServer.of(api).withMaxContentLength(2 * 1024 * 1024);            // largest request
+  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the same, by hand
   ```
 
 - **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
-  yours, in the initializer:
+  yours, in the initializer (which is one reason to write the pipeline out rather than take
+  `RestServer.pipeline()`):
 
   ```java
   if (open.incrementAndGet() > 46) { ch.close(); return; }            // AtomicInteger open
@@ -276,9 +355,19 @@ ResponseChunks chunks = ResponseChunks.builder()
         .maxOpenCursors(256)      // unlimited by default
         .build();
 
+RestServer.of(api)
+        .withResponseChunks(chunks)
+        .start(new NettyServerBuilder()
+                .port(9009)
+                .writeBufferWaterMark(32 * 1024, 64 * 1024));   // where the backpressure is read from
+```
+
+The same by hand, if the pipeline is yours:
+
+```java
 pipeline.addLast(new RestApiHandler(api, errorHandler, channelErrorHandler, chunks, observers));
 
-bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,   // where the backpressure is read from
+bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
         new WriteBufferWaterMark(32 * 1024, 64 * 1024));
 ```
 
@@ -299,7 +388,8 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,   // where the back
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per request, made by
-a factory:
+a factory - `RestServer.withObservers(factory)`, or the `RestApiHandler` constructor which takes one. The
+same factory reaches the file handler too, so a request is observed once wherever it is answered:
 
 ```java
 public class AccessLog implements HttpApiObserver {
@@ -362,6 +452,10 @@ API, and a request whose path it does not own is passed on untouched:
 Client --> HttpServerCodec --> HttpObjectAggregator --> FileServerHandler --> RestApiHandler
 ```
 
+`RestServer.withFiles(fileSet)` puts it exactly there. Note that it also decides where a compressor goes:
+`withCompression()` places one *behind* the file handler, where it compresses what the api returns and never
+sees a file, so `sendfile(2)` survives. One in front costs it, silently - see below.
+
 ```java
 FileSet files = FileSet.builder()
         .serve("/files", Paths.get("/var/www"),          // a tree: the rest of the path resolves under it
@@ -371,7 +465,8 @@ FileSet files = FileSet.builder()
         .index("index.html")                             // without one, a directory is a 404
         .build();
 
-pipeline.addLast(new FileServerHandler(files));          // in initChannel, before the API handler
+RestServer.of(api).withFiles(files);                     // put in front of the API handler
+pipeline.addLast(new FileServerHandler(files));          // the same by hand, in initChannel
 ```
 
 - **Matching** is one walk of the path, longest prefix first, nothing copied out of it to compare.
@@ -414,10 +509,16 @@ stops taking it is given up on, either way, after `FileServerHandler.DEFAULT_STA
 
 In `newa-example`, package `io.github.green4j.newa.example.rest`:
 
-- **`hello.HelloRestServer`** - the smallest thing that serves a route.
+- **`hello.HelloRestServer`** - the smallest thing that serves a route, plus a `/shutdown` which stops it.
 - **`chunked.ChunkedRestServer`** - pull: JSON and text rows, a gzipped download, the cursor limit, the
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
   events.
 - **`files.FileServer`** - files from the page cache, filtered, with ranges and an index, and the REST API
   behind them answering everything they do not own.
+- **`pipeline.PipelineRestServer`** - the same server as `files.FileServer` with the bootstrap and the
+  pipeline written out by hand: the transport and the groups chosen directly, `SO_BACKLOG`, an
+  `IdleStateHandler`, and a compressor placed in front of the file handler. Run it beside `FileServer` and
+  ask both for `/v1/zero-copy`: they answer the opposite, which is the cost of that one placement.
+
+The other four are started with `RestServer`; that one is the reason the manual path is documented.

@@ -1,31 +1,17 @@
 package io.github.green4j.newa.example.rest.files;
 
-import io.github.green4j.newa.lang.Work;
-import io.github.green4j.newa.lang.Worker;
-import io.github.green4j.newa.rest.JsonErrorHandler;
+import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
-import io.github.green4j.newa.rest.RestApiHandler;
+import io.github.green4j.newa.rest.RestServer;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.rest.files.PathMask;
 import io.github.green4j.newa.rest.handles.Json_Help;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.WriteBufferWaterMark;
-import io.netty.channel.nio.NioIoHandler;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
+import io.github.green4j.newa.server.NettyServer;
+import io.github.green4j.newa.server.NettyServerBuilder;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,9 +30,14 @@ import java.nio.file.Path;
  * curl -sD- http://127.0.0.1:9012/v1/zero-copy              # whether sendfile(2) is carrying them
  * curl -sD- http://127.0.0.1:9012/v1/hello/world            # still routed by the REST API
  * </pre>
- * That last two are the point of the example: the file handler takes what it owns and passes on what it does
- * not, and it answers what the pipeline it was put in allows - put an {@code HttpContentCompressor} in front
- * of it and {@code /v1/zero-copy} says so.
+ * Those last two are the point of the example: the file handler takes what it owns and passes on what it
+ * does not, and it answers what the pipeline it was put in allows.
+ * <p>
+ * {@link RestServer#withCompression()} would not change that answer - it places the compressor behind the
+ * file handler, where it compresses what the api returns and never sees a file. One in <i>front</i> of the
+ * file handler costs {@code sendfile(2)}, and that is only reachable by assembling the pipeline yourself:
+ * {@code rest.pipeline.PipelineRestServer} does exactly that, and reports {@code false} on the same
+ * endpoint.
  */
 public class FileServer {
     public static final String API_NAME = "File API";
@@ -67,42 +58,18 @@ public class FileServer {
 
         final RestApi api = buildApi();
 
-        final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        // the water marks are what a file pumped through NIO is paced by: past the high mark the channel
+        // reports itself unwritable and nothing more is read from the file until it drains. RestServer
+        // takes the defaults, which are the 32K/64K this example used to set by hand.
+        new Life().run(() -> {
+            final NettyServer server = RestServer.of(api)
+                    .withFiles(files) // in front of the api, which then never sees a request for a file
+                    .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-        final ServerBootstrap bootstrap = new ServerBootstrap();
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                // what a file pumped through NIO is paced by: past the high mark the channel reports itself
-                // unwritable and nothing more is read from the file until it drains
-                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
-                        new WriteBufferWaterMark(32 * 1024, 64 * 1024))
-                .childHandler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(final Channel ch) {
-                        initPipeline(ch.pipeline(), files, api);
-                    }
-                });
+            System.out.printf("Server started and listening on %s. Files are served from %s%n",
+                    LOCAL_SERVER_ADDRESS, root);
 
-        final Worker worker = new Worker();
-
-        worker.doWork(new Work() {
-            @Override
-            public ChannelFuture doWork() throws Exception {
-                final ChannelFuture bindFuture = bootstrap.bind(
-                        InetAddress.getByName(LOCAL_IFC), PORT).sync();
-
-                System.out.printf("Server started and listening on %s. Files are served from %s%n",
-                        LOCAL_SERVER_ADDRESS, root);
-
-                return bindFuture.channel().closeFuture();
-            }
-
-            @Override
-            public void close() {
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
+            return server;
         });
 
         System.out.println("Server stopped");
@@ -132,27 +99,6 @@ public class FileServer {
                                 : "files are pumped through NIO"));
 
         return apiBuilder.buildWithHelp(Json_Help.factory());
-    }
-
-    private static void initPipeline(final ChannelPipeline pipeline,
-                                     final FileSet files,
-                                     final RestApi api) {
-        pipeline.addLast(new HttpServerCodec());
-        pipeline.addLast(new HttpObjectAggregator(
-                65536,
-                true
-        ));
-        // it takes the paths of the file set and passes on everything else, so what is behind it never sees
-        // a request for a file
-        pipeline.addLast(new FileServerHandler(files));
-        pipeline.addLast(
-                new RestApiHandler(
-                        api,
-                        new JsonErrorHandler(),
-                        (channel, cause) -> System.err.printf(
-                                "An error %s in the channel: %s%n", cause.getMessage(), channel)
-                )
-        );
     }
 
     private static Path createContent() throws IOException {

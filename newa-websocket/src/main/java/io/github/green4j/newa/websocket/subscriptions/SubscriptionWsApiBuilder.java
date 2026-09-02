@@ -12,6 +12,7 @@ public class SubscriptionWsApiBuilder extends WsApiBuilder<SubscriptionWsApiBuil
     public WsApi build() {
         return new SubscriptionsWsApi(
                 observers,
+                receiver,
                 websocketPath(),
                 pingIntervalMs,
                 skipOnBackPressure

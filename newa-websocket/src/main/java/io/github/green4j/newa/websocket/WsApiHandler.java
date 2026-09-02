@@ -11,28 +11,23 @@ import java.util.List;
 
 public class WsApiHandler extends WebSocketServerProtocolHandler {
     private final WsApi wsApi;
-    private final Receiver receiver;
     private final long pingIntervalMs;
     private final ChannelErrorHandler channelErrorHandler;
 
     private ClientSession session;
 
+    /**
+     * One per channel - this handler keeps the session of its own channel, so it is neither sharable nor
+     * reusable. The handshake path comes from the api, and so does what receives the frames.
+     *
+     * @param wsApi this handler serves.
+     * @param channelErrorHandler told about channel failures, or null to say nothing.
+     */
     public WsApiHandler(final WsApi wsApi,
-                        final ChannelErrorHandler channelErrorHandler) {
-        this(
-                wsApi,
-                null,
-                channelErrorHandler
-        );
-    }
-
-    public WsApiHandler(final WsApi wsApi,
-                        final Receiver receiver,
                         final ChannelErrorHandler channelErrorHandler) {
         super(wsApi.websocketPath(), null, true);
 
         this.wsApi = wsApi;
-        this.receiver = receiver;
         this.pingIntervalMs = wsApi.pingIntervalMs();
         this.channelErrorHandler = channelErrorHandler;
     }
@@ -44,7 +39,7 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
             session = wsApi.newSession(
                     new ClientSessionContext(
                             wsApi,
-                            receiver,
+                            wsApi.receiver(),
                             ctx.channel(),
                             pingIntervalMs
                     )

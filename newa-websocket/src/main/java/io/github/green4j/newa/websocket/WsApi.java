@@ -6,6 +6,7 @@ import io.netty.buffer.ByteBuf;
 import java.nio.charset.Charset;
 
 public class WsApi implements ClientSessionFactory, WritingResult {
+    private final Receiver receiver;
     private final String websocketPath;
     private final int pingIntervalMs;
     private final boolean skipOnBackPressure;
@@ -13,14 +14,19 @@ public class WsApi implements ClientSessionFactory, WritingResult {
 
     /**
      * @param observers asked for an observer per session, or null to observe nothing.
+     * @param receiver told about every text frame of every session, or null for an api which only ever
+     *                 sends. It is to a frame what a rest handle is to a request, which is why it belongs
+     *                 to the api rather than to the handler in front of it.
      * @param websocketPath the path the handshake is served on.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never.
      * @param skipOnBackPressure keeps a session which can not keep up instead of closing it.
      */
     public WsApi(final WsApiObserverFactory observers,
+                 final Receiver receiver,
                  final String websocketPath,
                  final int pingIntervalMs,
                  final boolean skipOnBackPressure) {
+        this.receiver = receiver;
         this.websocketPath = websocketPath;
         this.pingIntervalMs = pingIntervalMs;
         this.skipOnBackPressure = skipOnBackPressure;
@@ -41,6 +47,13 @@ public class WsApi implements ClientSessionFactory, WritingResult {
                 },
                 observers
         );
+    }
+
+    /**
+     * @return what every session of this api hands its inbound text frames to, null if it has none.
+     */
+    public Receiver receiver() {
+        return receiver;
     }
 
     public String websocketPath() {

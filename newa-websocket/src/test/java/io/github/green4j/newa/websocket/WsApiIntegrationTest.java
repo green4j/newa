@@ -70,7 +70,6 @@ class WsApiIntegrationTest {
         pipeline.addLast(
                 new WsApiHandler(
                         api,
-                        (session, message) -> session.send(message),
                         (channel, cause) -> {
                             throw new AssertionError(cause);
                         }
@@ -85,6 +84,7 @@ class WsApiIntegrationTest {
 
         final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(1)
                 .withPathPrefix("ws")
+                .withReceiver((session, message) -> session.send(message))
                 .withPingIntervalMs(0)
                 .withObservers(() -> {
                     final Observed observer = new Observed();

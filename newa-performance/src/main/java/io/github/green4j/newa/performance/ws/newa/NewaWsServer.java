@@ -106,17 +106,19 @@ public final class NewaWsServer implements WsServer {
                                      final int channels,
                                      final int messageSize,
                                      final long rate) throws InterruptedException {
-        final WsApi api = new SubscriptionWsApiBuilder(1)
-                .withPathPrefix("ws")
-                .build(); // no skipping, no observer, no ping: a ping frame would show up in the
-                // subscriber's counts as a frame nobody published
-
         final QuoteChannel quotes = new QuoteChannel(messageSize);
         final Quotes[] entities = new Quotes[channels];
         for (int i = 0; i < channels; i++) {
             entities[i] = quotes.getOrCreateEntitySubscriptions(WsPayload.channelId(i));
         }
         final Subscriptions subscriptions = new Subscriptions(quotes);
+
+        // the api owns what receives, so it is built once the receiver it hands frames to exists
+        final WsApi api = new SubscriptionWsApiBuilder(1)
+                .withPathPrefix("ws")
+                .withReceiver(subscriptions)
+                .build(); // no skipping, no observer, no ping: a ping frame would show up in the
+                // subscriber's counts as a frame nobody published
 
         final EventLoopGroup bossGroup =
                 new MultiThreadIoEventLoopGroup(1, Transport.ioHandlerFactory());
@@ -136,7 +138,7 @@ public final class NewaWsServer implements WsServer {
                     protected void initChannel(final io.netty.channel.Channel ch) {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(MAX_REQUEST_BYTES, true));
-                        ch.pipeline().addLast(new WsApiHandler(api, subscriptions, NewaWsServer::onError));
+                        ch.pipeline().addLast(new WsApiHandler(api, NewaWsServer::onError));
                         // whatever was not the websocket path carries on to here: the handshake handler
                         // forwards a request whose uri it does not recognise, and the api handler only
                         // ever consumes websocket frames. That is how one port serves both the

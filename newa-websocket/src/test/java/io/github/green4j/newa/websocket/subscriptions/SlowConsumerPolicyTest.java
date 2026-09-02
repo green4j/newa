@@ -144,7 +144,7 @@ class SlowConsumerPolicyTest {
                         final ChannelPipeline p = ch.pipeline();
                         p.addLast(new HttpServerCodec());
                         p.addLast(new HttpObjectAggregator(65536, true));
-                        p.addLast(new WsApiHandler(api, null, (c, cause) -> { }));
+                        p.addLast(new WsApiHandler(api, (c, cause) -> { }));
                     }
                 })
                 .bind(new InetSocketAddress("127.0.0.1", 0)).sync().channel();

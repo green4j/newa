@@ -1,35 +1,83 @@
 # newa-websocket
 
-WebSocket sessions, broadcasting and subscription channels built on Netty. The library supplies the handshake
-handler, the session and the subscription types only: your application owns `ServerBootstrap`, the event loop
-groups and the pipeline.
+WebSocket sessions, broadcasting and subscription channels built on Netty.
 
 ```
 Client --> HttpServerCodec --> HttpObjectAggregator --> [WebSocketServerCompressionHandler] --> WsApiHandler
 ```
+
+`WsServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is one
+line. Neither hides anything: they are made of the same public handlers, and the pipeline and the bootstrap
+are still yours to take over the moment either needs changing - see [Starting a
+server](#starting-a-server).
 
 ## Getting started
 
 ```java
 WsApi api = new SimpleWsApiBuilder(1)          // version 1, so the handshake path is /ws/v1
         .withPathPrefix("ws")
+        .withReceiver((session, message) -> session.send(message))   // what handles inbound frames
         .withPingIntervalMs(10_000)            // 0 disables the keep-alive entirely
         .withObservers(AccessLog::new)         // optional, see Observing
         .build();
 
-Receiver receiver = (session, message) -> session.send(message);
-
-pipeline.addLast(new HttpServerCodec());
-pipeline.addLast(new HttpObjectAggregator(65536, true));
-pipeline.addLast(new WebSocketServerCompressionHandler(0));            // optional
-pipeline.addLast(new WsApiHandler(api, receiver, channelErrorHandler));
+new Life().run(() -> WsServer.start(9010, api));   // and it is serving
 ```
 
 Clients connect to `ws://host:port` plus `api.websocketPath()` - here `ws://127.0.0.1:9010/ws/v1`. The
-`WsApiHandler` overload without a `Receiver` serves a connection which only ever listens.
+handshake path is the api's, and nothing repeats it. Leave `withReceiver` out for a connection which only
+ever listens.
+
+The `Receiver` belongs to the `WsApi` for the same reason a rest handle belongs to a `RestApi`: it is what
+handles what comes in. One consequence is worth knowing - the receiver is built before the api, so a receiver
+which wants to call `api.broadcast(...)` cannot simply capture it. Subclass `WsApi` and implement `Receiver`
+on the subclass when a receiver needs the api it belongs to.
 
 `SimpleWsApiBuilder` builds an api of plain sessions; `SubscriptionWsApiBuilder` builds one which also keeps
 what every session subscribed to - see below. Everything else on the builder is shared by both.
+
+## Starting a server
+
+`WsServer.start(port, api)` is the whole server. What belongs to the api - the path, the ping interval, the
+back pressure policy, the receiver, the observers - stays on the api builder and is not repeated here; what
+is left is the pipeline and the bootstrap:
+
+```java
+NettyServer server = WsServer.of(api)
+        .withCompression()                       // permessage-deflate, off by default
+        .withChannelErrorHandler(ChannelErrorHandler.printingToStdErr())
+        .withMaxContentLength(65536)             // the handshake request, not what a session sends
+        .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
+        .start(new NettyServerBuilder()
+                .port(9010)
+                .host("127.0.0.1")               // every interface by default
+                .workerThreads(8)                // a worker per core by default
+                .writeBufferWaterMark(low, high));
+```
+
+**One port for both.** `withHandler` puts a handler *behind* `WsApiHandler`, which is where a request that is
+not the handshake ends up - the handshake handler passes on a uri it does not recognise. So a `RestApiHandler`
+there serves the REST api on the websocket's port. Pass the handler, never `RestServer.pipeline()`: the codec
+and the aggregator are already in front of it, and a second pair would decode everything twice.
+
+`NettyServer` is what you get back, an `AutoCloseable` and nothing more: `port()`, `channel()`, `close()`,
+and `workerGroup()` - which is where a periodic broadcast belongs, on the loops the sessions it writes to
+already live on:
+
+```java
+server.workerGroup().scheduleWithFixedDelay(
+        () -> api.broadcast("tick"), 5, 5, TimeUnit.SECONDS);
+```
+
+What runs it is `Life`: `new Life().run(() -> ...)` opens the server, parks this thread until the end is
+asked for, closes it, and registers a JVM shutdown hook for the length of the run. The server is opened by
+`run` rather than handed to it, so there is no instant at which it is serving and nothing owns it. A `Life`
+is an `Ender` from the moment it is constructed, so it is also what an endpoint or a signal handler calls to
+ask for that end - see `Ending it from a request` in
+[newa-rest](../newa-rest/README.md#ending-it-from-a-request).
+
+To keep this pipeline but bootstrap it yourself, hand `WsServer.pipeline()` to a `ServerBootstrap` of your
+own. To change the pipeline, write it out - `ws.pipeline.PipelineWsServer` in `newa-example` is that.
 
 ## Sessions
 
@@ -179,7 +227,8 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per session, made by
-a factory:
+a factory given to `WsApiBuilder.withObservers(...)` - it belongs to the api, like the receiver, so `WsServer`
+has nothing to say about it:
 
 ```java
 public class AccessLog implements WsApiObserver {
@@ -308,7 +357,8 @@ Refusing a connection is the cheap failure.
 
 **Watermarks are the real knob.** `WRITE_BUFFER_WATER_MARK` decides how much a session may fall behind before
 it counts as slow, and everything else here is downstream of it - see `Memory budget` above for the number to
-put in it. There is no queue of ours behind it: a frame the channel cannot take is never queued, it is
+put in it. Under `WsServer` that number and the thread counts are set on the `NettyServerBuilder` handed to
+`start(...)`: `writeBufferWaterMark(low, high)` and `workerThreads(n)`. There is no queue of ours behind it: a frame the channel cannot take is never queued, it is
 released, and the session is closed or marked lagging there and then.
 
 **Encode a fan-out once.** `send(CharSequence)` encodes UTF-8 per session, which for a publication reaching
@@ -384,9 +434,16 @@ counter, or return `null` from the factory for the sessions you do not need to w
 In `newa-example`, package `io.github.green4j.newa.example.ws`:
 
 - **`echo.EchoWsServer`** - the smallest thing that serves a session: a `Receiver` echoing text back.
-- **`broadcast.BroadcastWsServer`** - `WsApi.broadcast` to every open session.
+- **`broadcast.BroadcastWsServer`** - `WsApi.broadcast` to every open session, on a timer scheduled on
+  `NettyServer.workerGroup()`.
 - **`subscriptions.SubscriptionsWsServer`** - two channels of five entities, a client protocol of
   `[A|B]:[S|U]:[ID]` commands, publications on a timer and snapshots on subscribe, with
   `withSkipOnBackPressure()` turned on because both channels restore a session from a snapshot.
+- **`pipeline.PipelineWsServer`** - a websocket and a REST stats endpoint on one port, with the bootstrap and
+  the pipeline written out by hand. The composition itself needs no hand assembly - `withHandler(...)` above
+  produces the same pipeline - but its watermarks are computed from the fan-out it expects rather than left
+  at a default, which is what no helper can guess.
 - **`StdOutWsApiObserverFactory`** - an observer per session which counts what it sent and prints the totals
   when the session closes.
+
+The first three are started with `WsServer`; the fourth is the reason the manual path is documented.

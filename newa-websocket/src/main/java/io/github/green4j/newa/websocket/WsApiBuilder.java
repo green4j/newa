@@ -4,6 +4,7 @@ public abstract class WsApiBuilder<B extends WsApiBuilder<B>> {
     protected final int version;
 
     protected WsApiObserverFactory observers;
+    protected Receiver receiver;
     protected String pathPrefix = "websocket";
     protected int pingIntervalMs;
     protected boolean skipOnBackPressure;
@@ -42,6 +43,25 @@ public abstract class WsApiBuilder<B extends WsApiBuilder<B>> {
     @SuppressWarnings("unchecked")
     public B withSkipOnBackPressure() {
         this.skipOnBackPressure = true;
+        return (B) this;
+    }
+
+    /**
+     * Sets what every session of this api hands its inbound text frames to. Nothing is received without
+     * one, which is all a broadcasting api needs.
+     *
+     * <p>It lives here, next to the rest of what the application plugs in, for the same reason the handles
+     * of a rest api live on the rest api builder: it is what handles what comes in. Note the consequence -
+     * the receiver is built before the api, so a receiver which wants to call
+     * {@link WsApi#broadcast(CharSequence)} cannot simply capture it. Subclass {@link WsApi} and implement
+     * {@link Receiver} on the subclass when a receiver needs the api it belongs to.
+     *
+     * @param receiver told about every text frame, null to receive nothing.
+     * @return this builder.
+     */
+    @SuppressWarnings("unchecked")
+    public B withReceiver(final Receiver receiver) {
+        this.receiver = receiver;
         return (B) this;
     }
 

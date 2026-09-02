@@ -2,8 +2,7 @@ package io.github.green4j.newa.example.rest.chunked;
 
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.example.rest.SoutRestApiObserver;
-import io.github.green4j.newa.lang.Work;
-import io.github.green4j.newa.lang.Worker;
+import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.ChunkedJsonRestHandle;
 import io.github.green4j.newa.rest.ChunkedJsonRestHandler;
 import io.github.green4j.newa.rest.ChunkedRestHandle;
@@ -11,34 +10,20 @@ import io.github.green4j.newa.rest.ChunkedRestHandler;
 import io.github.green4j.newa.rest.ChunkedTxtRestHandle;
 import io.github.green4j.newa.rest.ChunkedTxtRestHandler;
 import io.github.green4j.newa.rest.ContentDisposition;
-import io.github.green4j.newa.rest.JsonErrorHandler;
+import io.github.green4j.newa.rest.ResponseChunks;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
-import io.github.green4j.newa.rest.RestApiHandler;
-import io.github.green4j.newa.rest.ResponseChunks;
+import io.github.green4j.newa.rest.RestServer;
 import io.github.green4j.newa.rest.handles.Json_Help;
+import io.github.green4j.newa.server.NettyServer;
+import io.github.green4j.newa.server.NettyServerBuilder;
 import io.github.green4j.newa.text.LineAppendable;
-import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.WriteBufferWaterMark;
-import io.netty.channel.nio.NioIoHandler;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.util.AsciiString;
-
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_DISPOSITION;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -294,68 +279,28 @@ public class ChunkedRestServer {
         return apiBuilder.buildWithHelp(Json_Help.factory());
     }
 
-    private static void initPipeline(final ChannelPipeline pipeline,
-                                     final RestApi api) {
-        pipeline.addLast(new HttpServerCodec());
-        pipeline.addLast(new HttpObjectAggregator(
-                65536,
-                true
-        ));
-        // ChunkedWriteHandler is not installed here: the first chunked response puts it in front of this one
-        pipeline.addLast(
-                new RestApiHandler(
-                        api,
-                        new JsonErrorHandler(),
-                        (channel, cause) -> System.err.printf(
-                                "An error %s in the channel: %s%n", cause.getMessage(), channel),
-                        CHUNKS,
-                        SoutRestApiObserver.factory()
-                )
-        );
-    }
-
     public static void main(final String[] args) throws Exception {
-        final Worker worker = new Worker();
+        final Life life = new Life();
         final RestApi api = buildApi();
 
-        final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        // the water marks are where the backpressure comes from: past the high mark the channel reports
+        // itself unwritable and the cursor stops being stepped until it drains. RestServer takes the
+        // defaults, which are the 32K/64K this example used to set by hand.
+        // No ChunkedWriteHandler anywhere: the first chunked response puts one in front of the api handler.
+        life.run(() -> {
+            final NettyServer server = RestServer.of(api)
+                    .withResponseChunks(CHUNKS)
+                    .withObservers(SoutRestApiObserver.factory())
+                    .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-        final ServerBootstrap bootstrap = new ServerBootstrap();
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                // this is where the backpressure comes from: past the high mark the channel reports itself
-                // unwritable and the cursor stops being stepped until it drains
-                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
-                        new WriteBufferWaterMark(32 * 1024, 64 * 1024))
-                .childHandler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(final Channel ch) {
-                        initPipeline(ch.pipeline(), api);
-                    }
-                });
+            System.out.printf(
+                    "Server started and listening on %s. Help is available on %s%s%n",
+                    LOCAL_SERVER_ADDRESS,
+                    LOCAL_SERVER_ADDRESS,
+                    api.helpPath()
+            );
 
-        worker.doWork(new Work() {
-            @Override
-            public ChannelFuture doWork() throws Exception {
-                final ChannelFuture bindFuture = bootstrap.bind(
-                        InetAddress.getByName(LOCAL_IFC), PORT).sync();
-
-                System.out.printf(
-                        "Server started and listening on %s. Help is available on %s%s%n",
-                        LOCAL_SERVER_ADDRESS,
-                        LOCAL_SERVER_ADDRESS,
-                        api.helpPath()
-                );
-
-                return bindFuture.channel().closeFuture();
-            }
-
-            @Override
-            public void close() {
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
+            return server;
         });
 
         System.out.println("Server stopped");

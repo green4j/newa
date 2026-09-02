@@ -1,25 +1,13 @@
 package io.github.green4j.newa.example.ws.broadcast;
 
 import io.github.green4j.newa.example.ws.StdOutWsApiObserverFactory;
-import io.github.green4j.newa.lang.Work;
-import io.github.green4j.newa.lang.Worker;
+import io.github.green4j.newa.lang.Life;
+import io.github.green4j.newa.server.NettyServer;
+import io.github.green4j.newa.server.NettyServerBuilder;
 import io.github.green4j.newa.websocket.SimpleWsApiBuilder;
 import io.github.green4j.newa.websocket.WsApi;
-import io.github.green4j.newa.websocket.WsApiHandler;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.nio.NioIoHandler;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http.websocketx.extensions.compression.WebSocketServerCompressionHandler;
+import io.github.green4j.newa.websocket.WsServer;
 
-import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 
 public class BroadcastWsServer {
@@ -30,7 +18,7 @@ public class BroadcastWsServer {
     public static final String LOCAL_SERVER_ADDRESS = String.format("ws://%s:%d", LOCAL_IFC, PORT);
 
     public static void main(final String[] args) throws Exception {
-        final Worker worker = new Worker();
+        final Life life = new Life();
 
         final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(
                 API_VERSION
@@ -41,76 +29,29 @@ public class BroadcastWsServer {
 
         final WsApi api = apiBuilder.build();
 
-        final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        life.run(() -> {
+            final NettyServer server = WsServer.of(api)
+                    .withCompression()
+                    .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-        final ServerBootstrap bootstrap = new ServerBootstrap();
+            System.out.printf(
+                    "Server started and listening on %s. Websocket path: %s%s%n",
+                    LOCAL_SERVER_ADDRESS,
+                    LOCAL_SERVER_ADDRESS,
+                    api.websocketPath()
+            );
 
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                .childHandler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(final Channel ch) {
-                        final ChannelPipeline pipeline = ch.pipeline();
-                        pipeline.addLast(new HttpServerCodec());
-                        pipeline.addLast(
-                                new HttpObjectAggregator(
-                                        65536,
-                                        true
-                                )
-                        );
-                        pipeline.addLast(new WebSocketServerCompressionHandler(0));
+            // on the loops the sessions already live on, so a broadcast reaches them without a hand-off
+            server.workerGroup().scheduleWithFixedDelay(
+                    () -> api.broadcast("Hello from WS server"),
+                    5_000,
+                    5_000,
+                    TimeUnit.MILLISECONDS
+            );
 
-                        pipeline.addLast(
-                                new WsApiHandler(
-                                        api,
-                                        (channel, cause) -> {
-                                            System.err.printf(
-                                                    "An error %s in the channel: %s%n",
-                                                    cause.getMessage(),
-                                                    channel.toString());
-                                            cause.printStackTrace(System.err);
-                                        }
-                                )
-                        );
-                    }
-                });
-
-        worker.doWork(new Work() {
-            @Override
-            public ChannelFuture doWork() throws Exception {
-                final ChannelFuture bindFuture = bootstrap.bind(
-                                InetAddress.getByName(LOCAL_IFC),
-                                PORT
-                        )
-                        .sync();
-
-                System.out.printf(
-                        "Server started and listening on %s. Websocket path: %s%s%n",
-                        LOCAL_SERVER_ADDRESS,
-                        LOCAL_SERVER_ADDRESS,
-                        api.websocketPath()
-                );
-
-                workerGroup.scheduleWithFixedDelay(
-                        () -> api.broadcast("Hello from WS server"),
-                        5_000,
-                        5_000,
-                        TimeUnit.MILLISECONDS
-                );
-
-                return bindFuture
-                        .channel()
-                        .closeFuture();
-            }
-
-            @Override
-            public void close() {
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
+            return server;
         });
 
-        System.out.println("Server stopped"); // newer reached until worker.stopper().stop(...) is called
+        System.out.println("Server stopped"); // never reached until life.end(...) is called
     }
 }

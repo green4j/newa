@@ -8,6 +8,28 @@ subscriptions - a subscriber joins an entity, is given its snapshot (optionally)
 after it, in order and with no holes, with an explicit policy for one which cannot keep up. This feature allows to build
 highly customizable and well-looking event subscription protocols.
 
+### Quick start
+
+A server is one line, and the api is the only thing you write:
+
+```java
+RestApi api = builder.build();
+new Life().run(() -> RestServer.start(9009, api));              // REST
+
+WsApi api = new SimpleWsApiBuilder(1)
+        .withReceiver((session, message) -> session.send(message))
+        .build();
+new Life().run(() -> WsServer.start(9010, api));                // WebSocket, echoing
+```
+
+`RestServer` and `WsServer` assemble the documented pipeline out of the same public handlers, on a
+`NettyServerBuilder` which picks the best transport this machine has and a worker per core. `Life` opens the
+server, parks the main thread until it should stop, closes it, and does the same when the JVM is going down. Everything is
+still yours to take over: `NettyServerBuilder` for the transport, the threads and the channel options, and
+`RestServer.pipeline()` / `WsServer.pipeline()` - or a hand-written pipeline - for what runs above the
+socket. The module READMEs document both, and `newa-example` has a server of each shape:
+`rest.pipeline.PipelineRestServer` and `ws.pipeline.PipelineWsServer` are the ones assembled from scratch.
+
 ### Against Spring Boot, at both sides' defaults
 
 Measured in [newa-performance](newa-performance/README.md), with each side written the way its own framework
@@ -31,5 +53,6 @@ is normally written - newa rendering into a reused buffer, Spring returning obje
 - [newa-websocket/README.md](newa-websocket/README.md) - WebSocket sessions, broadcasting and subscription channels on Netty.
 - [newa-performance/README.md](newa-performance/README.md) - the benchmarks the numbers above come from.
 
-Other Gradle modules: `newa-common` (shared utilities used by REST and WebSocket), `newa-all` (combined artifact), and
-`newa-example` (runnable demo servers).
+Other Gradle modules: `newa-common` (shared utilities, the transport selection and the bootstrap builder used
+by REST and WebSocket), `newa-all` (combined artifact), and `newa-example` (runnable demo servers - seven
+started with the helpers above, and two with the Netty pipeline written out by hand).

@@ -1,6 +1,7 @@
 package io.github.green4j.newa.websocket.subscriptions;
 
 import io.github.green4j.newa.websocket.ClientSession;
+import io.github.green4j.newa.websocket.Receiver;
 import io.github.green4j.newa.websocket.WsApi;
 import io.github.green4j.newa.websocket.WsApiObserverFactory;
 
@@ -13,11 +14,13 @@ final class SubscriptionsWsApi extends WsApi {
     private final boolean subscriptionsObservers;
 
     SubscriptionsWsApi(final WsApiObserverFactory observers,
+                       final Receiver receiver,
                        final String websocketPath,
                        final int pingIntervalMs,
                        final boolean skipOnBackPressure) {
         super(
                 observers,
+                receiver,
                 websocketPath,
                 pingIntervalMs,
                 skipOnBackPressure
