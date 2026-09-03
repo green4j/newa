@@ -180,6 +180,57 @@ class ObserverLifecycleTest {
     }
 
     @Test
+    void shouldReportTheSessionClosedEvenWhenTheApiTeardownThrows() {
+        final Observed observer = new Observed();
+        final ClientSessions sessions = new ClientSessions(
+                new ClientSessionsListener() {
+                    @Override
+                    public void onSessionOpened(final ClientSession session) {
+                    }
+
+                    @Override
+                    public void onSessionClosed(final ClientSession session) {
+                        throw new IllegalStateException("the teardown of the api went wrong");
+                    }
+                },
+                () -> observer
+        );
+
+        final ClientSession session = newSession(sessions);
+
+        // close() is nearly always reached through CloseHelper.closeQuiet, which would swallow this and
+        // leave the terminal event of the observer unsent - the one thing it is promised
+        Assertions.assertThrows(IllegalStateException.class, session::close);
+
+        Assertions.assertEquals(List.of("opened:true", "closed"), observer.stages);
+    }
+
+    @Test
+    void shouldNotBroadcastToASessionTheApiFailedToOpen() {
+        final Observed observer = new Observed();
+        final ClientSessions sessions = new ClientSessions(
+                new ClientSessionsListener() {
+                    @Override
+                    public void onSessionOpened(final ClientSession session) {
+                        throw new IllegalStateException("whatever the api keeps per session is missing");
+                    }
+
+                    @Override
+                    public void onSessionClosed(final ClientSession session) {
+                    }
+                },
+                () -> observer
+        );
+
+        Assertions.assertThrows(IllegalStateException.class, () -> newSession(sessions));
+
+        sessions.broadcast("hello"); // a session which was never assembled is not in the fan-out
+
+        Assertions.assertNull(channels.get(0).readOutbound());
+        Assertions.assertEquals(List.of("closed"), observer.stages);
+    }
+
+    @Test
     void shouldObserveNothingWithoutAnObserver() {
         final ClientSessions withoutFactory = new ClientSessions(null);
         final ClientSession first = newSession(withoutFactory);

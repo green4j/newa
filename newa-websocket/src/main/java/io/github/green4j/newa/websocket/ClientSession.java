@@ -25,6 +25,7 @@
 package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.lang.Cancelable;
+import io.github.green4j.newa.lang.CloseHelper;
 import io.github.green4j.newa.lang.Executor;
 import io.github.green4j.newa.lang.Scheduler;
 import io.github.green4j.newa.lang.Sender;
@@ -35,6 +36,7 @@ import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.util.CharsetUtil;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 
 import java.io.Closeable;
@@ -55,10 +57,12 @@ public class ClientSession implements Sender, Closeable {
     private final ClientSessionContext context;
     private final WsApiObserver observer; // null when the session is not observed
 
-    private final Cancelable pinger;
+    private final Cancelable keepAlive; // null when neither a ping nor a read timeout was asked for
 
     private volatile long lastWriteTimeMs;
-    private volatile long lastReadTimeMs;
+    // starts at the creation time rather than at zero: a session which has not read anything yet has
+    // been silent for no time at all, and a read timeout comparing against zero would close it at once
+    private volatile long lastReadTimeMs = createTimeMs;
 
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -75,23 +79,46 @@ public class ClientSession implements Sender, Closeable {
         this.observer = observer;
 
         final long pingIntervalMs = context.pingIntervalMs();
-        if (pingIntervalMs > 0) {
-            pinger = scheduler().scheduleWithFixedDelay(
-                    () -> {
-                        if (!context.channel().isWritable()) {
-                            return; // a channel with data still pending needs no keep-alive,
-                            // and pinging it would only trip the back pressure handling
-                        }
-                        final long now = WallClock.currentTimeMillis();
-                        if (now - lastWriteTimeMs > pingIntervalMs) {
-                            ping(PING_TEXT.retain());
-                        }
-                    },
-                    pingIntervalMs,
-                    pingIntervalMs
+        final long readTimeoutMs = context.readTimeoutMs();
+
+        final long period = keepAlivePeriod(pingIntervalMs, readTimeoutMs);
+        if (period > 0) {
+            keepAlive = scheduler().scheduleWithFixedDelay(
+                    () -> checkKeepAlive(pingIntervalMs, readTimeoutMs),
+                    period,
+                    period
             );
         } else {
-            pinger = null;
+            keepAlive = null;
+        }
+    }
+
+    private static long keepAlivePeriod(final long pingIntervalMs,
+                                        final long readTimeoutMs) {
+        if (pingIntervalMs <= 0) {
+            return Math.max(readTimeoutMs, 0);
+        }
+        if (readTimeoutMs <= 0) {
+            return pingIntervalMs;
+        }
+        return Math.min(pingIntervalMs, readTimeoutMs); // whichever falls due first sets the resolution
+    }
+
+    private void checkKeepAlive(final long pingIntervalMs,
+                                final long readTimeoutMs) {
+        final long now = WallClock.currentTimeMillis();
+
+        if (readTimeoutMs > 0 && now - lastReadTimeMs > readTimeoutMs) {
+            CloseHelper.closeQuiet(this); // nothing has come from the peer for long enough to call it
+            return; // gone. Checked whatever the channel is doing: a peer which stopped reading is
+            // exactly the one whose channel stopped being writable, and it is no less gone for that
+        }
+
+        if (pingIntervalMs > 0
+                && context.channel().isWritable() // a channel with data still pending needs no
+                // keep-alive, and pinging it would only trip the back pressure handling
+                && now - lastWriteTimeMs > pingIntervalMs) {
+            ping(PING_TEXT.retain());
         }
     }
 
@@ -168,6 +195,11 @@ public class ClientSession implements Sender, Closeable {
         send(frame, DEFAULT_CHARSET);
     }
 
+    void frameArrived() {
+        lastReadTimeMs = WallClock.currentTimeMillis(); // any frame at all, because a pong answering our
+        // ping is the only thing a session which does nothing but listen ever sends back
+    }
+
     void frameReceived(final int bytes) {
         if (observer != null) {
             observer.onFrameReceived(bytes);
@@ -175,8 +207,6 @@ public class ClientSession implements Sender, Closeable {
     }
 
     public void receive(final CharSequence frame) {
-        lastReadTimeMs = WallClock.currentTimeMillis();
-
         final Receiver receiver = context.receiver();
         if (receiver == null) {
             return;
@@ -218,8 +248,8 @@ public class ClientSession implements Sender, Closeable {
         }
 
         try {
-            if (pinger != null) {
-                pinger.cancel();
+            if (keepAlive != null) {
+                keepAlive.cancel();
             }
 
             final io.netty.channel.Channel c = context.channel();
@@ -227,43 +257,76 @@ public class ClientSession implements Sender, Closeable {
                 c.close();
             }
         } finally {
-            owner.onClientSessionClosed(this); // reports the last of whatever the session was still
-            // subscribed to, before the terminal event below
-
-            if (observer != null) {
-                observer.onSessionClosed(System.nanoTime() - createTimeNanos);
+            try {
+                owner.onClientSessionClosed(this); // reports the last of whatever the session was still
+                // subscribed to, before the terminal event below
+            } finally { // whatever the api makes of the session going away, the terminal event of the
+                // observer is owed once per session and this is the only place which owes it
+                if (observer != null) {
+                    observer.onSessionClosed(System.nanoTime() - createTimeNanos);
+                }
             }
         }
     }
 
+    /**
+     * Reports a failure the way a failed write is reported - the observer is told and the session is
+     * closed - and never throws itself, so a fan-out which called into this session can go on to the next
+     * one. Public because a fan-out of your own - over an {@code EntitySubscriptions.publish(Consumer)},
+     * or over a list of sessions you keep yourself - owes the sessions it has not reached yet the same
+     * treatment.
+     *
+     * @param cause of the failure.
+     */
+    public void deliveryFailed(final Throwable cause) {
+        try {
+            context.writingResult().onWriteError(this, cause);
+        } catch (final Exception ignore) {
+            CloseHelper.closeQuiet(this); // whatever the api makes of it, this session still goes
+        }
+    }
+
     private void writeAndFlush(final WebSocketFrame frame) {
-        final int bytes = frame.content().readableBytes(); // the frame belongs to the channel once
-        // it is written, so its size is read here, while it is still ours
+        boolean ours = true; // the frame is ours to release until the channel takes it or it is released
 
-        final io.netty.channel.Channel channel = context.channel();
-        if (!channel.isWritable()) {
-            frame.release(); // it never reached the channel, so releasing it is ours: a frame built
-            // from a pooled buffer, or from one shared by a fan-out, is leaked otherwise
+        try {
+            final int bytes = frame.content().readableBytes(); // the frame belongs to the channel once
+            // it is written, so its size is read here, while it is still ours
 
-            if (!channel.isOpen()) {
-                context.writingResult().onWriteError(this, new IOException("Channel closed"));
+            final io.netty.channel.Channel channel = context.channel();
+            if (!channel.isWritable()) {
+                frame.release(); // it never reached the channel, so releasing it is ours: a frame built
+                // from a pooled buffer, or from one shared by a fan-out, is leaked otherwise
+                ours = false;
+
+                if (!channel.isOpen()) {
+                    context.writingResult().onWriteError(this, new IOException("Channel closed"));
+                    return;
+                }
+                lagging = true;
+                if (observer != null) {
+                    observer.onWriteBackPressure(bytes);
+                }
+                context.writingResult().onWriteBackPressure(this);
                 return;
             }
-            lagging = true;
+            channel.writeAndFlush(frame);
+            ours = false; // the channel owns it now, and releasing it below would be the second release
             if (observer != null) {
-                observer.onWriteBackPressure(bytes);
+                observer.onFrameSent(bytes);
             }
-            context.writingResult().onWriteBackPressure(this);
-            return;
+            context.writingResult().onWriteSuccess(this); // A kind of optimistic result notification.
+            // We do not check the real result of writeAndFlush() with a FutureListener
+            // to leave things simple enough, so, detection of any problem is, in fact,
+            // delayed until the next send() when the channel !isWritable()
+            lastWriteTimeMs = WallClock.currentTimeMillis();
+        } catch (final Exception cause) { // an observer, a writing result or an allocation may throw, and
+            // a fan-out must lose this session rather than every session it had not reached yet. An Error
+            // is left alone: it is not something to swallow once per session across a whole broadcast
+            if (ours) {
+                ReferenceCountUtil.safeRelease(frame);
+            }
+            deliveryFailed(cause);
         }
-        channel.writeAndFlush(frame);
-        if (observer != null) {
-            observer.onFrameSent(bytes);
-        }
-        context.writingResult().onWriteSuccess(this); // A kind of optimistic result notification.
-        // We do not check the real result of writeAndFlush() with a FutureListener
-        // to leave things simple enough, so, detection of any problem is, in fact,
-        // delayed until the next send() when the channel !isWritable()
-        lastWriteTimeMs = WallClock.currentTimeMillis();
     }
 }

@@ -39,6 +39,7 @@ public class SubscriptionWsApiBuilder extends WsApiBuilder<SubscriptionWsApiBuil
                 receiver,
                 websocketPath(),
                 pingIntervalMs,
+                readTimeoutMs,
                 skipOnBackPressure
         );
     }

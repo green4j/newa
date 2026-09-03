@@ -25,6 +25,7 @@
 package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.collections.ObjectListReadSafe;
+import io.github.green4j.newa.lang.CloseHelper;
 import io.netty.buffer.ByteBuf;
 
 import java.nio.charset.Charset;
@@ -34,7 +35,10 @@ public class ClientSessions implements ClientSessionFactory {
     private final WsApiObserverFactory observers;
 
     // Neither opening nor closing a session copies it, so a storm of clients arriving or reconnecting
-    // costs what it is, not its square. A broadcast walks a snapshot of it by index, taking no lock.
+    // costs what it is, not its square. A broadcast walks a snapshot of it by index, taking no lock, and
+    // walks it to the end: half a fan-out is not a state anything can recover from, because the sessions
+    // already reached have the frame. So a session which throws costs that session - it is reported and
+    // closed the way a failed write is - and the walk goes on to the next one.
     private final ObjectListReadSafe<ClientSession> sessions = new ObjectListReadSafe<>();
 
     public ClientSessions(final ClientSessionsListener listener) {
@@ -61,40 +65,54 @@ public class ClientSessions implements ClientSessionFactory {
 
         sessions.add(session);
 
-        if (listener != null) {
-            listener.onSessionOpened(session); // whatever the api keeps per session is put in place
-            // first, so that the observer below sees a session which is fully assembled
-        }
+        try {
+            if (listener != null) {
+                listener.onSessionOpened(session); // whatever the api keeps per session is put in place
+                // first, so that the observer below sees a session which is fully assembled
+            }
 
-        if (observer != null) {
-            observer.onSessionOpened(session);
+            if (observer != null) {
+                observer.onSessionOpened(session);
+            }
+        } catch (final RuntimeException | Error e) {
+            CloseHelper.closeQuiet(session); // it went into the list before it was assembled, and nothing
+            // else would ever take it out again. Closing it is the whole unwind: the list, whatever the
+            // api attached, the channel, and the terminal event the observer is owed
+            throw e;
         }
 
         return session;
     }
 
     public void broadcast(final CharSequence text) {
-        // TODO: check Thread.currentThread().isInterrupted() while iterating?
         final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
         for (int i = 0; i < snapshot.limit(); i++) {
             final ClientSession session = snapshot.get(i);
             if (session == null) { // a session which closed, and left the slot behind
                 continue;
             }
-            session.send(text); // TODO: wrap with try/catch?
+            try {
+                session.send(text);
+            } catch (final Exception cause) {
+                session.deliveryFailed(cause); // never throws, and never touches the buffer: whatever
+                // was allocated for this session was released before it got here
+            }
         }
     }
 
     public void broadcast(final CharSequence text,
                           final Charset charset) {
-        // TODO: check Thread.currentThread().isInterrupted() while iterating?
         final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
         for (int i = 0; i < snapshot.limit(); i++) {
             final ClientSession session = snapshot.get(i);
             if (session == null) {
                 continue;
             }
-            session.send(text, charset); // TODO: wrap with try/catch?
+            try {
+                session.send(text, charset);
+            } catch (final Exception cause) {
+                session.deliveryFailed(cause);
+            }
         }
     }
 
@@ -105,7 +123,6 @@ public class ClientSessions implements ClientSessionFactory {
      * @param text to send. Released here whatever happens to it.
      */
     public void broadcastAndRelease(final ByteBuf text) {
-        // TODO: check Thread.currentThread().isInterrupted() while iterating?
         try {
             final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
             for (int i = 0; i < snapshot.limit(); i++) {
@@ -113,8 +130,13 @@ public class ClientSessions implements ClientSessionFactory {
                 if (session == null) {
                     continue;
                 }
-                session.send(text.retainedDuplicate()); // a session consumes the frame it is given,
-                // so one buffer can not be handed to all of them
+                try {
+                    session.send(text.retainedDuplicate()); // a session consumes the frame it is given,
+                    // so one buffer can not be handed to all of them
+                } catch (final Exception cause) {
+                    session.deliveryFailed(cause); // the duplicate is already released - the session
+                    // takes it over the moment it is handed one, failure included
+                }
             }
         } finally {
             text.release();

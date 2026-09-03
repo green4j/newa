@@ -50,7 +50,8 @@ public class SubscriptionsWsServer {
         )
                 .withPathPrefix("ws")
                 .withReceiver(channels)
-                .withPingIntervalMs(10_000)
+                .withPingIntervalMs(10_000) // shorter than the 30s/90s default, so that the
+                .withReadTimeoutMs(30_000)  // keep-alive is something you can watch happen here
                 .withObservers(new StdOutWsApiObserverFactory())
                 .withSkipOnBackPressure(); // both channels here restore a session with
         // a snapshot, so one which can not keep up is re-synchronized, not disconnected
@@ -68,6 +69,10 @@ public class SubscriptionsWsServer {
                     LOCAL_SERVER_ADDRESS,
                     api.websocketPath()
             );
+
+            channels.start();
+
+            System.out.println("Event producing started...");
 
             return server;
         });

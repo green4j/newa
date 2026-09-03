@@ -128,7 +128,7 @@ class SubscriptionsObserverTest {
     void shouldReportAnEntityWhichIsNotThere() {
         final ClientSession session = sessions.newSession();
 
-        assertEquals(0, channel.subscribeForKnownOnly(session, "ZZ"));
+        assertEquals(0, channel.subscribeForKnown(session, "ZZ"));
 
         assertEquals(List.of("opened", "unknown:ZZ"), observerOf(0).stages);
     }
@@ -186,7 +186,7 @@ class SubscriptionsObserverTest {
             assertEquals(1, channel.subscribe(session, "AA"));
             assertTrue(channel.isSubscribed(session));
 
-            assertEquals(0, channel.subscribeForKnownOnly(session, "ZZ"));
+            assertEquals(0, channel.subscribeForKnown(session, "ZZ"));
             assertEquals(1, channel.unsubscribe(session, "AA"));
             assertFalse(channel.isSubscribed(session));
 
@@ -218,7 +218,7 @@ class SubscriptionsObserverTest {
             final ClientSession session = plainSessions.newSession();
 
             channel.subscribe(session, "AA");
-            channel.subscribeForKnownOnly(session, "ZZ");
+            channel.subscribeForKnown(session, "ZZ");
             channel.unsubscribe(session, "AA");
 
             session.close();

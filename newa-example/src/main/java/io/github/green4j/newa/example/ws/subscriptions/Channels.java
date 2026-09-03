@@ -57,6 +57,9 @@ public class Channels implements Receiver, Closeable {
             Executors.newScheduledThreadPool(1);
 
     public Channels() {
+    }
+
+    public void start() {
         // initialize channels to know about
         // our test entities on start. The following code creates
         // an instance of EntitySubscriptions for each entity
@@ -79,7 +82,7 @@ public class Channels implements Receiver, Closeable {
                         final CharSequence message) {
         final String[] command = message.toString().split(":");
         if (command.length != 3) {
-            session.send("Error: invalid command format");
+            session.send("Error: invalid command format: " + message);
             return;
         }
 
@@ -122,7 +125,7 @@ public class Channels implements Receiver, Closeable {
                                           final String id) {
         switch (action) {
             case "S":
-                return targetChannel.subscribeForKnownOnly(session, id);
+                return targetChannel.subscribeForKnown(session, id);
             case "U":
                 targetChannel.unsubscribe(session, id);
                 return 1;

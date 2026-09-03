@@ -25,12 +25,24 @@
 package io.github.green4j.newa.websocket;
 
 public abstract class WsApiBuilder<B extends WsApiBuilder<B>> {
+    /**
+     * How often an idle session is pinged unless {@link #withPingIntervalMs(int)} says otherwise.
+     */
+    public static final int DEFAULT_PING_INTERVAL_MS = 30_000;
+
+    /**
+     * How long a session may hear nothing at all from its peer before it is closed, unless
+     * {@link #withReadTimeoutMs(int)} says otherwise. Three missed pings.
+     */
+    public static final int DEFAULT_READ_TIMEOUT_MS = 90_000;
+
     protected final int version;
 
     protected WsApiObserverFactory observers;
     protected Receiver receiver;
     protected String pathPrefix = "websocket";
-    protected int pingIntervalMs;
+    protected int pingIntervalMs = DEFAULT_PING_INTERVAL_MS;
+    protected int readTimeoutMs = DEFAULT_READ_TIMEOUT_MS;
     protected boolean skipOnBackPressure;
 
     protected WsApiBuilder(final int version) {
@@ -95,9 +107,35 @@ public abstract class WsApiBuilder<B extends WsApiBuilder<B>> {
         return (B) this;
     }
 
+    /**
+     * Sets how often a session which has been idle is pinged. This is what creates the traffic a read
+     * timeout waits for - a client which only ever listens sends nothing else, and its pong is what proves
+     * it is still there. Pairs with {@link #withReadTimeoutMs(int)}, which is what actually closes a
+     * session: on its own a ping notices a dead peer no sooner than the send buffer fills.
+     *
+     * @param pingIntervalMs between pings of an idle session, {@link #DEFAULT_PING_INTERVAL_MS} by
+     *                       default, 0 to send none.
+     * @return this builder.
+     */
     @SuppressWarnings("unchecked")
     public B withPingIntervalMs(final int pingIntervalMs) {
         this.pingIntervalMs = pingIntervalMs;
+        return (B) this;
+    }
+
+    /**
+     * Sets how long the peer may send nothing at all before the session is closed. Any inbound frame
+     * counts, a pong included, which is why it takes {@link #withPingIntervalMs(int)} to keep an otherwise
+     * silent listener alive: without a ping this closes healthy subscribers, and without this a ping
+     * closes nothing.
+     *
+     * @param readTimeoutMs of silence from the peer, {@link #DEFAULT_READ_TIMEOUT_MS} by default, 0 to
+     *                      wait for as long as the peer likes.
+     * @return this builder.
+     */
+    @SuppressWarnings("unchecked")
+    public B withReadTimeoutMs(final int readTimeoutMs) {
+        this.readTimeoutMs = readTimeoutMs;
         return (B) this;
     }
 

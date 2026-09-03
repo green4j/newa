@@ -33,8 +33,6 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.ResourceLeakDetector;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,21 +64,11 @@ class ResourceLeakTest {
     @TempDir
     private Path root;
 
-    private ResourceLeakDetector.Level level;
-
     @BeforeEach
     public void setUp() throws IOException {
-        level = ResourceLeakDetector.getLevel();
-        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
-
         Files.createDirectories(root.resolve("img"));
         Files.write(root.resolve("img/a.bin"), new byte[128 * 1024]);
         Files.write(root.resolve("empty.txt"), new byte[0]);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        ResourceLeakDetector.setLevel(level);
     }
 
     private static long openFiles() {

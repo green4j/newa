@@ -188,7 +188,12 @@ class ObjectListReadSafeTest {
         Assertions.assertEquals(0, list.close().size(), "the first close took everything");
         Assertions.assertEquals(0, list.size());
         Assertions.assertFalse(list.remove("a"));
-        Assertions.assertThrows(IllegalStateException.class, () -> list.add("b"));
+
+        Assertions.assertFalse(list.add("b"), "a closed list says no rather than throwing");
+        Assertions.assertEquals(0, list.size());
+        Assertions.assertFalse(list.contains("b"));
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> list.add(null));
     }
 
     @Test

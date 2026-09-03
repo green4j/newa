@@ -235,6 +235,12 @@ configure([commonProject,
     test {
         useJUnitPlatform()
 
+        // Every module hands buffers around by hand, so every module's tests run with the detector at its
+        // strictest. It samples on garbage collection and reports rather than fails, so it is a net under
+        // the refCnt assertions the ownership tests make, not a replacement for them.
+        systemProperty 'io.netty.leakDetection.level', 'paranoid'
+        systemProperty 'io.netty.leakDetection.targetRecords', '32'
+
         testLogging {
             events 'skipped', 'failed'
             showStandardStreams = true

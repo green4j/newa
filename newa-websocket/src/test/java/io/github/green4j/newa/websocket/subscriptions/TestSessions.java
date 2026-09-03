@@ -43,6 +43,9 @@ import java.util.List;
 final class TestSessions implements ClientSessionsListener, WritingResult {
     private final ClientSessions sessions;
     private final List<EmbeddedChannel> channels = new ArrayList<>();
+    // recorded rather than acted on: closing a session which failed is the policy of WsApi, and these
+    // tests are about what the subscription classes report, not about what an api makes of it
+    private final List<ClientSession> writeErrors = new ArrayList<>();
 
     // narrowed once, the way SubscriptionsWsApi narrows it
     private final boolean subscriptionsObservers;
@@ -106,5 +109,14 @@ final class TestSessions implements ClientSessionsListener, WritingResult {
 
     @Override
     public void onWriteError(final ClientSession session, final Throwable error) {
+        synchronized (writeErrors) {
+            writeErrors.add(session);
+        }
+    }
+
+    List<ClientSession> writeErrors() {
+        synchronized (writeErrors) {
+            return new ArrayList<>(writeErrors);
+        }
     }
 }

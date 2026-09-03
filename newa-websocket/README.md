@@ -17,7 +17,8 @@ server](#starting-a-server).
 WsApi api = new SimpleWsApiBuilder(1)          // version 1, so the handshake path is /ws/v1
         .withPathPrefix("ws")
         .withReceiver((session, message) -> session.send(message))   // what handles inbound frames
-        .withPingIntervalMs(10_000)            // 0 disables the keep-alive entirely
+        .withPingIntervalMs(30_000)            // the keep-alive pair, and these are the defaults:
+        .withReadTimeoutMs(90_000)             // ping an idle session, close one whose peer went silent
         .withObservers(AccessLog::new)         // optional, see Observing
         .build();
 
@@ -97,14 +98,26 @@ and close are answered by Netty underneath. The `CharSequence` is valid for the 
 
 Everything that touches a session must end up on its event loop. `session.executor()` hops back onto it and
 `session.scheduler()` repeats work on it; never block either. `channel()`, `isClosed()`, `createTimeMs()`,
-`lastReadTimeMs()` and `lastWriteTimeMs()` answer from any thread.
+`lastReadTimeMs()` and `lastWriteTimeMs()` answer from any thread. `lastReadTimeMs()` is stamped by any
+frame the peer sends, a pong included, not by text frames alone.
 
 `putUserData` / `getUserData` hang application state off a session - but on an api built by
 `SubscriptionWsApiBuilder` that slot belongs to the subscriptions layer. Use
 `ClientSessionSubscriptions.putUserData` there, which is the same idea one level in.
 
-A ping interval greater than zero schedules a fixed-delay task per session which pings only when the channel
-has been idle and is writable - a channel with data still pending needs no keep-alive.
+The two keep-alive settings answer one question: is anybody still on the other end? `withPingIntervalMs`
+creates the traffic - a fixed-delay task per session pings it when it has been idle and its channel is
+writable, since a channel with data still pending needs no keep-alive - and `withReadTimeoutMs` is what
+closes: nothing from the peer for that long and the session goes, through the same `close()` and the same
+`onSessionClosed` as any other ending. Neither works alone. Without the timeout a dead peer is noticed only
+once the send buffer fills and the channel stops being writable, which is late and depends on how much you
+send rather than on time; without the ping a perfectly healthy subscriber which does nothing but listen is
+disconnected as dead, and that is most of a fan-out's clients. They default to 30 s and 90 s - three missed
+pings - and either takes 0 to turn it off, which is what to do when the protocol above already carries a
+heartbeat.
+
+Upgrading from a version before this pair existed: sessions now carry a timer and a peer silent for 90 s is
+disconnected. `withPingIntervalMs(0).withReadTimeoutMs(0)` is the old behaviour.
 
 ## Broadcasting
 
@@ -117,6 +130,13 @@ session neither copies that list nor blocks a broadcast. `broadcast(CharSequence
 session; the `ByteBuf` forms encode nothing at all - they give every session a retained duplicate of the
 buffer. `broadcastAndRelease(ByteBuf)` takes the buffer over and releases it once the fan-out is done;
 `broadcast(ByteBuf)` leaves it to the caller, so the same buffer can be sent again or kept.
+
+A fan-out is walked to the end. One session which throws - an observer of yours, an allocation, a channel
+already torn down - costs that session and nothing else: it is reported through `onWriteFailed` and closed,
+exactly as a failed write is, and the walk carries on to the next one. Abandoning it half way is not a state
+anything could recover from, since the sessions already reached have the frame. The same holds for
+`EntitySubscriptions.publish(Consumer)`, where the consumer is yours; `session.deliveryFailed(cause)` is how
+a fan-out you write yourself does the same thing.
 
 For anything with state behind it - a price, a room, an order book - broadcasting is the wrong shape: it sends
 to everyone and tells a new session nothing about what it missed. That is what channels are for.
@@ -181,6 +201,10 @@ Called from any other thread the work is scheduled onto that loop, `0` comes bac
 visible through the callbacks and the observer. Being on that loop is what puts a snapshot ahead of every
 concurrent update.
 
+A closed session subscribes to nothing, whether it was closed before the call or while the work was on its
+way to the event loop. Everything that unsubscribes a session which goes away runs once, inside
+`session.close()`, so a subscription landing after that would be held - and published to - forever.
+
 `subscribeForKnownOnly` is the one to expose to clients: it answers "no such entity" instead of creating one
 for every id a client cares to send.
 
@@ -210,6 +234,9 @@ an api-wide decision:
 | The session              | closed                                 | kept, and marked as lagging                                       |
 | When the channel drains  | -                                      | the snapshot of every entity it subscribes to is re-sent          |
 | Suitable for             | anything                               | streams which restore a session from a snapshot                   |
+
+A session under back pressure gets no pings - its channel is not writable - but its read timeout keeps
+running, because a peer which stopped reading and a peer which is gone look exactly alike from here.
 
 Skipping is off by default, and this is the one place where the promise it makes has to be kept: turn it on
 only if *every* subscription served by that api restores a session with a snapshot. A channel relaying
@@ -400,8 +427,11 @@ re-synchronizing one cost what that session subscribed to, not what its channels
 of thousands of entities is fine. `Channel.unsubscribeAll(session)` is the exception: it is asked for
 explicitly and walks the whole channel.
 
-**Pings cost a timer per session.** Set `withPingIntervalMs(0)` when the protocol above already has a
-heartbeat, or when an idle connection is not worth detecting.
+**The keep-alive costs a timer per session**, and it is on by default. That is the right default for a
+server facing the open internet, where a peer that vanishes without a FIN would otherwise hold its session
+and every subscription on it forever. Set `withPingIntervalMs(0).withReadTimeoutMs(0)` when the protocol
+above already has a heartbeat, or on a measuring instrument where the ping frames would land in somebody's
+counts.
 
 **Compression is per connection.** `permessage-deflate` holds a compressor context per session and runs on
 every frame - the price of a fan-out grows with the number of subscribers, not with the number of distinct

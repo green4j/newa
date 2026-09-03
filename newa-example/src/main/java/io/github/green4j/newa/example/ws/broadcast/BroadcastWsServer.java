@@ -48,7 +48,8 @@ public class BroadcastWsServer {
                 API_VERSION
         )
                 .withPathPrefix("ws")
-                .withPingIntervalMs(10_000)
+                .withPingIntervalMs(10_000) // shorter than the 30s/90s default, so that the
+                .withReadTimeoutMs(30_000)  // keep-alive is something you can watch happen here
                 .withObservers(new StdOutWsApiObserverFactory());
 
         final WsApi api = apiBuilder.build();

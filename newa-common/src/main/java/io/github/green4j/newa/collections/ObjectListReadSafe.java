@@ -167,19 +167,21 @@ public class ObjectListReadSafe<T> {
     }
 
     /**
-     * Adds the item, which no snapshot taken before this call ever sees.
+     * Adds the item, which no snapshot taken before this call ever sees. A closed list says no rather than
+     * throwing, the way {@link #remove} says it held nothing: closing is what a caller races, not what it
+     * does wrong.
      *
      * @param item to add.
-     * @throws IllegalStateException if the list has been closed.
+     * @return true if the item was added, false if the list has been closed and holds nothing ever again.
      */
-    public final void add(final T item) {
+    public final boolean add(final T item) {
         if (item == null) {
             throw new IllegalArgumentException("An item can not be null");
         }
 
         synchronized (this) {
             if (closed) {
-                throw new IllegalStateException("Closed");
+                return false;
             }
 
             final Snapshot<T> snapshot = current;
@@ -189,7 +191,7 @@ public class ObjectListReadSafe<T> {
                 // reading it, and publishing the new snapshot below is what makes the write visible
                 snapshot.items[snapshot.limit] = item;
                 current = new Snapshot<>(snapshot.items, snapshot.limit + 1, snapshot.size + 1);
-                return;
+                return true;
             }
 
             // no room left, so an array of its own - which the readers of the current one never see, and
@@ -199,6 +201,7 @@ public class ObjectListReadSafe<T> {
             items[copied] = item;
 
             current = new Snapshot<>(items, copied + 1, copied + 1);
+            return true;
         }
     }
 

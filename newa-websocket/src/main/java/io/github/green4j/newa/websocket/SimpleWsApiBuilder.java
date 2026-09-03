@@ -36,6 +36,7 @@ public class SimpleWsApiBuilder extends WsApiBuilder<SimpleWsApiBuilder> {
                 receiver,
                 websocketPath(),
                 pingIntervalMs,
+                readTimeoutMs,
                 skipOnBackPressure
         );
     }

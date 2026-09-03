@@ -51,8 +51,6 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.util.ResourceLeakDetector;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -92,21 +90,11 @@ class ChannelErrorTest {
     @TempDir
     private Path root;
 
-    private ResourceLeakDetector.Level level;
-
     @BeforeEach
     public void setUp() throws IOException {
-        level = ResourceLeakDetector.getLevel();
-        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
-
         Files.createDirectories(root.resolve("img"));
         Files.write(root.resolve("img/big.bin"), new byte[BIG_FILE_SIZE]);
         Files.write(root.resolve("small.txt"), "small".getBytes(StandardCharsets.UTF_8));
-    }
-
-    @AfterEach
-    public void tearDown() {
-        ResourceLeakDetector.setLevel(level);
     }
 
     private FileSet files() {

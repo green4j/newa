@@ -36,6 +36,7 @@ import java.util.List;
 public class WsApiHandler extends WebSocketServerProtocolHandler {
     private final WsApi wsApi;
     private final long pingIntervalMs;
+    private final long readTimeoutMs;
     private final ChannelErrorHandler channelErrorHandler;
 
     private ClientSession session;
@@ -53,6 +54,7 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
 
         this.wsApi = wsApi;
         this.pingIntervalMs = wsApi.pingIntervalMs();
+        this.readTimeoutMs = wsApi.readTimeoutMs();
         this.channelErrorHandler = channelErrorHandler;
     }
 
@@ -65,7 +67,8 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
                             wsApi,
                             wsApi.receiver(),
                             ctx.channel(),
-                            pingIntervalMs
+                            pingIntervalMs,
+                            readTimeoutMs
                     )
             );
         }
@@ -87,6 +90,10 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
         if (session == null) {
             throw new IllegalStateException("Session is null");
         }
+
+        session.frameArrived(); // before the type is looked at: a pong answering our ping is the only
+        // frame a session which does nothing but listen ever sends, and it is what the read timeout waits
+        // for. Ping, pong and close are answered by super.decode below, and reported to nobody
 
         if (frame instanceof TextWebSocketFrame) {
             session.frameReceived(frame.content().readableBytes()); // the payload as it came off

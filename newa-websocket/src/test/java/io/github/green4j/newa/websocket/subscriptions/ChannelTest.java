@@ -141,7 +141,7 @@ class ChannelTest {
         final List<CharSequence> unknown = new ArrayList<>();
         assertEquals(
                 1,
-                channel.subscribeForKnownOnly(session, List.<CharSequence>of("AA", "ZZ"), unknown)
+                channel.subscribeForKnown(session, List.<CharSequence>of("AA", "ZZ"), unknown)
         );
 
         assertEquals(List.<CharSequence>of("ZZ"), unknown);
@@ -159,6 +159,23 @@ class ChannelTest {
         assertFalse(channel.isSubscribed(session));
         assertEquals(0, channel.getEntitySubscriptions("AA").numberOfSubscribedSessions());
         assertEquals(0, channel.getEntitySubscriptions("CC").numberOfSubscribedSessions());
+    }
+
+    @Test
+    void shouldNotSubscribeAClosedSession() {
+        final ClientSession session = sessions.newSession();
+        final EntitySubscriptions entity = channel.getOrCreateEntitySubscriptions("AA");
+
+        session.close(); // the unsubscribing of a session which goes away runs once, and it has run now
+        runPendingTasks(session);
+
+        assertEquals(0, channel.subscribe(session, "AA"));
+        assertEquals(0, channel.subscribeForKnown(session, "AA"));
+        runPendingTasks(session);
+
+        assertFalse(channel.isSubscribed(session));
+        assertEquals(0, entity.numberOfSubscribedSessions());
+        assertEquals(0, ClientSessionSubscriptions.of(session).numberOfSubscribedEntities());
     }
 
     @Test

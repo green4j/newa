@@ -68,7 +68,7 @@ public interface SubscriptionsWsApiObserver extends WsApiObserver {
     }
 
     /**
-     * {@link Channel#subscribeForKnownOnly(io.github.green4j.newa.websocket.ClientSession, CharSequence)}
+     * {@link Channel#subscribeForKnown(io.github.green4j.newa.websocket.ClientSession, CharSequence)}
      * found no entity of that id, so nothing was subscribed and nothing was created for it either.
      *
      * @param channel asked

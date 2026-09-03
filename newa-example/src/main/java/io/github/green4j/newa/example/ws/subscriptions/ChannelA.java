@@ -67,7 +67,7 @@ public class ChannelA extends Channel<ChannelA.ChannelAEntitySubscriptions> {
 
             final int value = lastValue;
             if (value != NO_VALUE) { // the snapshot goes out before any concurrent update
-                session.send(entityId + "=" + value + " @" + publicationSequence);
+                session.send(entityId + "=" + value + " S@" + publicationSequence);
             }
         }
 

@@ -144,8 +144,13 @@ public final class ClientSessionSubscriptions {
             if (entity == null) { // an entity this session unsubscribed from, slot and all
                 continue;
             }
-            entity.resync(session);
-            entities++;
+            try {
+                entity.resync(session);
+                entities++;
+            } catch (final Exception cause) { // the snapshot of this entity never went out, so this
+                session.deliveryFailed(cause); // session has a hole nothing else would fill. It is
+                // closed, and the remaining entities are still re-synchronized rather than left behind
+            }
         }
 
         if (observer != null) {
@@ -171,7 +176,11 @@ public final class ClientSessionSubscriptions {
             if (entity == null) {
                 continue;
             }
-            entity.remove(session);
+            try {
+                entity.remove(session);
+            } catch (final Exception ignore) { // teardown: one entity whose application hook throws must
+                // not leave this session subscribed to every entity after it in the list
+            }
         }
     }
 }

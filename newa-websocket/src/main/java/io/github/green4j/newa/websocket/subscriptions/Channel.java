@@ -93,10 +93,14 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
      * onto that event loop, 0 is returned and the outcome is reported through the callbacks
      * of {@link EntitySubscriptions} only.
      *
+     * <p>A closed session subscribes to nothing and 0 comes back, whether it was closed before the call or
+     * while the work was on its way to the event loop.
+     *
      * @param session the session to apply the change to.
      * @param entityIds the ids to apply the change for.
      * @param unknownEntityIds collects the ids no EntitySubscriptions is known for.
-     * @return the number of the entities subscribed.
+     * @return the number of the ids an EntitySubscriptions was found or created for, which counts an id the
+     *         session was subscribed to already.
      */
     public final int subscribe(final ClientSession session,
                                final List<CharSequence> entityIds,
@@ -109,9 +113,9 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
         );
     }
 
-    public final int subscribeForKnownOnly(final ClientSession session,
-                                           final CharSequence entityId) {
-        return subscribeForKnownOnly(
+    public final int subscribeForKnown(final ClientSession session,
+                                       final CharSequence entityId) {
+        return subscribeForKnown(
                 session,
                 List.of(entityId),
                 new ArrayList<>()
@@ -124,11 +128,12 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
      * @param session the session to apply the change to.
      * @param entityIds the ids to apply the change for.
      * @param unknownEntityIds collects the ids no EntitySubscriptions is known for.
-     * @return the number of the entities subscribed.
+     * @return the number of the ids an EntitySubscriptions was found for, which counts an id the session
+     *         was subscribed to already.
      */
-    public final int subscribeForKnownOnly(final ClientSession session,
-                                           final List<CharSequence> entityIds,
-                                           final List<CharSequence> unknownEntityIds) {
+    public final int subscribeForKnown(final ClientSession session,
+                                       final List<CharSequence> entityIds,
+                                       final List<CharSequence> unknownEntityIds) {
         return doSubscribe(
                 session,
                 entityIds,
@@ -141,6 +146,13 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
                             final List<CharSequence> entityIds,
                             final List<CharSequence> unknownEntityIds,
                             final boolean knownOnly) {
+        // Read once before the scheduling below and once more when the scheduled task gets here on the
+        // event loop. The second read is the one which matters: a session which is gone has been
+        // unsubscribed already, and nothing would ever take it out of an entity it entered after that.
+        if (session.isClosed()) {
+            return 0;
+        }
+
         if (!onSessionEventLoop(session)) {
             final List<CharSequence> ids = new ArrayList<>(entityIds); // the caller may reuse its list
             session.executor().execute(
@@ -240,7 +252,11 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
             if (subscriptions == null) { // an entity which was removed, and left the slot behind
                 continue;
             }
-            subscriptions.remove(session);
+            try {
+                subscriptions.remove(session);
+            } catch (final Exception ignore) { // teardown: one entity whose application hook throws must
+                // not leave the session subscribed to every entity after it in the list
+            }
         }
     }
 
@@ -308,6 +324,15 @@ public abstract class Channel<S extends EntitySubscriptions> implements Closeabl
         return false;
     }
 
+    /**
+     * Walks the entities of this channel, not the sessions subscribed to them. A consumer which throws
+     * ends the walk and the exception is the caller's, unlike a fan-out over sessions: there is no session
+     * here to report the failure against, and an entity which was skipped is a bug in the caller rather
+     * than a peer which went away.
+     *
+     * @param consumer accepts the subscriptions of one entity.
+     * @return the number of the entities walked.
+     */
     public final int forEachSubscription(final Consumer<S> consumer) {
         final ObjectListReadSafe.Snapshot<S> snapshot = entities.snapshot();
         int walked = 0;

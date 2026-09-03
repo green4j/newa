@@ -33,10 +33,16 @@ public class WsApi implements ClientSessionFactory, WritingResult {
     private final Receiver receiver;
     private final String websocketPath;
     private final int pingIntervalMs;
+    private final int readTimeoutMs;
     private final boolean skipOnBackPressure;
     private final ClientSessions clientSessions;
 
     /**
+     * An api whose read timeout is {@link WsApiBuilder#DEFAULT_READ_TIMEOUT_MS}. Note the pairing that
+     * implies: with a ping interval of 0 nothing gives a session which only listens anything to answer,
+     * and it is closed after that timeout however healthy it is. Take the constructor below and say 0 for
+     * both when that is what you want.
+     *
      * @param observers asked for an observer per session, or null to observe nothing.
      * @param receiver told about every text frame of every session, or null for an api which only ever
      *                 sends. It is to a frame what a rest handle is to a request, which is why it belongs
@@ -50,9 +56,40 @@ public class WsApi implements ClientSessionFactory, WritingResult {
                  final String websocketPath,
                  final int pingIntervalMs,
                  final boolean skipOnBackPressure) {
+        this(
+                observers,
+                receiver,
+                websocketPath,
+                pingIntervalMs,
+                WsApiBuilder.DEFAULT_READ_TIMEOUT_MS, // the safe default belongs to an api assembled by
+                // hand no less than to one built by the builder
+                skipOnBackPressure
+        );
+    }
+
+    /**
+     * @param observers asked for an observer per session, or null to observe nothing.
+     * @param receiver told about every text frame of every session, or null for an api which only ever
+     *                 sends. It is to a frame what a rest handle is to a request, which is why it belongs
+     *                 to the api rather than to the handler in front of it.
+     * @param websocketPath the path the handshake is served on.
+     * @param pingIntervalMs how often an idle session is pinged, 0 for never. What gives a session which
+     *                       only listens something to answer, so that the timeout below can tell it from
+     *                       a peer which is gone.
+     * @param readTimeoutMs how long a session may hear nothing at all from its peer - any frame counts,
+     *                      a pong included - before it is closed. 0 to wait for as long as the peer likes.
+     * @param skipOnBackPressure keeps a session which can not keep up instead of closing it.
+     */
+    public WsApi(final WsApiObserverFactory observers,
+                 final Receiver receiver,
+                 final String websocketPath,
+                 final int pingIntervalMs,
+                 final int readTimeoutMs,
+                 final boolean skipOnBackPressure) {
         this.receiver = receiver;
         this.websocketPath = websocketPath;
         this.pingIntervalMs = pingIntervalMs;
+        this.readTimeoutMs = readTimeoutMs;
         this.skipOnBackPressure = skipOnBackPressure;
 
         clientSessions = new ClientSessions(
@@ -86,6 +123,10 @@ public class WsApi implements ClientSessionFactory, WritingResult {
 
     public int pingIntervalMs() {
         return pingIntervalMs;
+    }
+
+    public int readTimeoutMs() {
+        return readTimeoutMs;
     }
 
     @Override

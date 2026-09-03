@@ -36,7 +36,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EntitySubscriptionsTest {
@@ -86,6 +85,68 @@ class EntitySubscriptionsTest {
     @AfterEach
     void tearDown() {
         sessions.closeAll();
+    }
+
+    @Test
+    void shouldPublishToEverySessionWhenOneOfThemThrows() {
+        final ClientSession one = sessions.newSession();
+        final ClientSession two = sessions.newSession();
+        final ClientSession three = sessions.newSession();
+
+        assertTrue(subscriptions.add(one));
+        assertTrue(subscriptions.add(two));
+        assertTrue(subscriptions.add(three));
+
+        final List<ClientSession> reached = new ArrayList<>();
+
+        final long sequence = subscriptions.publish(session -> {
+            reached.add(session);
+            if (session == two) {
+                throw new IllegalStateException("the consumer of the application went wrong");
+            }
+        });
+
+        assertEquals(1, sequence);
+        assertEquals(List.of(one, two, three), reached);
+
+        // the sequence number is already spent and the sessions ahead of it have the update, so a
+        // publication abandoned half way is not a state anything could recover from
+        assertEquals(List.of(two), sessions.writeErrors(),
+                "the session whose delivery threw is reported the way a failed write is, and an api "
+                        + "closes it from there");
+    }
+
+    @Test
+    void shouldUnsubscribeEverySessionWhenClosingWhileOneOfThemThrows() {
+        final ClientSession one = sessions.newSession();
+        final ClientSession two = sessions.newSession();
+
+        final List<ClientSession> unsubscribed = new ArrayList<>();
+        final AtomicInteger closed = new AtomicInteger();
+
+        final EntitySubscriptions entity = new EntitySubscriptions("E") {
+            @Override
+            protected void onClientSessionUnsubscribed(final ClientSession session) {
+                unsubscribed.add(session);
+                if (session == one) {
+                    throw new IllegalStateException("the teardown of the application went wrong");
+                }
+            }
+
+            @Override
+            protected void onClosed() {
+                closed.incrementAndGet();
+            }
+        };
+
+        assertTrue(entity.add(one));
+        assertTrue(entity.add(two));
+
+        entity.close();
+
+        assertEquals(List.of(one, two), unsubscribed,
+                "an entity which is gone is owed to every session it held");
+        assertEquals(1, closed.get());
     }
 
     @Test
@@ -186,7 +247,27 @@ class EntitySubscriptionsTest {
         assertEquals(0, subscriptions.numberOfSubscribedSessions());
         assertFalse(subscriptions.contains(one));
 
-        assertThrows(IllegalStateException.class, () -> subscriptions.add(sessions.newSession()));
+        final ClientSession later = sessions.newSession();
+        assertFalse(subscriptions.add(later)); // said, not thrown: on the deferred path of Channel a throw
+        // is an uncaught failure of an event loop task, and the rest of the batch is never subscribed
+        assertEquals(List.of(one), subscriptions.subscribed); // the handler did not fire for it
+        assertEquals(0, ClientSessionSubscriptions.of(later).numberOfSubscribedEntities());
+
         assertFalse(subscriptions.remove(one));
+    }
+
+    @Test
+    void shouldNotSubscribeAClosedSession() {
+        final ClientSession one = sessions.newSession();
+        one.close(); // everything which unsubscribes a session which goes away has run by now, so a
+        // subscription landing after this one would stay here forever
+
+        assertFalse(subscriptions.add(one));
+
+        assertEquals(0, subscriptions.numberOfSubscribedSessions());
+        assertFalse(subscriptions.contains(one));
+        assertEquals(List.of(), subscriptions.subscribed);
+        assertEquals(List.of(), subscriptions.repeated); // it is not a repeated subscription either
+        assertEquals(0, ClientSessionSubscriptions.of(one).numberOfSubscribedEntities());
     }
 }

@@ -41,12 +41,14 @@ final class SubscriptionsWsApi extends WsApi {
                        final Receiver receiver,
                        final String websocketPath,
                        final int pingIntervalMs,
+                       final int readTimeoutMs,
                        final boolean skipOnBackPressure) {
         super(
                 observers,
                 receiver,
                 websocketPath,
                 pingIntervalMs,
+                readTimeoutMs,
                 skipOnBackPressure
         );
 

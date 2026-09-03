@@ -29,15 +29,48 @@ public class ClientSessionContext {
     private final Receiver receiver;
     private final io.netty.channel.Channel channel;
     private final long pingIntervalMs;
+    private final long readTimeoutMs;
 
+    /**
+     * A context without a read timeout. The keep-alive pair is decided by the api, and this constructor is
+     * for a caller which is assembling a session by hand and wants no timers it did not ask for.
+     *
+     * @param writingResult told how every write of the session went.
+     * @param receiver told about every text frame of the session, null to receive nothing.
+     * @param channel of the session.
+     * @param pingIntervalMs how often an idle session is pinged, 0 for never.
+     */
     public ClientSessionContext(final WritingResult writingResult,
                                 final Receiver receiver,
                                 final io.netty.channel.Channel channel,
                                 final long pingIntervalMs) {
+        this(
+                writingResult,
+                receiver,
+                channel,
+                pingIntervalMs,
+                0
+        );
+    }
+
+    /**
+     * @param writingResult told how every write of the session went.
+     * @param receiver told about every text frame of the session, null to receive nothing.
+     * @param channel of the session.
+     * @param pingIntervalMs how often an idle session is pinged, 0 for never.
+     * @param readTimeoutMs how long the peer may say nothing at all before the session is closed,
+     *                      0 for as long as it likes.
+     */
+    public ClientSessionContext(final WritingResult writingResult,
+                                final Receiver receiver,
+                                final io.netty.channel.Channel channel,
+                                final long pingIntervalMs,
+                                final long readTimeoutMs) {
         this.writingResult = writingResult;
         this.receiver = receiver;
         this.channel = channel;
         this.pingIntervalMs = pingIntervalMs;
+        this.readTimeoutMs = readTimeoutMs;
     }
 
     public WritingResult writingResult() {
@@ -54,5 +87,9 @@ public class ClientSessionContext {
 
     public long pingIntervalMs() {
         return pingIntervalMs;
+    }
+
+    public long readTimeoutMs() {
+        return readTimeoutMs;
     }
 }

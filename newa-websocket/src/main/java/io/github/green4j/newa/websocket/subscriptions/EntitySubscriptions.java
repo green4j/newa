@@ -106,10 +106,20 @@ public class EntitySubscriptions implements Closeable {
     /**
      * Must be called on the event loop of the session.
      *
+     * <p>A closed session is not added. Everything which unsubscribes a session which goes away runs once,
+     * inside {@link ClientSession#close()}, so a session added after that would stay here forever - and
+     * that is exactly what a subscription {@link Channel} scheduled from another thread looks like when the
+     * connection dropped before the scheduled task got its turn.
+     *
      * @param session the session to subscribe.
-     * @return true if the session has been added, false if it was subscribed already.
+     * @return true if the session has been added, false if it was subscribed already, if it is closed, or
+     *         if this entity is closed.
      */
     public final boolean add(final ClientSession session) {
+        if (session.isClosed()) { // the session is gone, and whatever unsubscribed it has run already,
+            return false; // so nothing would ever take it out of here again
+        }
+
         final ClientSessionSubscriptions subscriptions = ClientSessionSubscriptions.of(session);
         final SubscriptionsWsApiObserver observer = subscriptions != null ? subscriptions.observer() : null;
 
@@ -128,7 +138,9 @@ public class EntitySubscriptions implements Closeable {
             return false;
         }
 
-        subscribedSessions.add(session); // throws when this entity is closed
+        if (!subscribedSessions.add(session)) { // this entity is closed: its close() has already reported
+            return false; // the sessions it held, and this one never got in, so nothing is owed
+        }
 
         if (subscriptions != null) {
             subscriptions.onSubscribed(this); // registered before the snapshot is built, so a session
@@ -190,7 +202,14 @@ public class EntitySubscriptions implements Closeable {
             if (session == null) { // a session which unsubscribed, and left the slot behind
                 continue;
             }
-            consumer.accept(session);
+            try {
+                consumer.accept(session);
+            } catch (final Exception cause) { // half a publication is not a state anything can recover
+                session.deliveryFailed(cause); // from - the sequence is spent and the sessions already
+                // reached have the update - so one session which throws costs that session, and the
+                // fan-out goes on. Never throws, and never touches a buffer: whatever was handed to this
+                // session was released by it, failure included
+            }
         }
 
         return sequence;
@@ -255,7 +274,11 @@ public class EntitySubscriptions implements Closeable {
             if (session == null) {
                 continue;
             }
-            consumer.accept(session);
+            try {
+                consumer.accept(session);
+            } catch (final Exception cause) {
+                session.deliveryFailed(cause);
+            }
             walked++;
         }
         return walked;
@@ -333,15 +356,20 @@ public class EntitySubscriptions implements Closeable {
                     // holding it - the one closing later would look for it in vain
                 }
 
-                onClientSessionUnsubscribed(session);
+                try {
+                    onClientSessionUnsubscribed(session);
 
-                final SubscriptionsWsApiObserver observer =
-                        subscriptions != null ? subscriptions.observer() : null;
-                if (observer != null) {
-                    observer.onUnsubscribed(this);
+                    final SubscriptionsWsApiObserver observer =
+                            subscriptions != null ? subscriptions.observer() : null;
+                    if (observer != null) {
+                        observer.onUnsubscribed(this);
+                    }
+                } catch (final Exception ignore) { // this is teardown, and it is owed to every session
+                    // the entity held: one of them throwing must not leave the rest of them still
+                    // believing they are subscribed to an entity which is gone
                 }
             }
-        } finally { // in case an unexpected exception happened in onClientSessionUnsubscribed(session);
+        } finally {
             onClosed();
         }
     }

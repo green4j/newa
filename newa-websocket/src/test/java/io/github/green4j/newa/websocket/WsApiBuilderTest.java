@@ -30,6 +30,26 @@ import org.junit.jupiter.api.Test;
 class WsApiBuilderTest {
 
     @Test
+    public void testKeepAliveIsOnByDefault() {
+        final WsApi api = new SimpleWsApiBuilder(1)
+                .build();
+        Assertions.assertEquals(WsApiBuilder.DEFAULT_PING_INTERVAL_MS,
+                api.pingIntervalMs());
+        Assertions.assertEquals(WsApiBuilder.DEFAULT_READ_TIMEOUT_MS,
+                api.readTimeoutMs());
+    }
+
+    @Test
+    public void testKeepAliveCanBeTurnedOff() {
+        final WsApi api = new SimpleWsApiBuilder(1)
+                .withPingIntervalMs(0)
+                .withReadTimeoutMs(0)
+                .build();
+        Assertions.assertEquals(0, api.pingIntervalMs());
+        Assertions.assertEquals(0, api.readTimeoutMs());
+    }
+
+    @Test
     public void testDefaultPathPrefix() {
         final WsApi api = new SimpleWsApiBuilder(1)
                 .build();

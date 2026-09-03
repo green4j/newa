@@ -141,8 +141,11 @@ public final class NewaWsServer implements WsServer {
         final WsApi api = new SubscriptionWsApiBuilder(1)
                 .withPathPrefix("ws")
                 .withReceiver(subscriptions)
-                .build(); // no skipping, no observer, no ping: a ping frame would show up in the
-                // subscriber's counts as a frame nobody published
+                .withPingIntervalMs(0) // a ping frame would show up in the subscriber's counts as a
+                .withReadTimeoutMs(0)  // frame nobody published, and a timer per session is a cost the
+                // benchmark did not have when its numbers were recorded. Both are on by default, and a
+                // measuring instrument has to keep measuring the same thing
+                .build(); // no skipping and no observer either
 
         final EventLoopGroup bossGroup =
                 new MultiThreadIoEventLoopGroup(1, Transport.ioHandlerFactory());
