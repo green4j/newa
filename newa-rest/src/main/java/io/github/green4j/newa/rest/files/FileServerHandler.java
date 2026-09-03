@@ -25,6 +25,7 @@
 package io.github.green4j.newa.rest.files;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
 import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.FullHttpResponseContent;
 import io.github.green4j.newa.rest.HttpApiObserver;
@@ -205,7 +206,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param files this handler owns the paths of
      */
     public FileServerHandler(final FileSet files) {
-        this(files, new TextErrorHandler(), ChannelErrorHandler.printingToStdErr(), null,
+        this(files, new TextErrorHandler(), new StdErrChannelErrorHandler(), null,
                 DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
     }
 

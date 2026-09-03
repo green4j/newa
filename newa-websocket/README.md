@@ -3,7 +3,8 @@
 WebSocket sessions, broadcasting and subscription channels built on Netty.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> [WebSocketServerCompressionHandler] --> WsApiHandler
+Client --> HttpServerCodec --> HttpObjectAggregator --> [WebSocketServerCompressionHandler]
+           --> WsApiHandler --> [your handlers] --> HandshakeOnlyHandler
 ```
 
 `WsServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is one
@@ -22,7 +23,7 @@ WsApi api = new SimpleWsApiBuilder(1)          // version 1, so the handshake pa
         .withObservers(AccessLog::new)         // optional, see Observing
         .build();
 
-new Life().run(() -> WsServer.start(9010, api));   // and it is serving
+new Life().run(() -> WsServer.start(9010, api));   // serving ws://127.0.0.1:9010/ws/v1
 ```
 
 Clients connect to `ws://host:port` plus `api.websocketPath()` - here `ws://127.0.0.1:9010/ws/v1`. The
@@ -46,7 +47,7 @@ is left is the pipeline and the bootstrap:
 ```java
 NettyServer server = WsServer.of(api)
         .withCompression()                       // permessage-deflate, off by default
-        .withChannelErrorHandler(ChannelErrorHandler.printingToStdErr())
+        .withChannelErrorHandler(new StdErrChannelErrorHandler())
         .withMaxContentLength(65536)             // the handshake request, not what a session sends
         .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
         .start(new NettyServerBuilder()
@@ -59,7 +60,9 @@ NettyServer server = WsServer.of(api)
 **One port for both.** `withHandler` puts a handler *behind* `WsApiHandler`, which is where a request that is
 not the handshake ends up - the handshake handler passes on a uri it does not recognise. So a `RestApiHandler`
 there serves the REST api on the websocket's port. Pass the handler, never `RestServer.pipeline()`: the codec
-and the aggregator are already in front of it, and a second pair would decode everything twice.
+and the aggregator are already in front of it, and a second pair would decode everything twice. Behind
+whatever you add stands a `HandshakeOnlyHandler`, which closes a connection nothing answered - see
+[Errors](#errors).
 
 `NettyServer` is what you get back, an `AutoCloseable` and nothing more: `port()`, `channel()`, `close()`,
 and `workerGroup()` - which is where a periodic broadcast belongs, on the loops the sessions it writes to
@@ -79,6 +82,29 @@ ask for that end - see `Ending it from a request` in
 
 To keep this pipeline but bootstrap it yourself, hand `WsServer.pipeline()` to a `ServerBootstrap` of your
 own. To change the pipeline, write it out - `ws.pipeline.PipelineWsServer` in `newa-example` is that.
+
+### Beside a REST server
+
+Two ways, and the first one is not this section: if both can live on one port, `withHandler` above puts a
+`RestApiHandler` behind the handshake and there is one server to run.
+
+They need two ports when they need different interfaces, different pools of workers, or different limits on
+what a request may be - an admin REST api on the loopback beside a public WebSocket, say. Then it is one
+`Life` and one opener made of both, in either order:
+
+```java
+final Life life = new Life();
+
+life.run(Life.all(
+        () -> WsServer.of(wsApi).start(new NettyServerBuilder().port(9010).workerThreads(6)),
+        () -> RestServer.of(restApi).start(new NettyServerBuilder().port(9009).host("127.0.0.1"))));
+```
+
+`Life.all` knows nothing about either - an `Opener` returns an `AutoCloseable` and that is all it is - so a
+pair of WebSocket servers, or a WebSocket server and something of your own with a `close()`, compose exactly
+the same way. What it buys, and the two things it deliberately leaves to you, are in
+[newa-rest](../newa-rest/README.md#more-than-one-server-in-one-life); `rest.pair.PairedRestServers` in
+`newa-example` runs a pair.
 
 ## Sessions
 
@@ -263,6 +289,7 @@ and each failure is reported once, by the stage which knows what it was:
 | the `Receiver` threw | `WsApiObserver.onReceiveFailed(cause)`, the cause as it was thrown | a `1011` close, and the session ends |
 | a frame did not go out | `onWriteFailed(cause)`, and `onWriteBackPressure` before it when the channel was full | the session ends, unless `withSkipOnBackPressure()` |
 | the channel itself failed | `ChannelErrorHandler` | the connection goes |
+| an HTTP request nothing took - not the handshake path, nothing mounted behind | `ChannelErrorHandler`, a `NotAHandshakeException` carrying the method and the uri | the connection goes, unanswered |
 | the client sent something you do not serve | wherever your `Receiver` reports it | whatever your protocol says |
 
 ```java
@@ -284,9 +311,31 @@ what is left is a bug, and a bug closes one session.
 `ClientSession.receiveFailed(cause)` is the same treatment, public, for a receiver which hands its frames to
 something else and catches there.
 
-The HTTP half of a websocket port - a handshake at a path you do not serve, and any `RestApiHandler` mounted
-beside the websocket one - is HTTP, and its errors are rendered by an `HttpErrorHandler`, exactly as in
-`newa-rest`. See `ws.errors.ErrorsWsServer` for both halves in one server.
+The HTTP half of a websocket port is HTTP, and whatever is mounted behind the websocket handler renders its
+errors with an `HttpErrorHandler`, exactly as in `newa-rest` - see `ws.errors.ErrorsWsServer` for both
+halves in one server.
+
+With nothing mounted there, a request which is not the handshake gets **no response and no port left
+holding it**: `HandshakeOnlyHandler`, last in the pipeline, closes the connection and reports a
+`NotAHandshakeException` to the `ChannelErrorHandler`. This port speaks HTTP once, to be upgraded away from
+it, so there is nothing for it to answer with - and leaving the request where Netty drops it, at the end of
+the pipeline, would hold a socket for as long as the peer cared to keep it. Nothing before the handshake is
+on a timer: the ping interval and the read timeout belong to a session, which does not exist yet. The type
+is there to be read rather than logged blindly - a health check aimed at the wrong port is worth a counter,
+a scanner is worth nothing:
+
+```java
+WsServer.of(api).withChannelErrorHandler((channel, cause) -> {
+    if (cause instanceof NotAHandshakeException) {
+        wrongPort.increment();                  // not a failure of this server
+        return;
+    }
+    log.error("Channel {} failed", channel, cause);
+});
+```
+
+It carries no stack trace - the frames would name Netty's decoders - and its `method()` and `uri()` come
+from the peer, so whatever writes them to a log is writing what somebody else chose.
 
 ## Observing
 
@@ -513,8 +562,8 @@ In `newa-example`, package `io.github.green4j.newa.example.ws`:
   the pipeline written out by hand. The composition itself needs no hand assembly - `withHandler(...)` above
   produces the same pipeline - but its watermarks are computed from the fan-out it expects rather than left
   at a default, which is what no helper can guess.
-- **`StdOutWsApiObserverFactory`** - an observer per session which counts what it sent and prints the totals
-  when the session closes.
+- **`StdOutWsApiObserver`** - an observer per session, from `StdOutWsApiObserver.factory()`, which counts
+  what it sent and prints the totals when the session closes.
 
 All but `pipeline.PipelineWsServer` are started with `WsServer`; that one is the reason the manual path is
 documented.

@@ -274,4 +274,79 @@ class LifeTest {
         }, null);
         Assertions.assertEquals(1, second.closes.get());
     }
+
+    @Test
+    public void allOpensInTheOrderGivenAndClosesEveryOneOfThem() throws Exception {
+        final Life life = new Life();
+        final List<String> opened = new CopyOnWriteArrayList<>();
+        final Resource first = new Resource();
+        final Resource second = new Resource();
+
+        life.run(Life.all(
+                () -> {
+                    opened.add("first");
+                    return first;
+                },
+                () -> {
+                    opened.add("second");
+                    life.end("done");
+                    return second;
+                }));
+
+        Assertions.assertEquals(List.of("first", "second"), opened);
+        Assertions.assertEquals(1, first.closes.get());
+        Assertions.assertEquals(1, second.closes.get());
+    }
+
+    @Test
+    public void allUndoesWhatItOpenedWhenOneCannotBeOpened() {
+        final Life life = new Life();
+        final Resource first = new Resource();
+        final AtomicBoolean thirdOpened = new AtomicBoolean();
+
+        final Exception thrown = Assertions.assertThrows(Exception.class, () ->
+                life.run(Life.all(
+                        () -> first,
+                        () -> {
+                            throw new Exception("could not bind");
+                        },
+                        () -> {
+                            thirdOpened.set(true);
+                            return new Resource();
+                        })));
+
+        Assertions.assertEquals("could not bind", thrown.getMessage());
+        Assertions.assertEquals(1, first.closes.get(), "the one already open was left open");
+        Assertions.assertFalse(thirdOpened.get(), "opening carried on past the failure");
+    }
+
+    @Test
+    public void allClosesEveryResourceAtOnce() throws Exception {
+        final Life life = new Life();
+        final CountDownLatch closing = new CountDownLatch(2);
+        final AtomicBoolean sawTheOther = new AtomicBoolean(true);
+
+        // one closed after the other would never see the second one arrive here, so a sequential close
+        // fails this rather than merely being slower than it could be
+        final Life.Opener waitingForTheOther = () -> () -> {
+            closing.countDown();
+            if (!closing.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                sawTheOther.set(false);
+            }
+        };
+
+        life.run(Life.all(
+                waitingForTheOther,
+                () -> {
+                    life.end("done");
+                    return waitingForTheOther.open();
+                }));
+
+        Assertions.assertTrue(sawTheOther.get(), "the two closes did not overlap");
+    }
+
+    @Test
+    public void allNeedsAtLeastOneOpener() {
+        Assertions.assertThrows(IllegalArgumentException.class, () -> Life.all());
+    }
 }

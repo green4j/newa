@@ -25,6 +25,7 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.server.NettyServer;
@@ -101,7 +102,7 @@ public final class RestServer {
     private final List<Supplier<ChannelHandler>> handlers = new ArrayList<>();
 
     private HttpErrorHandler errorHandler = new JsonErrorHandler();
-    private ChannelErrorHandler channelErrorHandler = ChannelErrorHandler.printingToStdErr();
+    private ChannelErrorHandler channelErrorHandler = new StdErrChannelErrorHandler();
     private ResponseChunks responseChunks = ResponseChunks.defaults();
     private HttpApiObserverFactory observers;
     private FileSet files;

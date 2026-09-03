@@ -25,6 +25,7 @@
 package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
 import io.netty.channel.Channel;
@@ -50,7 +51,7 @@ import java.util.function.Supplier;
  * written by hand is made of:
  * <pre>
  * Client --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt; [WebSocketServerCompressionHandler] --&gt;
- *            WsApiHandler --&gt; [your handlers]
+ *            WsApiHandler --&gt; [your handlers] --&gt; HandshakeOnlyHandler
  * </pre>
  * Nothing is hidden and nothing is one-way: {@link #pipeline()} hands the same initializer to a
  * {@link io.netty.bootstrap.ServerBootstrap} of your own, and everything below the pipeline - the transport,
@@ -92,7 +93,7 @@ public final class WsServer {
     private final WsApi api;
     private final List<Supplier<ChannelHandler>> handlers = new ArrayList<>();
 
-    private ChannelErrorHandler channelErrorHandler = ChannelErrorHandler.printingToStdErr();
+    private ChannelErrorHandler channelErrorHandler = new StdErrChannelErrorHandler();
     private int maxContentLength = DEFAULT_MAX_CONTENT_LENGTH;
     private boolean compression;
 
@@ -137,6 +138,9 @@ public final class WsServer {
      * websocket and an HTTP api - put a {@code RestApiHandler} here. Note that it is the handler which goes
      * here, not {@code RestServer.pipeline()}: the codec and the aggregator are already in front of it, and
      * a second pair of them would decode everything twice.
+     *
+     * <p>A {@link HandshakeOnlyHandler} stands behind whatever is added here, so a request neither the
+     * handshake nor any of these took closes the connection rather than holding it open unanswered.
      *
      * @param handler asked for one handler per channel, because a handler is rarely {@code @Sharable}.
      * @return this builder.
@@ -196,5 +200,10 @@ public final class WsServer {
         for (int i = 0; i < handlers.size(); i++) {
             pipeline.addLast(handlers.get(i).get());
         }
+
+        // last, so everything added above answers first. Without it a request which is not the handshake
+        // and which nobody took would sit at the end of the pipeline, discarded in silence, holding a
+        // connection which nothing is on a timer to close
+        pipeline.addLast(new HandshakeOnlyHandler(channelErrorHandler));
     }
 }

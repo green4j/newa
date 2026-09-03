@@ -55,7 +55,7 @@ public class HelloRestServer {
 
     public static void main(final String[] args) throws Exception {
         // named for its role rather than its type: "end.end(...)" below would read badly
-        final Life shutdown = new Life();
+        final Life life = new Life();
 
         final RestApiBuilder apiBuilder = new RestApiBuilder(
                 API_NAME,
@@ -77,9 +77,9 @@ public class HelloRestServer {
         apiBuilder.getJson("/jvm/info", new JsonJvmInfo());
         apiBuilder.getJson("/jvm/threads", new JsonJvmThreadDump());
         apiBuilder.postJson(
-                "/shutdown",
+                "/life",
                 new JsonExecute(
-                        () -> shutdown.end("Called by REST API")
+                        () -> life.end("Called by REST API")
                 )
         );
 
@@ -95,7 +95,7 @@ public class HelloRestServer {
 
         final RestApi api = apiBuilder.buildWithHelp(JsonHelp.factory());
 
-        shutdown.run(() -> {
+        life.run(() -> {
             final NettyServer server = RestServer.of(api)
                     .withCompression()
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
@@ -108,11 +108,11 @@ public class HelloRestServer {
             System.out.printf("  curl -s %s/v1/jvm/threads%n", LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -s %s%s   -> the api describing itself%n",
                     LOCAL_SERVER_ADDRESS, api.helpPath());
-            System.out.printf("  curl -sX POST %s/v1/shutdown   -> stops this server%n",
+            System.out.printf("  curl -sX POST %s/v1/life   -> stops this server%n",
                     LOCAL_SERVER_ADDRESS);
 
-            // End owns the lifecycle: it parks this thread until the end is asked for, adds the JVM shutdown
-            // hook, and closes the server here rather than on the event loop the /shutdown endpoint runs on
+            // End owns the lifecycle: it parks this thread until the end is asked for, adds the JVM life
+            // hook, and closes the server here rather than on the event loop the /life endpoint runs on
 
             return server;
         });

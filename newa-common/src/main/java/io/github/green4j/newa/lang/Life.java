@@ -132,6 +132,54 @@ public final class Life implements Ender {
     }
 
     /**
+     * Several resources as one, for a {@link Life} which has more than one thing to run - two servers on
+     * two ports, say:
+     * <pre>{@code
+     * life.run(Life.all(
+     *         () -> RestServer.start(9009, adminApi),
+     *         () -> RestServer.start(9010, publicApi)));
+     * }</pre>
+     * They are <b>opened in the order given</b>, and one which fails to open closes those already open
+     * before the failure is passed on. That undoing has to happen here and nowhere else: until an opener
+     * returns, a {@link Life} owns nothing, so a resource opened beside one which then failed is a
+     * resource nothing else would ever close.
+     * <p>
+     * They are <b>closed at once</b> rather than one after another, and the close returns when the last
+     * of them is closed. Resources which do not depend on each other lose nothing by that - two servers
+     * do not, each owning the event loops it shuts down - and it keeps the worst case at the timeouts of
+     * one close instead of the sum of all of them, which is what a JVM shutdown hook has to fit into.
+     * When the order of closing does matter, this is the wrong tool: write an opener which closes them in
+     * the order they need, and let the {@link Life} run that.
+     *
+     * @param openers of the resources, in the order they are to be opened. At least one.
+     * @return one opener of all of them, for {@link #run}.
+     * @throws IllegalArgumentException if not given an opener.
+     */
+    public static Opener all(final Opener... openers) {
+        if (openers == null || openers.length == 0) {
+            throw new IllegalArgumentException("At least one opener is required");
+        }
+
+        final Opener[] toOpen = openers.clone(); // the caller's array is not ours to be surprised by
+
+        return () -> {
+            final AutoCloseable[] opened = new AutoCloseable[toOpen.length];
+            int count = 0;
+            try {
+                for (int i = 0; i < toOpen.length; i++) {
+                    opened[i] = toOpen[i].open();
+                    count = i + 1;
+                }
+            } catch (final Exception failed) {
+                closeAll(opened, count); // opened, owned by nobody, and this is the last chance to close
+                throw failed;
+            }
+
+            return () -> closeAll(opened, opened.length);
+        };
+    }
+
+    /**
      * @param opener of the resource to run.
      * @throws Exception whatever the opener threw, or InterruptedException if the calling thread is
      *                   interrupted while waiting.
@@ -240,6 +288,54 @@ public final class Life implements Ender {
             }
         } finally {
             ending.countDown();
+        }
+    }
+
+    /**
+     * Closes the first {@code count} of them at once: one on this thread, the rest on a thread each, and
+     * returns when every one of them is closed. Closing is never abandoned half done - an interrupt is
+     * remembered and re-asserted afterwards - because what waits for this is a {@link Life#run} which
+     * reports the resource closed the moment it returns.
+     *
+     * @param resources to close, some of which may be null - an opener may return one.
+     * @param count     of them to close, which is how many were opened before a failure.
+     */
+    private static void closeAll(final AutoCloseable[] resources,
+                                 final int count) {
+        if (count < 2) {
+            if (count == 1) {
+                CloseHelper.closeQuiet(resources[0]);
+            }
+            return;
+        }
+
+        final Thread[] closers = new Thread[count - 1];
+        for (int i = 1; i < count; i++) {
+            final AutoCloseable resource = resources[i];
+            final Thread closer = new Thread(
+                    () -> CloseHelper.closeQuiet(resource),
+                    "life-closer-" + i
+            );
+            closers[i - 1] = closer;
+            closer.start();
+        }
+
+        CloseHelper.closeQuiet(resources[0]); // this thread closes one of them rather than only waiting
+
+        boolean interrupted = false;
+        for (int i = 0; i < closers.length; i++) {
+            while (true) {
+                try {
+                    closers[i].join();
+                    break;
+                } catch (final InterruptedException interruptedWhileClosing) {
+                    interrupted = true;
+                }
+            }
+        }
+
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

@@ -24,7 +24,7 @@
 
 package io.github.green4j.newa.example.ws.errors;
 
-import io.github.green4j.newa.example.ws.StdOutWsApiObserverFactory;
+import io.github.green4j.newa.example.ws.StdOutWsApiObserver;
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.HttpErrorHandler;
@@ -107,7 +107,7 @@ public class ErrorsWsServer {
         final WsApi api = new SimpleWsApiBuilder(API_VERSION)
                 .withPathPrefix("ws")
                 .withReceiver(RECEIVER)
-                .withObservers(new StdOutWsApiObserverFactory())
+                .withObservers(StdOutWsApiObserver.factory())
                 .build();
 
         // the channel itself failing, which is neither of the two errors above. BOOM never reaches this

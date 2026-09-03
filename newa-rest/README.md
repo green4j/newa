@@ -41,7 +41,7 @@ NettyServer server = RestServer.of(api)
         .withResponseChunks(chunks)              // see Chunked responses
         .withObservers(observers)                // see Observing
         .withErrorHandler(new JsonErrorHandler())
-        .withChannelErrorHandler(ChannelErrorHandler.printingToStdErr())
+        .withChannelErrorHandler(new StdErrChannelErrorHandler())
         .withMaxContentLength(65536)
         .withHandler(() -> new AuthFilter())     // in front of the api handler, one per channel
         .start(new NettyServerBuilder()
@@ -100,6 +100,47 @@ portable one on purpose, which is also what a GraalVM native image wants.
 To keep this pipeline but bootstrap it yourself, hand `RestServer.pipeline()` to a `ServerBootstrap` of your
 own. To change the pipeline, write it out - `rest.pipeline.PipelineRestServer` in `newa-example` is that,
 and says which four things made it worth doing.
+
+### More than one server in one Life
+
+A `Life` runs one resource, and `Life.all(...)` makes several into one - opened in the order given, closed
+together when the end is asked for:
+
+```java
+final Life life = new Life();   // registered with the admin api's /shutdown before either server exists
+
+life.run(Life.all(
+        () -> RestServer.of(publicApi)
+                .start(new NettyServerBuilder().port(9009).workerThreads(6)),
+        () -> RestServer.of(adminApi)
+                .start(new NettyServerBuilder().port(9010).host("127.0.0.1").workerThreads(1))));
+```
+
+It exists for the one thing a caller cannot do for itself: **a later opener which fails closes the servers
+already opened**. Until the opener returns, the `Life` owns nothing, so a server bound beside one which then
+failed to bind is a server nothing else would ever close. Closing is done **at once** rather than one after
+another - servers share nothing, each shutting down event loop groups of its own - which keeps the worst
+case at the timeouts of one close instead of the sum, and that is what a JVM shutdown hook has to fit into.
+When the order of closing does matter, write an opener which closes them in the order they need. Openers
+compose, so `Life.all(a, Life.all(b, c))` is an opener too, and the `run(opener, observer)` form is
+unchanged: `onRunning` is the moment both are up.
+
+None of this is about REST. An `Opener` returns an `AutoCloseable`, which is all `Life` ever knows, so a
+`WsServer` mixes into the same call as readily as a second `RestServer` - a REST api on one port and a
+WebSocket on another is the usual pair. A WebSocket server can also carry a REST api on its own port
+instead, with no second server to run at all: see [One port for
+both](../newa-websocket/README.md#starting-a-server).
+
+Two things stay yours, because neither is a `Life`'s business:
+
+- **A server which dies alone has to say so.** A `Life` waits for `end(...)` and nothing else, so
+  `server.channel().closeFuture().addListener(closed -> life.end("Port closed"))` is what keeps the process
+  from staying up serving half of what it promises.
+- **Threads do not divide themselves.** Every `start()` makes event loop groups of its own and there is
+  nothing to share them with, while `workerThreads` defaults to a worker per core - two per core on two
+  servers left at the default. Say what each one gets, and count them all when budgeting render buffers.
+
+`rest.pair.PairedRestServers` in `newa-example` is the whole of it, running.
 
 ## Routing
 
@@ -606,6 +647,8 @@ stops taking it is given up on, either way, after `FileServerHandler.DEFAULT_STA
 In `newa-example`, package `io.github.green4j.newa.example.rest`:
 
 - **`hello.HelloRestServer`** - the smallest thing that serves a route, plus a `/shutdown` which stops it.
+- **`pair.PairedRestServers`** - two servers on two ports run by one `Life.all(...)`: a public api and an
+  admin api on the loopback, and either one dying alone ends both.
 - **`chunked.ChunkedRestServer`** - pull: JSON and text rows, a gzipped download, the cursor limit, the
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent

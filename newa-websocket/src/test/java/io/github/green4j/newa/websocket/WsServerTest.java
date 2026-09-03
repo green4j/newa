@@ -24,9 +24,11 @@
 
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -39,6 +41,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -51,11 +54,21 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ExecutionException;
 
 class WsServerTest {
     private static final String HOST = "127.0.0.1";
     private static final String HEALTH_BODY = "behind the websocket";
+
+    private static final class RecordedErrors implements ChannelErrorHandler {
+        private final List<Throwable> errors = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void onError(final Channel channel,
+                            final Throwable cause) {
+            errors.add(cause);
+        }
+    }
 
     private NettyServer server;
 
@@ -120,10 +133,11 @@ class WsServerTest {
 
         Assertions.assertEquals("hello", echoOnce("/api/v2", "hello"));
 
-        // a uri the handshake handler does not recognise is passed on rather than refused, and with
-        // nothing behind it here nobody answers at all - so this hangs rather than failing
-        Assertions.assertThrows(
-                TimeoutException.class,
+        // a uri the handshake handler does not recognise is passed on rather than refused, and what
+        // stands at the end of the pipeline closes the connection - so this fails at once rather than
+        // holding a socket open for as long as the client is willing to wait
+        final ExecutionException failed = Assertions.assertThrows(
+                ExecutionException.class,
                 () -> HttpClient.newBuilder()
                         .connectTimeout(Duration.ofSeconds(5))
                         .build()
@@ -132,8 +146,10 @@ class WsServerTest {
                                 URI.create("ws://" + HOST + ":" + server.port() + "/ws/v1"),
                                 new WebSocket.Listener() {
                                 })
-                        .get(2, TimeUnit.SECONDS)
+                        .get(10, TimeUnit.SECONDS)
         );
+
+        Assertions.assertNotNull(failed.getCause(), "no cause: " + failed);
     }
 
     @Test
@@ -181,7 +197,10 @@ class WsServerTest {
     public void ownHandlerServesHttpOnTheSamePort() throws Exception {
         // what the handshake handler passed on is what reaches here - the composition that puts a REST api
         // on the websocket's port
+        final RecordedErrors errors = new RecordedErrors();
+
         server = WsServer.of(echoApi("ws", 1))
+                .withChannelErrorHandler(errors)
                 .withHandler(() -> new SimpleChannelInboundHandler<FullHttpRequest>() {
                     @Override
                     protected void channelRead0(final ChannelHandlerContext ctx,
@@ -210,6 +229,41 @@ class WsServerTest {
         Assertions.assertEquals(HEALTH_BODY, health.body());
 
         // and the websocket still works on the same port
+        Assertions.assertEquals("still here", echoOnce("/ws/v1", "still here"));
+
+        // the handler answered, so the one which closes what nothing took never saw the request
+        Assertions.assertEquals(List.of(), errors.errors);
+    }
+
+    @Test
+    public void aRequestWhichIsNotTheHandshakeIsReportedAndClosed() throws Exception {
+        final RecordedErrors errors = new RecordedErrors();
+
+        server = WsServer.of(echoApi("ws", 1))
+                .withChannelErrorHandler(errors)
+                .start(0);
+
+        try (Socket socket = new Socket(HOST, server.port())) {
+            socket.setSoTimeout(10_000);
+            socket.getOutputStream().write(
+                    "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+
+            // -1 is the close: without it this socket would sit here open, answered by nothing
+            Assertions.assertEquals(-1, socket.getInputStream().read(), "the connection was left open");
+        }
+
+        Assertions.assertEquals(1, errors.errors.size(), "reported " + errors.errors);
+
+        final NotAHandshakeException reported = Assertions.assertInstanceOf(
+                NotAHandshakeException.class, errors.errors.get(0));
+
+        Assertions.assertEquals("GET", reported.method());
+        Assertions.assertEquals("/nope", reported.uri());
+        // the frames would name Netty's decoders, so there are none to name anything
+        Assertions.assertEquals(0, reported.getStackTrace().length);
+
+        // and the handshake path is untouched by any of it
         Assertions.assertEquals("still here", echoOnce("/ws/v1", "still here"));
     }
 

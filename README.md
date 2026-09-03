@@ -40,6 +40,18 @@ still yours to take over: `NettyServerBuilder` for the transport, the threads an
 socket. The module READMEs document both, and `newa-example` has a server of each shape:
 `rest.pipeline.PipelineRestServer` and `ws.pipeline.PipelineWsServer` are the ones assembled from scratch.
 
+Both in one process is `Life.all(...)`, which runs any number of them as one - opened in the order given,
+closed together, and rolled back if a later one cannot be opened:
+
+```java
+new Life().run(Life.all(
+        () -> RestServer.start(9009, restApi),
+        () -> WsServer.start(9010, wsApi)));
+```
+
+A WebSocket server can also serve a REST api on its own port, with no second server at all - see [One port
+for both](newa-websocket/README.md#starting-a-server).
+
 ### Against Spring Boot
 
 Measured in [newa-performance](newa-performance/README.md), with each side written the way its own framework
