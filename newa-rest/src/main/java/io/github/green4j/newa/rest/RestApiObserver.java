@@ -24,8 +24,6 @@
 
 package io.github.green4j.newa.rest;
 
-import io.netty.handler.codec.http.HttpResponseStatus;
-
 /**
  * One request which was routed to an endpoint - the stages of {@link HttpApiObserver}, plus what the handler
  * and its response did.
@@ -69,17 +67,6 @@ public interface RestApiObserver extends HttpApiObserver {
     }
 
     /**
-     * The handler failed and the request ends in an error response, which is then reported by
-     * {@link #onRequestCompleted} as usual.
-     *
-     * @param status responded with
-     * @param error that caused it
-     */
-    default void onResponseFailed(HttpResponseStatus status,
-                                  Throwable error) {
-    }
-
-    /**
      * A chunked response was admitted and its cursor opened.
      *
      * @param openCursors including this one
@@ -89,7 +76,8 @@ public interface RestApiObserver extends HttpApiObserver {
 
     /**
      * Refused on {@link ResponseChunks#maxOpenCursors()} and answered {@code 503}. No cursor was opened, so
-     * nothing was taken from whatever is behind it.
+     * nothing was taken from whatever is behind it. This is the gauge of the capacity; the response it ends
+     * in is {@link #onResponseFailed} like any other.
      *
      * @param openCursors at the time
      */

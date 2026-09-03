@@ -26,6 +26,7 @@ package io.github.green4j.newa.example.rest.pipeline;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
+import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.JsonErrorHandler;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
@@ -125,8 +126,12 @@ public class PipelineRestServer {
             final Channel serverChannel = bootstrap.bind(
                     InetAddress.getByName(LOCAL_IFC), PORT).sync().channel();
 
-            System.out.printf("Server started and listening on %s. Files are served from %s%n",
+            System.out.printf("Server started and listening on %s. Files are served from %s. Try:%n",
                     LOCAL_SERVER_ADDRESS, root);
+            System.out.printf("  curl -s %s/v1/zero-copy    -> false here: a compressor stands in front%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- -o /dev/null %s/files/big.bin%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/hello/world%n", LOCAL_SERVER_ADDRESS);
 
             return () -> {
                 serverChannel.close().awaitUninterruptibly();
@@ -156,13 +161,17 @@ public class PipelineRestServer {
         final ChannelErrorHandler channelErrors = (channel, cause) -> System.err.printf(
                 "An error %s in the channel: %s%n", cause.getMessage(), channel);
 
-        pipeline.addLast(new FileServerHandler(files, new JsonErrorHandler(), channelErrors, null));
+        // one for both as well: an error is rendered the same way whichever of them answers it, and this is
+        // the object to replace to answer them with pages of your own - see rest.errors.ErrorsRestServer
+        final HttpErrorHandler errors = new JsonErrorHandler();
+
+        pipeline.addLast(new FileServerHandler(files, errors, channelErrors, null));
 
         // no ChunkedWriteHandler: the first response which needs one puts it in front of the handler below
         pipeline.addLast(
                 new RestApiHandler(
                         api,
-                        new JsonErrorHandler(),
+                        errors,
                         channelErrors
                 )
         );

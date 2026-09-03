@@ -251,6 +251,43 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
         new WriteBufferWaterMark(32 * 1024, 64 * 1024));
 ```
 
+## Errors
+
+A websocket has no response left to render once the handshake is done, so there is no error handler here and
+nothing which formats a page: what a client is told about a frame it should not have sent is **a frame of your
+own protocol**, and what it is told about a server that broke is **a close**. All this module does is report,
+and each failure is reported once, by the stage which knows what it was:
+
+| what happened | where it goes | what the peer gets |
+|---|---|---|
+| the `Receiver` threw | `WsApiObserver.onReceiveFailed(cause)`, the cause as it was thrown | a `1011` close, and the session ends |
+| a frame did not go out | `onWriteFailed(cause)`, and `onWriteBackPressure` before it when the channel was full | the session ends, unless `withSkipOnBackPressure()` |
+| the channel itself failed | `ChannelErrorHandler` | the connection goes |
+| the client sent something you do not serve | wherever your `Receiver` reports it | whatever your protocol says |
+
+```java
+final Receiver receiver = (session, message) -> {
+    if (!command.isKnown(message)) {
+        session.send("ERR: unknown command");   // your protocol, your error, and the session lives on
+        return;
+    }
+    handle(session, message);                   // if this throws, the session is closed with a 1011
+};
+```
+
+A `Receiver` which throws ends its session on purpose: it has said nothing about whether the state behind it
+is still whole, and no frame this library could invent would mean anything in a protocol it does not know. The
+cause never reaches the `ChannelErrorHandler` - a failure of the application is not a failure of the channel -
+and never reaches the peer: `1011` is a status, not a stack trace. Handle what you expect inside the receiver;
+what is left is a bug, and a bug closes one session.
+
+`ClientSession.receiveFailed(cause)` is the same treatment, public, for a receiver which hands its frames to
+something else and catches there.
+
+The HTTP half of a websocket port - a handshake at a path you do not serve, and any `RestApiHandler` mounted
+beside the websocket one - is HTTP, and its errors are rendered by an `HttpErrorHandler`, exactly as in
+`newa-rest`. See `ws.errors.ErrorsWsServer` for both halves in one server.
+
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per session, made by
@@ -291,7 +328,7 @@ adding two events up.
 
 ```
 a session:      onSessionOpened -> ( onFrameReceived | onFrameSent )*
-                                -> [ onWriteFailed ] -> onSessionClosed
+                                -> [ onReceiveFailed | onWriteFailed ] -> onSessionClosed
 subscribing:    onSubscribed | onRepeatedSubscription | onUnknownEntity | onUnsubscribed
 falling behind: onWriteBackPressure -> onWriteResumed -> onResynced        (skip mode)
                 onWriteBackPressure -> onSessionClosed                     (default)
@@ -469,6 +506,9 @@ In `newa-example`, package `io.github.green4j.newa.example.ws`:
 - **`subscriptions.SubscriptionsWsServer`** - two channels of five entities, a client protocol of
   `[A|B]:[S|U]:[ID]` commands, publications on a timer and snapshots on subscribe, with
   `withSkipOnBackPressure()` turned on because both channels restore a session from a snapshot.
+- **`errors.ErrorsWsServer`** - an error where there is nothing to render: a bad command answered with a frame
+  of the protocol's own, and a `BOOM` which throws, ends its session with a `1011` and puts the cause in
+  `onReceiveFailed` and nowhere else. Commands to try are printed at startup.
 - **`pipeline.PipelineWsServer`** - a websocket and a REST stats endpoint on one port, with the bootstrap and
   the pipeline written out by hand. The composition itself needs no hand assembly - `withHandler(...)` above
   produces the same pipeline - but its watermarks are computed from the fan-out it expects rather than left
@@ -476,4 +516,5 @@ In `newa-example`, package `io.github.green4j.newa.example.ws`:
 - **`StdOutWsApiObserverFactory`** - an observer per session which counts what it sent and prints the totals
   when the session closes.
 
-The first three are started with `WsServer`; the fourth is the reason the manual path is documented.
+All but `pipeline.PipelineWsServer` are started with `WsServer`; that one is the reason the manual path is
+documented.

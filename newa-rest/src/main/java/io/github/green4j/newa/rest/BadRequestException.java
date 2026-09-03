@@ -22,19 +22,19 @@
  * SOFTWARE.
  */
 
+
 package io.github.green4j.newa.rest;
 
 import io.netty.handler.codec.http.HttpResponseStatus;
 
-public class BadRequestException extends RestException {
+/**
+ * The request reached an endpoint and is malformed: {@code 400}. The message is rendered into the response,
+ * so it says what the client got wrong and nothing about the process.
+ */
+public class BadRequestException extends HttpException {
     private static final long serialVersionUID = -3387516993124229933L;
 
     public BadRequestException(final String message) {
-        super(message);
-    }
-
-    @Override
-    public HttpResponseStatus status() {
-        return HttpResponseStatus.BAD_REQUEST;
+        super(HttpResponseStatus.BAD_REQUEST, message);
     }
 }

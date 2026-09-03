@@ -24,10 +24,10 @@
 
 package io.github.green4j.newa.example.rest;
 
+import io.github.green4j.newa.rest.HttpException;
 import io.github.green4j.newa.rest.RestApiObserver;
 import io.github.green4j.newa.rest.RestApiObserverFactory;
 import io.github.green4j.newa.rest.RestContext;
-import io.github.green4j.newa.rest.RestException;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
@@ -74,7 +74,7 @@ public class StdOutRestApiObserver implements RestApiObserver {
     }
 
     @Override
-    public void onRequestNotRouted(final RestException cause) {
+    public void onRequestNotRouted(final HttpException cause) {
         System.out.printf("   not routed: %s %s%n", method, uri);
     }
 

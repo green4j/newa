@@ -42,10 +42,11 @@ public interface ChunkedJsonRestHandle {
      *
      * @param context of the request
      * @return cursor over the response, closed by the framework however the response ends
-     * @throws PathNotFoundException if the request addresses nothing
-     * @throws BadRequestException if the request is malformed
+     * @throws HttpException to answer with its status - {@link PathNotFoundException} when the request
+     *                         addresses nothing, {@link BadRequestException} when it is malformed, or one of
+     *                         your own carrying a status of its own
      */
-    Cursor open(RestContext context) throws PathNotFoundException, BadRequestException;
+    Cursor open(RestContext context) throws HttpException;
 
     interface Cursor {
         /**

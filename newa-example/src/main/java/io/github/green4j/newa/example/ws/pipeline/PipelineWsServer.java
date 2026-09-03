@@ -52,7 +52,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * A websocket and an HTTP api on one port, with the bootstrap and the pipeline written out by hand.
  * <pre>
- * websocat ws://127.0.0.1:9014/ws/v1        # a tick a second
+ * wscat -c ws://127.0.0.1:9014/ws/v1       # a tick a second
  * curl -sD- http://127.0.0.1:9014/v1/stats  # how many have gone out, on the same port
  * </pre>
  * The composition itself needs no hand assembly - {@code WsServer.of(api).withHandler(() -> new
@@ -122,15 +122,12 @@ public class PipelineWsServer {
             final Channel serverChannel = bootstrap.bind(
                     InetAddress.getByName(LOCAL_IFC), PORT).sync().channel();
 
-            System.out.printf(
-                    "Server started and listening on %s. Websocket path: %s%s, stats on http://%s:%d%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.websocketPath(),
-                    LOCAL_IFC,
-                    PORT,
-                    "/v1/stats"
-            );
+            System.out.printf("Server started and listening on %s%s. Try:%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.printf("  wscat -c %s%s          -> a tick a second%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.printf("  curl -sD- http://%s:%d/v1/stats   -> how many have gone out, same port%n",
+                    LOCAL_IFC, PORT);
 
             workerGroup.scheduleWithFixedDelay(
                     () -> api.broadcast("tick " + TICKS_SENT.incrementAndGet()),

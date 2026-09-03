@@ -33,14 +33,14 @@ public class RestApiHandler
         extends SimpleChannelInboundHandler<FullHttpRequest> {
 
     private final RestRouter api;
-    private final ErrorHandler errorHandler;
+    private final HttpErrorHandler errorHandler;
     private final ChannelErrorHandler channelErrorHandler;
     private final ResponseChunks responseChunks;
     private final HttpApiObserverFactory observers;
     private final RestApiObserverFactory restObservers;
 
     public RestApiHandler(final RestRouter restApi,
-                          final ErrorHandler errorHandler,
+                          final HttpErrorHandler errorHandler,
                           final ChannelErrorHandler channelErrorHandler) {
         this(
                 restApi,
@@ -60,7 +60,7 @@ public class RestApiHandler
      *                  {@link RestApiObserverFactory} additionally gets the stages after routing
      */
     public RestApiHandler(final RestRouter restApi,
-                          final ErrorHandler errorHandler,
+                          final HttpErrorHandler errorHandler,
                           final ChannelErrorHandler channelErrorHandler,
                           final ResponseChunks responseChunks,
                           final HttpApiObserverFactory observers) {
@@ -98,14 +98,13 @@ public class RestApiHandler
                 request,
                 errorHandler,
                 responseChunks,
-                observer,
-                restObserver
+                observer
         );
 
         final RestHandling handling;
         try {
             handling = api.resolve(request);
-        } catch (final RestException notRouted) {
+        } catch (final HttpException notRouted) {
             // the request reached no endpoint, so nothing behind the API was touched, and the error is the
             // routing itself rather than anything a handler did
             if (observer != null) {

@@ -22,11 +22,15 @@
  * SOFTWARE.
  */
 
+
 package io.github.green4j.newa.rest;
 
 import io.netty.handler.codec.http.HttpResponseStatus;
 
-public class MethodNotAllowedException extends RestException {
+/**
+ * The path is served, but not by this method: {@code 405}.
+ */
+public class MethodNotAllowedException extends HttpException {
     private static final long serialVersionUID = -1387516993124229947L;
 
     private final String method;
@@ -37,17 +41,11 @@ public class MethodNotAllowedException extends RestException {
 
     public MethodNotAllowedException(final String method,
                                      final String message) {
-        super(message);
+        super(HttpResponseStatus.METHOD_NOT_ALLOWED, message);
         this.method = method;
     }
 
     public String method() {
         return method;
     }
-
-    @Override
-    public HttpResponseStatus status() {
-        return HttpResponseStatus.METHOD_NOT_ALLOWED;
-    }
-
 }

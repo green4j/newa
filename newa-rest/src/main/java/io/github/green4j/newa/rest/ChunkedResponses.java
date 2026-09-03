@@ -53,9 +53,11 @@ final class ChunkedResponses {
             observer.onCursorRefused(chunks.openCursors());
         }
 
-        result.error(new InternalServerErrorException(
-                "Too many chunked responses in flight: " + chunks.maxOpenCursors(),
-                HttpResponseStatus.SERVICE_UNAVAILABLE
+        // a deliberate answer rather than a failure: the message says what the limit was, and is meant to be
+        // read by whoever asked
+        result.error(new HttpException(
+                HttpResponseStatus.SERVICE_UNAVAILABLE,
+                "Too many chunked responses in flight: " + chunks.maxOpenCursors()
         ));
         return false;
     }

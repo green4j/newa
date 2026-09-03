@@ -43,7 +43,7 @@ public class JsonRestHandler extends ApplicationJsonRestHandler {
 
     @Override
     protected ByteArray doHandle(final RestContext context)
-            throws PathNotFoundException, BadRequestException {
+            throws HttpException {
         final ByteArrayJsonGenerator generator = jsonGenerator();
         handle.doHandle(context, generator.start());
         return generator.finish();

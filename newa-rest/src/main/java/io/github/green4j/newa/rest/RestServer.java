@@ -100,7 +100,7 @@ public final class RestServer {
     private final RestRouter api;
     private final List<Supplier<ChannelHandler>> handlers = new ArrayList<>();
 
-    private ErrorHandler errorHandler = new JsonErrorHandler();
+    private HttpErrorHandler errorHandler = new JsonErrorHandler();
     private ChannelErrorHandler channelErrorHandler = ChannelErrorHandler.printingToStdErr();
     private ResponseChunks responseChunks = ResponseChunks.defaults();
     private HttpApiObserverFactory observers;
@@ -142,7 +142,7 @@ public final class RestServer {
      * @param errorHandler rendering error responses, a {@link JsonErrorHandler} by default.
      * @return this builder.
      */
-    public RestServer withErrorHandler(final ErrorHandler errorHandler) {
+    public RestServer withErrorHandler(final HttpErrorHandler errorHandler) {
         this.errorHandler = errorHandler;
         return this;
     }

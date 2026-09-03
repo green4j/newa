@@ -317,12 +317,19 @@ public class ChunkedRestServer {
                     .withObservers(StdOutRestApiObserver.factory())
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Server started and listening on %s. Help is available on %s%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.helpPath()
-            );
+            System.out.printf("Server started and listening on %s. Try:%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -N %s/v1/rows/1000000       -> a million rows, at your rate%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -N %s/v1/lines/1000000      -> the same as text%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -OJ %s/v1/download/1000000  -> gzipped as it goes%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/cursors            -> how many are open right now%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/cursors/limit      -> and how many may be%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s%s   -> the api describing itself%n",
+                    LOCAL_SERVER_ADDRESS, api.helpPath());
 
             return server;
         });

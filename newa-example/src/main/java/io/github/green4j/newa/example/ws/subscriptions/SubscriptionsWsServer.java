@@ -63,12 +63,14 @@ public class SubscriptionsWsServer {
                     .withCompression()
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Server started and listening on %s. Websocket path: %s%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.websocketPath()
-            );
+            System.out.printf("Server started and listening on %s%s. Try:%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.printf("  wscat -c %s%s   then, one command per line:%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.println("    A:S:AA   -> subscribe to AA of channel A: a snapshot, then updates");
+            System.out.println("    B:S:CC   -> the same in channel B, which publishes its own way");
+            System.out.println("    A:U:AA   -> unsubscribe, and the updates stop");
+            System.out.println("    A:S:ZZ   -> \"Error: unknown entity :ZZ\", in the protocol\'s own words");
 
             channels.start();
 

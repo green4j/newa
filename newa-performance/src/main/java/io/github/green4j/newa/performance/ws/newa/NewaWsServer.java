@@ -249,7 +249,7 @@ public final class NewaWsServer implements WsServer {
                 return;
             }
             final String entityId = command.substring(WsPayload.SUBSCRIBE.length());
-            if (quotes.subscribeForKnownOnly(session, entityId) == 0) {
+            if (quotes.subscribeForKnown(session, entityId) == 0) {
                 session.send("Error: unknown channel " + entityId);
             }
         }

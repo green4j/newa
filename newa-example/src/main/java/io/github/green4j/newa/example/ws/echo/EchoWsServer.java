@@ -69,12 +69,11 @@ public class EchoWsServer {
                     .withCompression()
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Server started and listening on %s. Websocket path: %s%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.websocketPath()
-            );
+            System.out.printf("Server started and listening on %s%s. Try:%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.printf("  wscat -c %s%s   -> then type anything: it comes back%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.println("  and wait: the server pings every 10s and drops a session silent for 30s");
 
             return server;
         });

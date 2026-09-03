@@ -118,5 +118,5 @@ public interface RestHandle {
 
     void handle(RestContext context,
                 Result result)
-            throws PathNotFoundException, BadRequestException;
+            throws HttpException;
 }

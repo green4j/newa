@@ -78,6 +78,13 @@ public class StdOutWsApiObserverFactory implements SubscriptionsWsApiObserverFac
         }
 
         @Override
+        public void onReceiveFailed(final Throwable error) {
+            // the cause as the application threw it, and the only place it is told: the peer gets a
+            // 1011 close and no text
+            System.out.printf("Handling a frame failed with %s for the session: %s%n", error, session);
+        }
+
+        @Override
         public void onWriteFailed(final Throwable error) {
             System.out.printf("Writing failed with %s for the session: %s%n", error, session);
         }

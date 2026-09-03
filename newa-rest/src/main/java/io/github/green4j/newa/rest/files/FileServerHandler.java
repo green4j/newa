@@ -25,14 +25,14 @@
 package io.github.green4j.newa.rest.files;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
-import io.github.green4j.newa.rest.ErrorHandler;
+import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.FullHttpResponseContent;
 import io.github.green4j.newa.rest.HttpApiObserver;
 import io.github.green4j.newa.rest.HttpApiObserverFactory;
 import io.github.green4j.newa.rest.InternalServerErrorException;
 import io.github.green4j.newa.rest.MethodNotAllowedException;
 import io.github.green4j.newa.rest.PathNotFoundException;
-import io.github.green4j.newa.rest.RestException;
+import io.github.green4j.newa.rest.HttpException;
 import io.github.green4j.newa.rest.TextErrorHandler;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -187,7 +187,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     private final FileSet files;
-    private final ErrorHandler errorHandler;
+    private final HttpErrorHandler errorHandler;
     private final ChannelErrorHandler channelErrorHandler;
     private final HttpApiObserverFactory observerFactory;
     private final int chunkSize;
@@ -216,7 +216,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param observerFactory asked for an observer per request, or null to observe nothing
      */
     public FileServerHandler(final FileSet files,
-                             final ErrorHandler errorHandler,
+                             final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory) {
         this(files, errorHandler, channelErrorHandler, observerFactory,
@@ -232,7 +232,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param stallTimeoutMillis a transfer may go without a byte reaching the peer, zero to wait forever
      */
     public FileServerHandler(final FileSet files,
-                             final ErrorHandler errorHandler,
+                             final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory,
                              final int chunkSize,
@@ -319,7 +319,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
         try {
             serve(ctx, request, observer, startedAt);
-        } catch (final RestException refused) {
+        } catch (final HttpException refused) {
             respondError(ctx, request, observer, startedAt, refused);
         } catch (final IOException | RuntimeException error) {
             respondError(ctx, request, observer, startedAt, new InternalServerErrorException(error));
@@ -329,7 +329,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     private void serve(final ChannelHandlerContext ctx,
                        final HttpRequest request,
                        final HttpApiObserver observer,
-                       final long startedAt) throws RestException, IOException {
+                       final long startedAt) throws HttpException, IOException {
         final HttpMethod method = request.method();
         final boolean bodyless = HttpMethod.HEAD.equals(method);
         if (!bodyless && !HttpMethod.GET.equals(method)) {
@@ -771,12 +771,19 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                               final HttpRequest request,
                               final HttpApiObserver observer,
                               final long startedAt,
-                              final RestException error) {
+                              final HttpException error) {
         if (observer != null) {
-            observer.onRequestNotRouted(error);
+            if (error instanceof PathNotFoundException || error instanceof MethodNotAllowedException) {
+                observer.onRequestNotRouted(error); // nothing here served the request
+            } else {
+                // reported as it was thrown rather than as it was wrapped to be answered: the response says
+                // only the status, so this is the only place the failure is told in full
+                final Throwable cause = error.getCause() != null ? error.getCause() : error;
+                observer.onResponseFailed(error.status(), cause);
+            }
         }
 
-        final FullHttpResponseContent content = render(error);
+        final FullHttpResponseContent content = errorHandler.handle(error);
         final FullHttpResponse response = new DefaultFullHttpResponse(
                 request.protocolVersion(), error.status(), content.toByteBuf(ctx.alloc()));
 
@@ -798,19 +805,6 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         }
         complete(ctx.writeAndFlush(response), null, null, 0, keepAlive, observer, error.status(),
                 startedAt);
-    }
-
-    private FullHttpResponseContent render(final RestException error) {
-        if (error instanceof PathNotFoundException) {
-            return errorHandler.handle((PathNotFoundException) error);
-        }
-        if (error instanceof MethodNotAllowedException) {
-            return errorHandler.handle((MethodNotAllowedException) error);
-        }
-        if (error instanceof InternalServerErrorException) {
-            return errorHandler.handle((InternalServerErrorException) error);
-        }
-        return errorHandler.handle(new InternalServerErrorException(error));
     }
 
     private static boolean keepAlive(final ChannelHandlerContext ctx,

@@ -88,7 +88,7 @@ class ObserverLifecycleTest {
         }
 
         @Override
-        public void onRequestNotRouted(final RestException cause) {
+        public void onRequestNotRouted(final HttpException cause) {
             events.add("not-routed " + cause.status().code());
         }
 

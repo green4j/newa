@@ -23,7 +23,7 @@ builder.getJson("/hello/{name}", (context, output) ->
 
 RestApi api = builder.build();                       // or buildWithHelp(JsonHelp.factory())
 
-new Life().run(() -> RestServer.start(9009, api));   // and it is serving
+new Life().run(() -> RestServer.start(9009, api));   // serving GET /v1/hello/world
 ```
 
 `getJson` / `getTxt` / `postJson` / ... register handles which render a response and return. `get` / `post` /
@@ -385,6 +385,92 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
 
 `chunks.openCursors()` reports how many are open right now, across every channel.
 
+## Errors
+
+Two things happen when a request ends badly, and they are separate on purpose: something is **rendered** for
+the client, and something is **reported** for a log or a metric. The first is an `HttpErrorHandler`, the second
+an `HttpApiObserver`. A response never carries what only a log should have.
+
+### What the client is told
+
+`HttpErrorHandler` is the single funnel: routing which refused the request, a handler which threw, a handler
+which called `result.error(...)`, and the file server in front of the API all end here, and nothing else writes
+an error body. It has one method, so a whole set of pages is one lambda:
+
+```java
+byte[][] pages = errorPages();          // rendered once, when the server is assembled
+
+RestServer.of(api)
+        .withErrorHandler(error -> new DefaultFullHttpResponseContent(
+                TEXT_HTML, pages[error.status().code()], 0, pages[error.status().code()].length));
+```
+
+The status is `error.status()` and is not the handler's to choose; what it returns is the body and the headers
+describing it. One method rather than one per error because the set of errors is open - see below. A page
+which renders `PathNotFoundException.path()` into markup has to escape it: that is the request's own path,
+echoed back.
+
+`JsonErrorHandler` (the default) and `TextErrorHandler` (the file server's, when it is built by hand) render
+the status, the path or the method it was about, and the message the error carries.
+
+### What is never rendered
+
+An `InternalServerErrorException` is a failure rather than an answer: it always carries a `500` and the
+exception which caused it. Its message is that exception's `toString()` - a type of the implementation and a
+file path as often as not - and its stack trace names the classes the server is built from. **The default
+handlers render none of it**: the client is told `Internal Server Error` and no more, and the cause goes to
+`onResponseFailed` instead, where a log can have it.
+
+Everything else carries a message written by hand, and that is rendered - a `400` says what was malformed, a
+`503` says what the limit was.
+
+```java
+new JsonErrorHandler()                     // the default: says nothing of a failure
+JsonErrorHandler.disclosingInternals()     // class, message, stack trace, every cause
+TextErrorHandler.disclosingInternals()
+```
+
+`disclosingInternals()` is a development mode. It hands whoever asked the shape of the process, so it is
+switched on in code, deliberately, and never by a system property something could carry into production.
+
+### Your own exceptions
+
+`HttpException` is the type an error response is made of, and it is yours to extend or to throw as it is:
+
+```java
+public class OutOfStockException extends HttpException {
+    public OutOfStockException(String sku) { super(CONFLICT, "Out of stock: " + sku); }
+}
+
+throw new HttpException(CONFLICT, "Out of stock");   // or without a type of your own
+```
+
+Either reaches the `HttpErrorHandler` as it was thrown, with its status and its message, from any handle - they
+all declare `throws HttpException`. The four this library throws itself are ordinary subclasses of it:
+`PathNotFoundException` (404), `MethodNotAllowedException` (405), `BadRequestException` (400) and
+`InternalServerErrorException` (500).
+
+Anything thrown which is *not* an `HttpException` is a failure: it is wrapped, answered `500`, and nothing of
+it is said. The safe answer is what the type system gives you, not what you remembered to do.
+
+### What is reported, and where
+
+Every error is reported exactly once, by the stage which knows most about it. Count responses with
+`onRequestCompleted` - it is the one terminal event - and read the rest for what went wrong:
+
+| what happened | where it goes |
+|---|---|
+| nothing served the request, `404` / `405` - API or files | `onRequestNotRouted(HttpException)` |
+| a handler threw, or the file server failed | `onResponseFailed(status, cause)`, the cause as it was thrown |
+| a chunked response was refused, `503` | `onCursorRefused(openCursors)`, and `onResponseFailed` for the response |
+| a chunked response stalled or was abandoned | `onCursorClosed(..., Outcome)` |
+| the `HttpErrorHandler` itself threw | `ChannelErrorHandler`, and the connection goes: the response cannot be written |
+| the channel failed | `ChannelErrorHandler` |
+| the body was larger than `maxContentLength` | answered `413` by Netty's aggregator, ahead of any of this |
+
+`onRequestNotRouted` and `onResponseFailed` are both on `HttpApiObserver`, so a plain observer sees the
+failures of the API and of the file server alike.
+
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per request, made by
@@ -403,7 +489,7 @@ public class AccessLog implements HttpApiObserver {
     }
 
     @Override
-    public void onRequestNotRouted(RestException cause) { }
+    public void onRequestNotRouted(HttpException cause) { }
 
     @Override
     public void onRequestCompleted(HttpResponseStatus status, long bytes, long durationNanos) {
@@ -418,8 +504,9 @@ new RestApiHandler(api, errorHandler, channelErrorHandler, chunks, AccessLog::ne
 requests never means adding two events up. `bytes` is the body as the source produced it, without the framing
 the transfer encoding adds.
 
-`RestApiObserver extends HttpApiObserver` adds the stages after routing - pass a `RestApiObserverFactory` to
-get them:
+`onRequestNotRouted` and `onResponseFailed` are on this interface too - see `## Errors` for which failure
+reaches which. `RestApiObserver extends HttpApiObserver` adds the stages after routing - pass a
+`RestApiObserverFactory` to get them:
 
 ```
 not routed:     onRequestReceived -> onRequestNotRouted -> onRequestCompleted (404 | 405)
@@ -429,6 +516,8 @@ chunked:        onRequestReceived -> onHandlingStarted  -> onCursorOpened
                                   -> onChunkWritten*    -> onCursorClosed -> onRequestCompleted
 refused (503):  onRequestReceived -> onHandlingStarted  -> onCursorRefused
                                   -> onResponseFailed   -> onRequestCompleted
+a file:         onRequestReceived -> onRequestCompleted
+a file failed:  onRequestReceived -> onResponseFailed   -> onRequestCompleted
 ```
 
 Every method has a no-op default. Calls come from event loop threads, so do not block in them.
@@ -473,7 +562,8 @@ A channel which fails ends at whichever handler catches it: the file handler rep
 `ChannelErrorHandler` and closes the connection, which is what releases a file still being written. It does
 not pass the event on, so assembling by hand means giving the file handler and the API handler the same
 `ChannelErrorHandler` - `RestServer` does that for you, and `new FileServerHandler(files)` alone prints
-what is not an `IOException` to stderr.
+what is not an `IOException` to stderr and renders its errors with a plain `TextErrorHandler`, which says
+nothing of a failure beyond its status.
 
 - **Matching** is one walk of the path, longest prefix first, nothing copied out of it to compare.
   `/files/img/logo.png` is `img/logo.png` under the root of `/files`.
@@ -520,6 +610,9 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
   events.
+- **`errors.ErrorsRestServer`** - both halves of an error: a page of your own for every status, an exception
+  of your own carrying a `409`, and a `500` whose cause reaches the observer while the client is told the
+  status and no more. `curl` lines to try are printed at startup.
 - **`files.FileServer`** - files from the page cache, filtered, with ranges and an index, and the REST API
   behind them answering everything they do not own.
 - **`pipeline.PipelineRestServer`** - the same server as `files.FileServer` with the bootstrap and the
@@ -527,4 +620,5 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
   `IdleStateHandler`, and a compressor placed in front of the file handler. Run it beside `FileServer` and
   ask both for `/v1/zero-copy`: they answer the opposite, which is the cost of that one placement.
 
-The other four are started with `RestServer`; that one is the reason the manual path is documented.
+All but `pipeline.PipelineRestServer` are started with `RestServer`; that one is the reason the manual path
+is documented.

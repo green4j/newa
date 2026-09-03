@@ -22,11 +22,16 @@
  * SOFTWARE.
  */
 
+
 package io.github.green4j.newa.rest;
 
 import io.netty.handler.codec.http.HttpResponseStatus;
 
-public class PathNotFoundException extends RestException {
+/**
+ * Nothing serves the path: {@code 404}. The path is the one the request spelled, so anything rendering it
+ * into markup has to escape it.
+ */
+public class PathNotFoundException extends HttpException {
     private static final long serialVersionUID = -3387516993124229933L;
 
     private final String path;
@@ -37,16 +42,11 @@ public class PathNotFoundException extends RestException {
 
     public PathNotFoundException(final String path,
                                  final String message) {
-        super(message);
+        super(HttpResponseStatus.NOT_FOUND, message);
         this.path = path;
     }
 
     public String path() {
         return path;
-    }
-
-    @Override
-    public HttpResponseStatus status() {
-        return HttpResponseStatus.NOT_FOUND;
     }
 }

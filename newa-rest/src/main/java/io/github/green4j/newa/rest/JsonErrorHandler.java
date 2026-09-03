@@ -22,13 +22,24 @@
  * SOFTWARE.
  */
 
+
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.JsonGenerator;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
-import io.netty.handler.codec.http.HttpResponseStatus;
 
-public class JsonErrorHandler extends AbstractApplicationJsonHandler implements ErrorHandler {
+/**
+ * Errors as {@code application/json}: {@code error} is the status, {@code path} or {@code method} what it was
+ * about, {@code message} what the error carries.
+ * <p>
+ * An {@link InternalServerErrorException} is answered with its status and nothing else - see
+ * {@link TextErrorHandler} for why, and {@link HttpApiObserver#onResponseFailed} for where the cause goes
+ * instead. Every other {@link HttpException} carries a message written by hand, and that is rendered.
+ * <p>
+ * {@link #disclosingInternals()} turns the failure into a full dump - class, message, {@code stacktrace},
+ * and every cause under {@code by} - which is for development only.
+ */
+public class JsonErrorHandler extends AbstractApplicationJsonHandler implements HttpErrorHandler {
     private static final String ERROR = "error";
     private static final String METHOD = "method";
     private static final String PATH = "path";
@@ -36,60 +47,61 @@ public class JsonErrorHandler extends AbstractApplicationJsonHandler implements 
     private static final String STACKTRACE = "stacktrace";
     private static final String BY = "by";
 
-    @Override
-    public FullHttpResponseContent handle(final MethodNotAllowedException error) {
-        return dumpRestExceptionNoStacktrace(error);
+    /**
+     * @return one which renders a failure in full, stack trace and causes included. For development only:
+     *         it hands whoever asked the shape of the process
+     */
+    public static JsonErrorHandler disclosingInternals() {
+        return new JsonErrorHandler(true);
+    }
+
+    private final boolean disclosingInternals;
+
+    public JsonErrorHandler() {
+        this(false);
+    }
+
+    private JsonErrorHandler(final boolean disclosingInternals) {
+        this.disclosingInternals = disclosingInternals;
     }
 
     @Override
-    public FullHttpResponseContent handle(final PathNotFoundException error) {
-        return dumpRestExceptionNoStacktrace(error);
-    }
+    public FullHttpResponseContent handle(final HttpException error) {
+        final ByteArrayJsonGenerator generator = jsonGenerator();
+        final JsonGenerator output = generator.start();
 
-    @Override
-    public FullHttpResponseContent handle(final BadRequestException error) {
-        return dumpRestExceptionNoStacktrace(error);
-    }
-
-    @Override
-    public FullHttpResponseContent handle(final InternalServerErrorException error) {
-        if (!HttpResponseStatus.INTERNAL_SERVER_ERROR.equals(error.status())) {
-            // this exception also carries deliberate answers - a 503 when the server is at its limit, say.
-            // Those are not crashes, and a stack trace of the code which decided to send one says nothing
-            return dumpRestExceptionNoStacktrace(error);
+        if (error instanceof InternalServerErrorException && disclosingInternals) {
+            dumpThrowableWithStacktrace(ERROR, error, output);
+            return new DefaultFullHttpResponseContent(contentType, generator.finish());
         }
-        final ByteArrayJsonGenerator generator = jsonGenerator();
-        final JsonGenerator output = generator.start();
-        dumpThrowableWithStacktrace(ERROR, error, output);
-        return new DefaultFullHttpResponseContent(contentType, generator.finish());
-    }
 
-    private FullHttpResponseContent dumpRestExceptionNoStacktrace(final RestException error) {
-        final ByteArrayJsonGenerator generator = jsonGenerator();
-        final JsonGenerator output = generator.start();
         output.startObject();
         output.objectMember(ERROR);
-        output.stringValue(error.getClass().getName());
+        output.stringValue(error.status().reasonPhrase(), true);
 
-        if (error instanceof MethodNotAllowedException) {
-            final String method = ((MethodNotAllowedException) error).method();
-            if (method != null) {
-                output.objectMember(METHOD);
-                output.stringValue(method);
-            }
-        } else if (error instanceof PathNotFoundException) {
+        if (error instanceof PathNotFoundException) {
             final String path = ((PathNotFoundException) error).path();
             if (path != null) {
                 output.objectMember(PATH);
-                output.stringValue(path);
+                output.stringValue(path, true);
+            }
+        } else if (error instanceof MethodNotAllowedException) {
+            final String method = ((MethodNotAllowedException) error).method();
+            if (method != null) {
+                output.objectMember(METHOD);
+                output.stringValue(method, true);
             }
         }
 
-        final String message = error.getMessage();
-        if (message != null) {
-            output.objectMember(MESSAGE);
-            output.stringValue(message, true);
+        if (!(error instanceof InternalServerErrorException)) {
+            // the message of a failure is the cause's toString(), which names a type of the implementation
+            final String message = error.getMessage();
+            if (message != null) {
+                output.objectMember(MESSAGE);
+                output.stringValue(message, true);
+            }
         }
+
         output.endObject();
         return new DefaultFullHttpResponseContent(contentType, generator.finish());
     }

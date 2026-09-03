@@ -53,5 +53,5 @@ public abstract class TextPlainRestHandler
     }
 
     protected abstract ByteArray doHandle(RestContext context)
-            throws PathNotFoundException, BadRequestException;
+            throws HttpException;
 }

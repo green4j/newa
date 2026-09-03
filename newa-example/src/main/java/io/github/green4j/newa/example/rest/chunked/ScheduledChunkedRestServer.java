@@ -182,11 +182,11 @@ public class ScheduledChunkedRestServer {
                     .withObservers(StdOutRestApiObserver.factory())
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Clock started and listening on %s. Open %s/v1/clock.html%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS
-            );
+            System.out.printf("Clock started and listening on %s. Try:%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  open %s/v1/clock.html   -> the page the events drive%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -N %s/v1/clock     -> the same stream, as it arrives%n",
+                    LOCAL_SERVER_ADDRESS);
 
             return server;
         });

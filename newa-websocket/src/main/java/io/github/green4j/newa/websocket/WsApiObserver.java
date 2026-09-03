@@ -41,8 +41,15 @@ package io.github.green4j.newa.websocket;
  * <pre>
  * onSessionOpened -&gt; ( onFrameReceived | onFrameSent )*
  *                 -&gt; [ onWriteBackPressure -&gt; onWriteResumed ]*
- *                 -&gt; [ onWriteFailed ] -&gt; onSessionClosed
+ *                 -&gt; [ onReceiveFailed | onWriteFailed ] -&gt; onSessionClosed
  * </pre>
+ * <p>
+ * A session which ends badly says so here, exactly once, and by the stage which knows what went wrong:
+ * {@link #onReceiveFailed} when the application failed to handle a frame, {@link #onWriteFailed} when a
+ * frame did not go out. A failure of the channel itself is not a stage of a session and goes to the
+ * {@link io.github.green4j.newa.lang.ChannelErrorHandler} instead. There is nothing here which renders an
+ * error for the peer: a websocket has no response left to render once the handshake is done, so what a
+ * client is told about a bad frame is a frame of the application's own protocol, or a close.
  * <p>
  * {@link io.github.green4j.newa.websocket.subscriptions.SubscriptionsWsApiObserver} extends this with the
  * stages of a session which subscribes.
@@ -78,6 +85,20 @@ public interface WsApiObserver {
      * @param bytes of the payload handed over
      */
     default void onFrameSent(int bytes) {
+    }
+
+    /**
+     * The application threw while handling a frame, and the session is closed because of it - with a
+     * {@code 1011}, so the peer knows the server broke rather than that the connection went. The cause is
+     * given as it was thrown, and this is the only place it is ever told: the peer gets a status and no
+     * text, and nothing of it reaches a decoder or the
+     * {@link io.github.green4j.newa.lang.ChannelErrorHandler}.
+     * <p>
+     * {@link #onSessionClosed} follows, as it does for every session.
+     *
+     * @param error the {@link Receiver} threw
+     */
+    default void onReceiveFailed(Throwable error) {
     }
 
     /**

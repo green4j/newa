@@ -13,13 +13,23 @@ highly customizable and well-looking event subscription protocols.
 A server is one line, and the api is the only thing you write:
 
 ```java
-RestApi api = builder.build();
-new Life().run(() -> RestServer.start(9009, api));              // REST
+RestApiBuilder builder = new RestApiBuilder("My API", "Desc", 1, "1.0.0");
 
+builder.getJson("/hello/{name}", (context, output) ->
+        output.stringValue("Hello " + context.pathParameters().valueRequired("name"))
+).withPathParameterDescriptions("name - Greeting target");
+
+RestApi api = builder.build();                       // or buildWithHelp(JsonHelp.factory())
+
+new Life().run(() -> RestServer.start(9009, api));   // REST, GET /v1/hello/world
+```
+
+```java
 WsApi api = new SimpleWsApiBuilder(1)
         .withReceiver((session, message) -> session.send(message))
         .build();
-new Life().run(() -> WsServer.start(9010, api));                // WebSocket, echoing
+
+new Life().run(() -> WsServer.start(9010, api));     // WebSocket, echoing
 ```
 
 `RestServer` and `WsServer` assemble the documented pipeline out of the same public handlers, on a
@@ -30,7 +40,7 @@ still yours to take over: `NettyServerBuilder` for the transport, the threads an
 socket. The module READMEs document both, and `newa-example` has a server of each shape:
 `rest.pipeline.PipelineRestServer` and `ws.pipeline.PipelineWsServer` are the ones assembled from scratch.
 
-### Against Spring Boot, at both sides' defaults
+### Against Spring Boot
 
 Measured in [newa-performance](newa-performance/README.md), with each side written the way its own framework
 is normally written - newa rendering into a reused buffer, Spring returning objects for Jackson to serialise.

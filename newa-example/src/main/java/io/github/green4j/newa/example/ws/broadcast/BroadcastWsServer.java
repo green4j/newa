@@ -59,12 +59,11 @@ public class BroadcastWsServer {
                     .withCompression()
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Server started and listening on %s. Websocket path: %s%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.websocketPath()
-            );
+            System.out.printf("Server started and listening on %s%s. Try:%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.printf("  wscat -c %s%s   -> a line every 5 seconds, to every session at once%n",
+                    LOCAL_SERVER_ADDRESS, api.websocketPath());
+            System.out.println("  open a second one: both get the same broadcast, off one timer");
 
             // on the loops the sessions already live on, so a broadcast reaches them without a hand-off
             server.workerGroup().scheduleWithFixedDelay(

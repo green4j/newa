@@ -42,8 +42,7 @@ public class TxtRestHandler extends TextPlainRestHandler {
     }
 
     @Override
-    protected final ByteArray doHandle(final RestContext context) throws
-            PathNotFoundException, BadRequestException {
+    protected final ByteArray doHandle(final RestContext context) throws HttpException {
         final ByteArrayLineBuilder lineBuilder = lineBuilder();
         handle.doHandle(context, lineBuilder);
         return lineBuilder.array();

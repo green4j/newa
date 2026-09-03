@@ -32,8 +32,10 @@ import io.github.green4j.newa.lang.Sender;
 import io.github.green4j.newa.lang.WallClock;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
@@ -211,7 +213,55 @@ public class ClientSession implements Sender, Closeable {
         if (receiver == null) {
             return;
         }
-        receiver.receive(this, frame);
+        try {
+            receiver.receive(this, frame);
+        } catch (final Exception failed) {
+            // the application failing to handle a frame is not the channel failing, and it is not the
+            // decoder's business either: it is reported to this session's observer and ends this session
+            receiveFailed(failed);
+        }
+    }
+
+    /**
+     * Reports a failure of the application handling a frame the way a failed write is reported - the
+     * observer is told and the session is closed - and never throws itself. Called for anything thrown by
+     * the {@link Receiver}, and public because a receiver which handles a frame somewhere else owes the
+     * session the same treatment.
+     * <p>
+     * The session goes. A receiver which threw has said nothing about whether the state behind it is still
+     * whole, and there is no frame this library could answer with in its place: the protocol on this
+     * connection is the application's, not ours. What a client is told is a close of {@code 1011}, so that
+     * it knows the server broke rather than that the connection merely went.
+     *
+     * @param cause of the failure.
+     */
+    public void receiveFailed(final Throwable cause) {
+        try {
+            if (observer != null) {
+                observer.onReceiveFailed(cause);
+            }
+        } catch (final Exception ignore) {
+            // an observer which throws does not get to keep the session: the failure it was being told
+            // about is the last word on this connection either way
+        } finally {
+            closeWith(WebSocketCloseStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Ends the session with a status the peer can read, rather than with a disconnect it can only guess at.
+     *
+     * @param status to close with.
+     */
+    private void closeWith(final WebSocketCloseStatus status) {
+        final io.netty.channel.Channel c = context.channel();
+        if (closed.get() || !c.isOpen()) {
+            close(); // idempotent, and there is nothing left to send the status on
+            return;
+        }
+        // the frame first and the close after it has gone out: closing the channel here would take the
+        // status with it
+        c.writeAndFlush(new CloseWebSocketFrame(status)).addListener(written -> close());
     }
 
     public Executor executor() {

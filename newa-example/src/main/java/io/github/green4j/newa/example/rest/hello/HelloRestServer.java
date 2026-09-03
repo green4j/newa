@@ -100,12 +100,16 @@ public class HelloRestServer {
                     .withCompression()
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf(
-                    "Server started and listening on %s. Help is available on %s%s%n",
-                    LOCAL_SERVER_ADDRESS,
-                    LOCAL_SERVER_ADDRESS,
-                    api.helpPath()
-            );
+            System.out.printf("Server started and listening on %s. Try:%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/hello/world%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/version           -> published on the root, without /v1%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/jvm/info%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/jvm/threads%n", LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s%s   -> the api describing itself%n",
+                    LOCAL_SERVER_ADDRESS, api.helpPath());
+            System.out.printf("  curl -sX POST %s/v1/shutdown   -> stops this server%n",
+                    LOCAL_SERVER_ADDRESS);
 
             // End owns the lifecycle: it parks this thread until the end is asked for, adds the JVM shutdown
             // hook, and closes the server here rather than on the event loop the /shutdown endpoint runs on

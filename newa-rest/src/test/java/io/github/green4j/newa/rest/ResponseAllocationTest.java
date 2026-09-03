@@ -204,7 +204,8 @@ class ResponseAllocationTest {
         final FullHttpResponse response = get("/v1/short-content");
         try {
             Assertions.assertEquals(500, response.status().code());
-            Assertions.assertTrue(
+            // the mismatch is a failure of the server, so the client is told the status and nothing else
+            Assertions.assertFalse(
                     response.content().toString(StandardCharsets.UTF_8)
                             .contains("Expected content length"));
         } finally {
@@ -251,7 +252,7 @@ class ResponseAllocationTest {
         final FullHttpResponse response = get("/v1/fails-midway");
         try {
             Assertions.assertEquals(500, response.status().code());
-            Assertions.assertTrue(
+            Assertions.assertFalse(
                     response.content().toString(StandardCharsets.UTF_8).contains("Boom"));
         } finally {
             response.release();

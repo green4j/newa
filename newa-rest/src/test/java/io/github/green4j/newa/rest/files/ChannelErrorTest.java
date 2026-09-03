@@ -25,11 +25,9 @@
 package io.github.green4j.newa.rest.files;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
-import io.github.green4j.newa.rest.BadRequestException;
-import io.github.green4j.newa.rest.ErrorHandler;
+import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.FullHttpResponseContent;
-import io.github.green4j.newa.rest.InternalServerErrorException;
-import io.github.green4j.newa.rest.MethodNotAllowedException;
+import io.github.green4j.newa.rest.HttpException;
 import io.github.green4j.newa.rest.PathNotFoundException;
 import io.github.green4j.newa.rest.TextErrorHandler;
 import io.netty.bootstrap.ServerBootstrap;
@@ -127,7 +125,7 @@ class ChannelErrorTest {
         final RuntimeException boom = new RuntimeException("cannot render that");
 
         final EmbeddedChannel channel = new EmbeddedChannel(
-                new FileServerHandler(files(), new FailingErrorHandler(boom), errors, null),
+                new FileServerHandler(files(), new FailingHttpErrorHandler(boom), errors, null),
                 behind);
         final DefaultFullHttpRequest request = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1, HttpMethod.GET, "/files/missing.txt");
@@ -271,31 +269,19 @@ class ChannelErrorTest {
     /**
      * Fails where nothing is expected to: while rendering the response a refused request is answered with.
      */
-    private static final class FailingErrorHandler implements ErrorHandler {
+    private static final class FailingHttpErrorHandler implements HttpErrorHandler {
         private final RuntimeException cause;
-        private final ErrorHandler delegate = new TextErrorHandler();
+        private final HttpErrorHandler delegate = new TextErrorHandler();
 
-        private FailingErrorHandler(final RuntimeException cause) {
+        private FailingHttpErrorHandler(final RuntimeException cause) {
             this.cause = cause;
         }
 
         @Override
-        public FullHttpResponseContent handle(final MethodNotAllowedException error) {
-            return delegate.handle(error);
-        }
-
-        @Override
-        public FullHttpResponseContent handle(final PathNotFoundException error) {
-            throw cause;
-        }
-
-        @Override
-        public FullHttpResponseContent handle(final BadRequestException error) {
-            return delegate.handle(error);
-        }
-
-        @Override
-        public FullHttpResponseContent handle(final InternalServerErrorException error) {
+        public FullHttpResponseContent handle(final HttpException error) {
+            if (error instanceof PathNotFoundException) {
+                throw cause;
+            }
             return delegate.handle(error);
         }
     }

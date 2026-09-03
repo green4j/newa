@@ -90,8 +90,24 @@ public class FileServer {
                     .withFiles(files) // in front of the api, which then never sees a request for a file
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
-            System.out.printf("Server started and listening on %s. Files are served from %s%n",
+            System.out.printf("Server started and listening on %s. Files are served from %s. Try:%n",
                     LOCAL_SERVER_ADDRESS, root);
+            System.out.printf("  curl -sD- %s/files/               -> the index of the root%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- -r 100-199 -o /dev/null %s/files/img/big.bin   -> 206%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- -r 99999999- -o /dev/null %s/files/img/big.bin -> 416%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- -o /dev/null %s/files/internal/secret.txt      -> 404, filtered%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- -o /dev/null \"%s/files/../../etc/passwd\"       -> 404%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- %s/download/report.bin  -> the file named at configuration time%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/zero-copy           -> whether sendfile(2) is carrying them%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -s %s/v1/hello/world         -> still routed by the REST api%n",
+                    LOCAL_SERVER_ADDRESS);
 
             return server;
         });

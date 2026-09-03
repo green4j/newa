@@ -63,10 +63,9 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     private final HttpVersion httpVersion;
     private final boolean keepAlive;
 
-    private final ErrorHandler errorHandler;
+    private final HttpErrorHandler errorHandler;
     private final ResponseChunks responseChunks;
     private final HttpApiObserver observer;
-    private final RestApiObserver restObserver;
     private final HttpRequest request;
     private final long startedAt;
 
@@ -75,10 +74,9 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     RestResult(final ChannelHandlerContext ctx,
                final HttpRequest request,
-               final ErrorHandler errorHandler,
+               final HttpErrorHandler errorHandler,
                final ResponseChunks responseChunks,
-               final HttpApiObserver observer,
-               final RestApiObserver restObserver) {
+               final HttpApiObserver observer) {
         this.ctx = ctx;
         this.request = request;
 
@@ -88,7 +86,6 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         this.errorHandler = errorHandler;
         this.responseChunks = responseChunks;
         this.observer = observer;
-        this.restObserver = restObserver;
 
         // the clock is not read at all when there is nobody to report a duration to
         startedAt = observer != null ? System.nanoTime() : 0;
@@ -453,37 +450,20 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         // channel's allocator, so it has to be handed back rather than left to the garbage collector
         releaseResponse();
 
-        final FullHttpResponseContent content;
-        final HttpResponseStatus status;
+        // an error which says how it is answered is answered that way, whoever declared it - a user's own
+        // exception carries its own status here. Anything else is a failure rather than an answer
+        final HttpException answered = error instanceof HttpException
+                ? (HttpException) error
+                : new InternalServerErrorException(error);
 
-        if (error instanceof MethodNotAllowedException) {
-            final MethodNotAllowedException e =
-                    (MethodNotAllowedException) error;
-            status = e.status();
-            content = errorHandler.handle(e);
-        } else if (error instanceof PathNotFoundException) {
-            final PathNotFoundException e =
-                    (PathNotFoundException) error;
-            status = e.status();
-            content = errorHandler.handle(e);
-        } else if (error instanceof BadRequestException) {
-            final BadRequestException e =
-                    (BadRequestException) error;
-            status = e.status();
-            content = errorHandler.handle(e);
-        } else if (error instanceof InternalServerErrorException) {
-            final InternalServerErrorException e =
-                    (InternalServerErrorException) error;
-            status = e.status();
-            content = errorHandler.handle(e);
-        } else {
-            final InternalServerErrorException ie = new InternalServerErrorException(error);
-            status = ie.status();
-            content = errorHandler.handle(ie);
-        }
+        final HttpResponseStatus status = answered.status();
+        final FullHttpResponseContent content = errorHandler.handle(answered);
 
-        if (routed && restObserver != null) {
-            restObserver.onResponseFailed(status, error);
+        if (routed && observer != null) {
+            // reported as it was thrown, not as it was wrapped: the response says only the status, so this
+            // is the only place the failure is told in full. A request which routed to nothing has already
+            // been reported by onRequestNotRouted
+            observer.onResponseFailed(status, error);
         }
 
         response = new DefaultFullHttpResponse(
