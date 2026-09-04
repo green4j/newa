@@ -57,7 +57,7 @@ public class ChannelA extends Channel<ChannelA.ChannelAEntitySubscriptions> {
             }
 
             // rendered once, every session gets a duplicate of it
-            publishAndRelease(Unpooled.copiedBuffer(entityId + "=" + value, CharsetUtil.UTF_8));
+            publishTextAndRelease(Unpooled.copiedBuffer(entityId + "=" + value, CharsetUtil.UTF_8));
         }
 
         @Override

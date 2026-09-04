@@ -52,7 +52,10 @@ public interface RestApiObserver extends HttpApiObserver {
     enum Outcome {
         /** The cursor ran out and the whole response reached the peer. */
         COMPLETED,
-        /** The peer took no chunk within {@link ResponseChunks#stallTimeoutMillis()}. */
+        /**
+         * The peer stopped taking the response, and
+         * {@link io.github.green4j.newa.server.ResponseDeadlineHandler} gave up on the connection.
+         */
         STALLED,
         /** The connection went away, or the response failed, before the cursor ran out. */
         ABANDONED

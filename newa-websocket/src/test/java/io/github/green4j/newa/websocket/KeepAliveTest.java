@@ -25,7 +25,10 @@
 package io.github.green4j.newa.websocket;
 
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -55,7 +58,7 @@ class KeepAliveTest {
         final EmbeddedChannel channel = new EmbeddedChannel();
         channels.add(channel);
 
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         return api.newSession(
                 new ClientSessionContext(
@@ -92,6 +95,21 @@ class KeepAliveTest {
         Assertions.assertEquals(writable, channel.isWritable());
     }
 
+    /**
+     * @return the status of every close frame the channel has to show, in the order it wrote them.
+     */
+    private List<Integer> closeStatuses() {
+        final List<Integer> statuses = new ArrayList<>();
+        Object outbound;
+        while ((outbound = channel().readOutbound()) != null) {
+            if (outbound instanceof CloseWebSocketFrame) {
+                statuses.add(((CloseWebSocketFrame) outbound).statusCode());
+            }
+            ReferenceCountUtil.release(outbound);
+        }
+        return statuses;
+    }
+
     @AfterEach
     void tearDown() {
         channels.forEach(EmbeddedChannel::finishAndReleaseAll);
@@ -105,6 +123,8 @@ class KeepAliveTest {
         elapse(TIMEOUT_MS * 2);
 
         Assertions.assertTrue(session.isClosed());
+        Assertions.assertEquals(List.of(WebSocketCloseStatus.ENDPOINT_UNAVAILABLE.code()), closeStatuses(),
+                "a peer which is merely silent is still reading, and is told why it is being let go");
     }
 
     @Test
@@ -129,7 +149,9 @@ class KeepAliveTest {
 
         elapse(TIMEOUT_MS * 2);
 
-        Assertions.assertTrue(session.isClosed());
+        Assertions.assertTrue(session.isClosed(), "and it goes now, rather than whenever the buffer moves");
+        Assertions.assertEquals(List.of(), closeStatuses(),
+                "there is nobody draining the buffer a status would go into");
     }
 
     @Test

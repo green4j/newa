@@ -41,10 +41,10 @@ import java.util.function.Consumer;
  * an event loop. Subscribing and unsubscribing take a short lock of this entity, and neither copies the set:
  * a popular entity thousands of clients arrive at costs what they are, not their square.
  *
- * <p>A state change must go through {@link #publish(Consumer)}, or {@link #publishAndRelease(ByteBuf)}
+ * <p>A state change must go through {@link #publish(Consumer)}, or {@link #publishTextAndRelease(ByteBuf)}
  * when the frame is rendered once for all of the subscribers, which numbers it so that
  * a subscriber can tell a hole from a duplicate. {@link #forEachSession(Consumer)} and
- * {@link #forEachSessionAndRelease(ByteBuf)} are for
+ * {@link #forEachSessionTextAndRelease(ByteBuf)} are for
  * everything else - inspection, administrative broadcasts - and carry the same barrier,
  * so they can not lose a session which subscribes while they run.
  *
@@ -216,8 +216,8 @@ public class EntitySubscriptions implements Closeable {
     }
 
     /**
-     * Publishes one already rendered frame to every subscribed session and takes it over: each session is
-     * given a retained duplicate of it, and the buffer itself is released once the fan-out is done. The
+     * Publishes one already rendered text frame to every subscribed session and takes it over: each session
+     * is given a retained duplicate of it, and the buffer itself is released once the fan-out is done. The
      * payload is rendered once instead of once per session, which for a publication reaching thousands of
      * subscribers is most of the work. The state of the entity must be mutated <b>before</b> this call,
      * the same way {@link #publish(Consumer)} requires.
@@ -225,11 +225,11 @@ public class EntitySubscriptions implements Closeable {
      * @param frame to send. Released here whatever happens to it.
      * @return the sequence number assigned to this publication.
      */
-    public final long publishAndRelease(final ByteBuf frame) {
+    public final long publishTextAndRelease(final ByteBuf frame) {
         try {
             return publish(
-                    session -> session.send(frame.retainedDuplicate()) // a session consumes the frame it
-                    // is given, so one buffer can not be handed to all of them
+                    session -> session.sendText(frame.retainedDuplicate()) // a session consumes the frame
+                    // it is given, so one buffer can not be handed to all of them
             );
         } finally {
             frame.release();
@@ -237,17 +237,45 @@ public class EntitySubscriptions implements Closeable {
     }
 
     /**
-     * Publishes one already rendered frame to every subscribed session and leaves it to the caller: each
-     * session is given a retained duplicate of it, and the reference of the caller is neither taken nor
-     * released, so the buffer can be sent again or kept. Use {@link #publishAndRelease(ByteBuf)} when the
-     * frame was rendered for this publication and nothing else.
+     * Publishes one already rendered text frame to every subscribed session and leaves it to the caller:
+     * each session is given a retained duplicate of it, and the reference of the caller is neither taken
+     * nor released, so the buffer can be sent again or kept. Use {@link #publishTextAndRelease(ByteBuf)}
+     * when the frame was rendered for this publication and nothing else.
      *
      * @param frame to send. Stays the caller's to release.
      * @return the sequence number assigned to this publication.
      */
-    public final long publish(final ByteBuf frame) {
-        return publishAndRelease(frame.retain()); // the reference taken below is the one added here,
+    public final long publishText(final ByteBuf frame) {
+        return publishTextAndRelease(frame.retain()); // the reference taken below is the one added here,
         // so the caller keeps its own
+    }
+
+    /**
+     * Publishes one already rendered binary frame to every subscribed session and takes it over, on the
+     * terms {@link #publishTextAndRelease(ByteBuf)} sets out.
+     *
+     * @param frame to send. Released here whatever happens to it.
+     * @return the sequence number assigned to this publication.
+     */
+    public final long publishBinaryAndRelease(final ByteBuf frame) {
+        try {
+            return publish(
+                    session -> session.sendBinary(frame.retainedDuplicate())
+            );
+        } finally {
+            frame.release();
+        }
+    }
+
+    /**
+     * Publishes one already rendered binary frame to every subscribed session and leaves it to the caller,
+     * on the terms {@link #publishText(ByteBuf)} sets out.
+     *
+     * @param frame to send. Stays the caller's to release.
+     * @return the sequence number assigned to this publication.
+     */
+    public final long publishBinary(final ByteBuf frame) {
+        return publishBinaryAndRelease(frame.retain());
     }
 
     /**
@@ -285,21 +313,21 @@ public class EntitySubscriptions implements Closeable {
     }
 
     /**
-     * Sends one already rendered frame to every subscribed session without numbering anything, and takes
-     * it over the way {@link #publishAndRelease(ByteBuf)} does: each session is given a retained duplicate
-     * of it, and the buffer itself is released once the walk is done. Use it for an administrative
-     * broadcast to the subscribers of this entity; a change of its state must go through
-     * {@link #publishAndRelease(ByteBuf)} instead, so that a subscriber can detect a hole by the sequence
-     * number.
+     * Sends one already rendered text frame to every subscribed session without numbering anything, and
+     * takes it over the way {@link #publishTextAndRelease(ByteBuf)} does: each session is given a retained
+     * duplicate of it, and the buffer itself is released once the walk is done. Use it for an
+     * administrative broadcast to the subscribers of this entity; a change of its state must go through
+     * {@link #publishTextAndRelease(ByteBuf)} instead, so that a subscriber can detect a hole by the
+     * sequence number.
      *
      * @param frame to send. Released here whatever happens to it.
      * @return the number of the sessions walked.
      */
-    public final int forEachSessionAndRelease(final ByteBuf frame) {
+    public final int forEachSessionTextAndRelease(final ByteBuf frame) {
         try {
             return forEachSession(
-                    session -> session.send(frame.retainedDuplicate()) // a session consumes the frame it
-                    // is given, so one buffer can not be handed to all of them
+                    session -> session.sendText(frame.retainedDuplicate()) // a session consumes the frame
+                    // it is given, so one buffer can not be handed to all of them
             );
         } finally {
             frame.release();
@@ -307,16 +335,44 @@ public class EntitySubscriptions implements Closeable {
     }
 
     /**
-     * Sends one already rendered frame to every subscribed session without numbering anything, and leaves
-     * it to the caller the way {@link #publish(ByteBuf)} does: each session is given a retained duplicate
-     * of it, and the reference of the caller is neither taken nor released.
+     * Sends one already rendered text frame to every subscribed session without numbering anything, and
+     * leaves it to the caller the way {@link #publishText(ByteBuf)} does: each session is given a retained
+     * duplicate of it, and the reference of the caller is neither taken nor released.
      *
      * @param frame to send. Stays the caller's to release.
      * @return the number of the sessions walked.
      */
-    public final int forEachSession(final ByteBuf frame) {
-        return forEachSessionAndRelease(frame.retain()); // the reference taken below is the one added
+    public final int forEachSessionText(final ByteBuf frame) {
+        return forEachSessionTextAndRelease(frame.retain()); // the reference taken below is the one added
         // here, so the caller keeps its own
+    }
+
+    /**
+     * Sends one already rendered binary frame to every subscribed session without numbering anything, and
+     * takes it over, on the terms {@link #forEachSessionTextAndRelease(ByteBuf)} sets out.
+     *
+     * @param frame to send. Released here whatever happens to it.
+     * @return the number of the sessions walked.
+     */
+    public final int forEachSessionBinaryAndRelease(final ByteBuf frame) {
+        try {
+            return forEachSession(
+                    session -> session.sendBinary(frame.retainedDuplicate())
+            );
+        } finally {
+            frame.release();
+        }
+    }
+
+    /**
+     * Sends one already rendered binary frame to every subscribed session without numbering anything, and
+     * leaves it to the caller, on the terms {@link #forEachSessionText(ByteBuf)} sets out.
+     *
+     * @param frame to send. Stays the caller's to release.
+     * @return the number of the sessions walked.
+     */
+    public final int forEachSessionBinary(final ByteBuf frame) {
+        return forEachSessionBinaryAndRelease(frame.retain());
     }
 
     /**

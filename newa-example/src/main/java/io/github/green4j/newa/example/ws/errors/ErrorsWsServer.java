@@ -34,9 +34,10 @@ import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestApiHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.websocket.ClientSession;
 import io.github.green4j.newa.websocket.Receiver;
-import io.github.green4j.newa.websocket.SimpleWsApiBuilder;
 import io.github.green4j.newa.websocket.WsApi;
+import io.github.green4j.newa.websocket.WsApiBuilder;
 import io.github.green4j.newa.websocket.WsServer;
 
 /**
@@ -88,23 +89,28 @@ public class ErrorsWsServer {
      * Everything you can name, name here. What escapes is what the application could not classify, and for
      * that the session is the only honest answer.
      */
-    private static final Receiver RECEIVER = (session, message) -> {
-        final String command = message.toString();
+    private static final Receiver RECEIVER = new Receiver() {
+        @Override
+        public void text(final ClientSession session,
+                         final CharSequence message,
+                         final boolean last) {
+            final String command = message.toString();
 
-        if (command.startsWith(ECHO)) {
-            session.send(command.substring(ECHO.length()));
-            return;
+            if (command.startsWith(ECHO)) {
+                session.sendText(command.substring(ECHO.length()));
+                return;
+            }
+
+            if (BOOM.equals(command)) {
+                throw new IllegalStateException("Failed to read /etc/secret/db.conf");
+            }
+
+            session.sendText("ERR: expected " + ECHO + "<text> or " + BOOM + ", got " + command);
         }
-
-        if (BOOM.equals(command)) {
-            throw new IllegalStateException("Failed to read /etc/secret/db.conf");
-        }
-
-        session.send("ERR: expected " + ECHO + "<text> or " + BOOM + ", got " + command);
-    };
+    }; // and nothing takes binary here, so a binary frame is answered with a 1003 and the session ends
 
     public static void main(final String[] args) throws Exception {
-        final WsApi api = new SimpleWsApiBuilder(API_VERSION)
+        final WsApi api = new WsApiBuilder(API_VERSION)
                 .withPathPrefix("ws")
                 .withReceiver(RECEIVER)
                 .withObservers(StdOutWsApiObserver.factory())

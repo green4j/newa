@@ -47,7 +47,7 @@ import io.netty.handler.stream.ChunkedInput;
  * <p>
  * Everything a {@link ChunkedInput} has to answer and cannot answer differently is answered here: how long
  * the response is (nobody knows), whether it has ended (not by itself), how far it has got (counted for you,
- * which is what {@link ResponseChunks#stallTimeoutMillis()} watches), and the overload Netty deprecated but
+ * which is what an observer is told), and the overload Netty deprecated but
  * still declares. What is left is {@link #next} and {@link #close()}.
  * <p>
  * Such a response is outside the cursor accounting: {@link ResponseChunks#maxOpenCursors()} counts what

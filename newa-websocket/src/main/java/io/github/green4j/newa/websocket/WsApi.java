@@ -38,15 +38,16 @@ public class WsApi implements ClientSessionFactory, WritingResult {
     private final ClientSessions clientSessions;
 
     /**
-     * An api whose read timeout is {@link WsApiBuilder#DEFAULT_READ_TIMEOUT_MS}. Note the pairing that
+     * An api whose read timeout is {@link AbstractWsApiBuilder#DEFAULT_READ_TIMEOUT_MS}. Note the pairing that
      * implies: with a ping interval of 0 nothing gives a session which only listens anything to answer,
      * and it is closed after that timeout however healthy it is. Take the constructor below and say 0 for
      * both when that is what you want.
      *
      * @param observers asked for an observer per session, or null to observe nothing.
-     * @param receiver told about every text frame of every session, or null for an api which only ever
-     *                 sends. It is to a frame what a rest handle is to a request, which is why it belongs
-     *                 to the api rather than to the handler in front of it.
+     * @param receiver told about every data frame of every session, text or binary, or null for an api
+     *                 which only ever sends - one which answers an inbound frame with a 1003, since there
+     *                 is nothing here to take it. It is to a frame what a rest handle is to a request,
+     *                 which is why it belongs to the api rather than to the handler in front of it.
      * @param websocketPath the path the handshake is served on.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never.
      * @param skipOnBackPressure keeps a session which can not keep up instead of closing it.
@@ -61,7 +62,7 @@ public class WsApi implements ClientSessionFactory, WritingResult {
                 receiver,
                 websocketPath,
                 pingIntervalMs,
-                WsApiBuilder.DEFAULT_READ_TIMEOUT_MS, // the safe default belongs to an api assembled by
+                AbstractWsApiBuilder.DEFAULT_READ_TIMEOUT_MS, // the safe default belongs to an api assembled by
                 // hand no less than to one built by the builder
                 skipOnBackPressure
         );
@@ -69,9 +70,10 @@ public class WsApi implements ClientSessionFactory, WritingResult {
 
     /**
      * @param observers asked for an observer per session, or null to observe nothing.
-     * @param receiver told about every text frame of every session, or null for an api which only ever
-     *                 sends. It is to a frame what a rest handle is to a request, which is why it belongs
-     *                 to the api rather than to the handler in front of it.
+     * @param receiver told about every data frame of every session, text or binary, or null for an api
+     *                 which only ever sends - one which answers an inbound frame with a 1003, since there
+     *                 is nothing here to take it. It is to a frame what a rest handle is to a request,
+     *                 which is why it belongs to the api rather than to the handler in front of it.
      * @param websocketPath the path the handshake is served on.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never. What gives a session which
      *                       only listens something to answer, so that the timeout below can tell it from
@@ -111,7 +113,7 @@ public class WsApi implements ClientSessionFactory, WritingResult {
     }
 
     /**
-     * @return what every session of this api hands its inbound text frames to, null if it has none.
+     * @return what every session of this api hands its inbound data frames to, null if it has none.
      */
     public Receiver receiver() {
         return receiver;
@@ -134,36 +136,56 @@ public class WsApi implements ClientSessionFactory, WritingResult {
         return clientSessions.newSession(context);
     }
 
-    public void broadcast(final CharSequence text) {
-        clientSessions.broadcast(text);
+    public void broadcastText(final CharSequence text) {
+        clientSessions.broadcastText(text);
     }
 
-    public void broadcast(final CharSequence text,
-                          final Charset charset) {
-        clientSessions.broadcast(
+    public void broadcastText(final CharSequence text,
+                              final Charset charset) {
+        clientSessions.broadcastText(
                 text,
                 charset
         );
     }
 
     /**
-     * Sends the buffer to every open session and takes it over: each session is given a retained duplicate
-     * of it, and the buffer itself is released once the fan-out is done.
+     * Sends the buffer to every open session as a text frame and takes it over: each session is given a
+     * retained duplicate of it, and the buffer itself is released once the fan-out is done.
      *
      * @param text to send. Released here whatever happens to it.
      */
-    public void broadcastAndRelease(final ByteBuf text) {
-        clientSessions.broadcastAndRelease(text);
+    public void broadcastTextAndRelease(final ByteBuf text) {
+        clientSessions.broadcastTextAndRelease(text);
     }
 
     /**
-     * Sends the buffer to every open session and leaves it to the caller: each session is given a retained
-     * duplicate of it, and the reference of the caller is neither taken nor released.
+     * Sends the buffer to every open session as a text frame and leaves it to the caller: each session is
+     * given a retained duplicate of it, and the reference of the caller is neither taken nor released.
      *
      * @param text to send. Stays the caller's to release.
      */
-    public void broadcast(final ByteBuf text) {
-        clientSessions.broadcast(text);
+    public void broadcastText(final ByteBuf text) {
+        clientSessions.broadcastText(text);
+    }
+
+    /**
+     * Sends the buffer to every open session as a binary frame and takes it over, the way
+     * {@link #broadcastTextAndRelease(ByteBuf)} does.
+     *
+     * @param payload to send. Released here whatever happens to it.
+     */
+    public void broadcastBinaryAndRelease(final ByteBuf payload) {
+        clientSessions.broadcastBinaryAndRelease(payload);
+    }
+
+    /**
+     * Sends the buffer to every open session as a binary frame and leaves it to the caller, the way
+     * {@link #broadcastText(ByteBuf)} does.
+     *
+     * @param payload to send. Stays the caller's to release.
+     */
+    public void broadcastBinary(final ByteBuf payload) {
+        clientSessions.broadcastBinary(payload);
     }
 
     @Override
@@ -240,7 +262,7 @@ public class WsApi implements ClientSessionFactory, WritingResult {
     /**
      * A session which had frames skipped while it could not keep up has caught up, and its observer has
      * been told. Reached only when the api was built with
-     * {@link WsApiBuilder#withSkipOnBackPressure()}.
+     * {@link AbstractWsApiBuilder#withSkipOnBackPressure()}.
      *
      * @param session that became writable again.
      */

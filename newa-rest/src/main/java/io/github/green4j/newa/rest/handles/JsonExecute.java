@@ -39,6 +39,6 @@ public class JsonExecute implements JsonRestHandle {
     public void doHandle(final RestContext context,
                          final JsonGenerator output) {
         runnable.run();
-        output.stringValue("OK");
+        output.stringValue("ok");
     }
 }

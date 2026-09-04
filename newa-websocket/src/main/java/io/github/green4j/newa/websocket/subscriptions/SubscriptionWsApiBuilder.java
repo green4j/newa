@@ -24,10 +24,10 @@
 
 package io.github.green4j.newa.websocket.subscriptions;
 
+import io.github.green4j.newa.websocket.AbstractWsApiBuilder;
 import io.github.green4j.newa.websocket.WsApi;
-import io.github.green4j.newa.websocket.WsApiBuilder;
 
-public class SubscriptionWsApiBuilder extends WsApiBuilder<SubscriptionWsApiBuilder> {
+public class SubscriptionWsApiBuilder extends AbstractWsApiBuilder<SubscriptionWsApiBuilder> {
 
     public SubscriptionWsApiBuilder(final int version) {
         super(version);

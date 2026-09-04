@@ -53,6 +53,11 @@ import java.util.function.Consumer;
  * this framework reads its signal from. Whatever is not named here is one {@link #option(ChannelOption,
  * Object)} or {@link #childOption(ChannelOption, Object)} away, and those are applied after the defaults, so
  * setting one of them again overrides it.
+ * <p>
+ * Two numbers are deliberately left unset, because neither of them is this library's to guess: how many
+ * connections the server will hold at once ({@link #maxConnections(int)}), and how deep the kernel's queue of
+ * connections waiting to be accepted is ({@link #backlog(int)}). Without the first there is no limit, and
+ * without the second the queue is as deep as the operating system says.
  */
 public final class NettyServerBuilder {
     /**
@@ -87,6 +92,8 @@ public final class NettyServerBuilder {
     private int workerThreads = DEFAULT_WORKER_THREADS;
     private int waterMarkLow = DEFAULT_WATER_MARK_LOW;
     private int waterMarkHigh = DEFAULT_WATER_MARK_HIGH;
+    private int backlog;
+    private int maxConnections;
 
     private ChannelInitializer<? extends Channel> childHandler;
 
@@ -154,6 +161,44 @@ public final class NettyServerBuilder {
                                                    final int highBytes) {
         this.waterMarkLow = lowBytes;
         this.waterMarkHigh = highBytes;
+        return this;
+    }
+
+    /**
+     * How many connections the kernel may hold accepted, or half-accepted, before this server has taken them
+     * - {@code SO_BACKLOG}, which is what decides whether a burst arriving faster than it is accepted waits
+     * or is refused by the kernel outright.
+     *
+     * <p>Unset by default, which leaves Netty's own: whatever the operating system says its maximum is. That
+     * is already the ceiling - a larger number is silently truncated to it - so this is the knob for asking
+     * for <em>less</em> than the machine allows, or for saying the number out loud where a deployment
+     * depends on it.
+     *
+     * @param connections the kernel may queue for this server to accept.
+     * @return this builder.
+     */
+    public NettyServerBuilder backlog(final int connections) {
+        this.backlog = connections;
+        return this;
+    }
+
+    /**
+     * Bounds how many connections this server holds at once: one arriving above the limit is closed as it
+     * arrives, without a byte written back.
+     *
+     * <p>Unlimited by default, and that is a decision rather than an omission. The right number is what this
+     * process may open minus everything else it holds open, which is a property of the deployment and not of
+     * the code; a number picked here instead would cut working traffic quietly, which is worse than the
+     * failure it prevents. Set it where that number is known.
+     *
+     * <p>What it defends is the file descriptor, and what it costs is that a refused peer is told nothing -
+     * {@link ConnectionLimitHandler}, which this builds, says why, and counts what it refused.
+     *
+     * @param connections to hold at once, 0 for as many as the machine will give.
+     * @return this builder.
+     */
+    public NettyServerBuilder maxConnections(final int connections) {
+        this.maxConnections = connections;
         return this;
     }
 
@@ -236,11 +281,15 @@ public final class NettyServerBuilder {
                     .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
                             new WriteBufferWaterMark(waterMarkLow, waterMarkHigh));
 
+            if (backlog > 0) {
+                bootstrap.option(ChannelOption.SO_BACKLOG, backlog);
+            }
+
             // after the defaults, so asking for one of them again is how it is overridden
             applyOptions(bootstrap, false);
             applyOptions(bootstrap, true);
 
-            bootstrap.childHandler(childHandler);
+            bootstrap.childHandler(limited(childHandler));
 
             final Channel channel = (host == null
                     ? bootstrap.bind(port)
@@ -257,6 +306,29 @@ public final class NettyServerBuilder {
             throw new IllegalStateException(
                     "Could not bind to " + (host == null ? "*" : host) + ":" + port, failed);
         }
+    }
+
+    /**
+     * The child handler with the connection limit in front of it, when there is one. One
+     * {@link ConnectionLimitHandler} serves the whole server - the count is what it holds - and the
+     * initializer given here is added to the pipeline behind it, which is how a {@link ChannelInitializer}
+     * composes: it runs and removes itself, leaving the handlers it added.
+     *
+     * @param handler of every accepted channel.
+     * @return it, or an initializer which counts the connection first.
+     */
+    private ChannelInitializer<? extends Channel> limited(final ChannelInitializer<? extends Channel> handler) {
+        if (maxConnections < 1) {
+            return handler;
+        }
+        final ConnectionLimitHandler limit = new ConnectionLimitHandler(maxConnections);
+        return new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(final Channel ch) {
+                ch.pipeline().addLast(limit);
+                ch.pipeline().addLast(handler);
+            }
+        };
     }
 
     @SuppressWarnings("unchecked") // the maps are only ever filled through option()/childOption(), which

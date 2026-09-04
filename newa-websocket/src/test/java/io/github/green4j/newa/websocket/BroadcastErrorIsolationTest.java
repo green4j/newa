@@ -96,7 +96,7 @@ class BroadcastErrorIsolationTest {
         }
         final AtomicInteger next = new AtomicInteger();
 
-        return new SimpleWsApiBuilder(1)
+        return new WsApiBuilder(1)
                 .withPingIntervalMs(0)  // an EmbeddedChannel runs its scheduled tasks only when told to,
                 .withReadTimeoutMs(0)   // and a keep-alive would be noise in the outbound queue anyway
                 .withObservers(() -> observers.get(next.getAndIncrement()))
@@ -161,7 +161,7 @@ class BroadcastErrorIsolationTest {
         final WsApi api = apiOf(3, 1);
         final List<ClientSession> sessions = open(api, 3);
 
-        api.broadcast("hello");
+        api.broadcastText("hello");
 
         assertGot(0, "hello");
         assertGot(2, "hello");
@@ -181,7 +181,7 @@ class BroadcastErrorIsolationTest {
         final WsApi api = apiOf(1, 0);
         open(api, 1);
 
-        api.broadcast("hello");
+        api.broadcastText("hello");
 
         // The observer threw after writeAndFlush, so the frame belongs to the channel: releasing it in
         // the failure path would be the second release and would leave the peer reading freed memory.
@@ -204,7 +204,7 @@ class BroadcastErrorIsolationTest {
 
         final ByteBuf buffer = text("hello");
 
-        api.broadcastAndRelease(buffer);
+        api.broadcastTextAndRelease(buffer);
 
         drain();
 
@@ -219,7 +219,7 @@ class BroadcastErrorIsolationTest {
 
         final ByteBuf buffer = text("hello");
         try {
-            api.broadcast(buffer); // the form which leaves the buffer to the caller
+            api.broadcastText(buffer); // the form which leaves the buffer to the caller
 
             assertGot(1, "hello"); // the session after the one which threw was still served
             drain();

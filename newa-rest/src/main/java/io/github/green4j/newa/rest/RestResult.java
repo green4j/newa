@@ -63,6 +63,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     private final HttpVersion httpVersion;
     private final boolean keepAlive;
 
+    private final RestApiHandler handler;
     private final HttpErrorHandler errorHandler;
     private final ResponseChunks responseChunks;
     private final HttpApiObserver observer;
@@ -71,14 +72,17 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     private FullHttpResponse response;
     private boolean routed;
+    private boolean responded;
 
     RestResult(final ChannelHandlerContext ctx,
                final HttpRequest request,
+               final RestApiHandler handler,
                final HttpErrorHandler errorHandler,
                final ResponseChunks responseChunks,
                final HttpApiObserver observer) {
         this.ctx = ctx;
         this.request = request;
+        this.handler = handler;
 
         httpVersion = request.protocolVersion();
         keepAlive = HttpUtil.isKeepAlive(request);
@@ -116,6 +120,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     @Override
     public void respond(final HttpResponseStatus statusCode) {
+        if (spent()) {
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 statusCode);
@@ -130,6 +138,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     @Override
     public void respond(final HttpResponseStatus statusCode,
                         final FullHttpResponseContent content) {
+        if (spent()) {
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 statusCode,
@@ -158,6 +170,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
                                              final AsciiString contentEncoding,
                                              final AsciiString contentType,
                                              final int contentLength) {
+        if (spent()) {
+            return this; // append() and done() are guarded too, so what is returned stays inert
+        }
+
         // the whole content is declared up front, so allocate it in one go: growing a buffer from
         // scratch would copy the content over and over as it doubles
         response = new DefaultFullHttpResponse(
@@ -187,6 +203,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     public void ok(final byte[] array,
                    final int offset,
                    final int length) {
+        if (spent()) {
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
@@ -201,6 +221,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     @Override
     public void ok(final ByteBuffer buffer) {
+        if (spent()) {
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
@@ -216,6 +240,11 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     @Override
     public void ok(final ByteBuf buffer) {
+        if (spent()) {
+            buffer.release(); // handed over to be written, and nothing else will give it back
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
@@ -256,6 +285,11 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     @Override
     public void ok(final AsciiString contentType,
                    final ByteBuf buffer) {
+        if (spent()) {
+            buffer.release(); // handed over to be written, and nothing else will give it back
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK,
@@ -276,6 +310,14 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     public void respond(final HttpResponseStatus statusCode,
                         final AsciiString contentType,
                         final ChunkedInput<ByteBuf> body) {
+        if (spent()) {
+            closeQuietly(body); // nothing will pull from it, and nobody else will close it
+            return;
+        }
+
+        responded = true; // said before the pipeline is touched: a write which completes at once must not
+        // find this response still unsent
+
         final HttpResponse head = new DefaultHttpResponse(httpVersion, statusCode);
         final HttpHeaders headers = head.headers();
 
@@ -305,7 +347,14 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         // the end, fails, or the channel goes away under it
         final ChannelFuture written = ctx.writeAndFlush(new HttpChunkedInput(body));
 
+        if (body instanceof ChunkedResponseBody) {
+            // ours, and the only kind of body with an outcome of its own to report: told apart here, at the
+            // one place a body of any kind arrives, rather than by whatever ends up giving up on it
+            handler.stalling((ChunkedResponseBody) body);
+        }
+
         written.addListener((ChannelFutureListener) completed -> {
+            handler.stalling(null); // whatever ended this response, it is no longer the one being written
             if (!completed.isSuccess()) {
                 // the write never reached ChunkedWriteHandler, so nothing else is going to close the body.
                 // Closing twice is harmless, closing zero times leaks whatever the cursor holds
@@ -323,8 +372,6 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
                 reportCompleted(statusCode, body.progress());
             }
         });
-
-        ChunkedResponseWatchdog.watch(ctx, body, written, responseChunks.stallTimeoutMillis());
     }
 
     /**
@@ -370,6 +417,10 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     @Override
     public void okAndClose() {
+        if (spent()) {
+            return;
+        }
+
         response = new DefaultFullHttpResponse(
                 httpVersion,
                 HttpResponseStatus.OK);
@@ -383,14 +434,18 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
 
     @Override
     public void error(final Exception error) {
-        doError(error);
+        if (!doError(error)) {
+            return;
+        }
 
         doDone(false);
     }
 
     @Override
     public void errorAndClose(final Exception error) {
-        doError(error);
+        if (!doError(error)) {
+            return;
+        }
 
         doDone(true);
     }
@@ -417,35 +472,64 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     public Content append(final byte[] array,
                           final int offset,
                           final int length) {
+        if (nothingToAppendTo()) {
+            return this;
+        }
+
         response.content().writeBytes(array, offset, length);
         return this;
     }
 
     @Override
     public Content append(final ByteBuffer buffer) {
+        if (nothingToAppendTo()) {
+            return this;
+        }
+
         response.content().writeBytes(buffer);
         return this;
     }
 
     @Override
     public Content append(final ByteBuf buffer) {
+        if (nothingToAppendTo()) {
+            return this;
+        }
+
         response.content().writeBytes(buffer);
         return this;
     }
 
     @Override
     public void done() {
+        if (nothingToAppendTo()) {
+            return;
+        }
+
         checkContentLength();
         doDone(false);
     }
 
     @Override
     public void doneAndClose() {
+        if (nothingToAppendTo()) {
+            return;
+        }
+
         checkContentLength();
         doDone(true);
     }
 
-    private void doError(final Exception error) {
+    private boolean doError(final Exception error) {
+        if (responded) {
+            // the answer has already gone out, so this failure has no response left to be told in - and
+            // writing another one would answer the next request of a keep-alive connection with it
+            dropped(new IllegalStateException(
+                    "A response has already been sent for this request, so its failure could not be "
+                            + "answered", error));
+            return false;
+        }
+
         // a response already built by the failed handler is never written now: its buffer comes from the
         // channel's allocator, so it has to be handed back rather than left to the garbage collector
         releaseResponse();
@@ -476,6 +560,8 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
                 content.contentType(),
                 response.content().readableBytes()
         );
+
+        return true;
     }
 
     private void checkContentLength() {
@@ -493,6 +579,51 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
             releaseResponse();
             throw error;
         }
+    }
+
+    /**
+     * Says whether this request has been answered already, and takes back what a response begun and left
+     * unsent still holds - a handler which built one through {@link Content} and then answered another way
+     * would otherwise orphan its buffer.
+     *
+     * @return true when the call is to be dropped, having been reported
+     */
+    private boolean spent() {
+        if (responded) {
+            dropped(new IllegalStateException(
+                    "A response has already been sent for this request, so this one is dropped"));
+            return true;
+        }
+
+        releaseResponse(); // nothing to take back in the ordinary case
+
+        return false;
+    }
+
+    /**
+     * @return true when there is no response left for this call to reach - it has been sent already, or a
+     *         failure took its place
+     */
+    private boolean nothingToAppendTo() {
+        if (response != null) {
+            return false;
+        }
+
+        dropped(new IllegalStateException(
+                "The response this content belonged to is gone, so this call is dropped"));
+
+        return true;
+    }
+
+    /**
+     * Reports a handler which answered one request twice. Nothing is written back and nothing is thrown:
+     * the response which did go out is the correct one, and the peer is told nothing of a mistake which
+     * belongs to this side.
+     *
+     * @param misuse of this result, carrying the stack of the call which was dropped
+     */
+    private void dropped(final IllegalStateException misuse) {
+        handler.report(ctx.channel(), misuse);
     }
 
     private void releaseResponse() {
@@ -521,6 +652,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         // must not release it a second time
         final FullHttpResponse written = response;
         response = null;
+        responded = true;
 
         // read off the response before it is written: the encoder consumes the content buffer, so by the
         // time the write completes there is nothing readable left to measure

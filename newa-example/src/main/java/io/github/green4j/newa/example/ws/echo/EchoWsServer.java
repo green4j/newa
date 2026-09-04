@@ -25,12 +25,14 @@
 package io.github.green4j.newa.example.ws.echo;
 
 import io.github.green4j.newa.example.ws.StdOutWsApiObserver;
+import io.netty.buffer.ByteBuf;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.websocket.ClientSession;
 import io.github.green4j.newa.websocket.Receiver;
-import io.github.green4j.newa.websocket.SimpleWsApiBuilder;
 import io.github.green4j.newa.websocket.WsApi;
+import io.github.green4j.newa.websocket.WsApiBuilder;
 import io.github.green4j.newa.websocket.WsServer;
 
 
@@ -44,16 +46,36 @@ public class EchoWsServer {
     public static void main(final String[] args) throws Exception {
         final Life life = new Life();
 
-        final Receiver receiver = (session, message) -> {
-            System.out.printf(
-                    "Received: '%s' from: %s%n",
-                    message.toString(),
-                    session.toString()
-            );
-            session.send(message);
+        final Receiver receiver = new Receiver() {
+            @Override
+            public void text(final ClientSession session,
+                             final CharSequence message,
+                             final boolean last) {
+                System.out.printf(
+                        "Received: '%s' from: %s%n",
+                        message.toString(),
+                        session.toString()
+                );
+                session.sendText(message);
+            }
+
+            @Override
+            public void binary(final ClientSession session,
+                               final ByteBuf payload,
+                               final boolean last) {
+                System.out.printf(
+                        "Received: %d bytes%s from: %s%n",
+                        payload.readableBytes(),
+                        last ? "" : " (to be continued)",
+                        session.toString()
+                );
+                session.sendBinary(payload.retain()); // the buffer is the decoder's, and it is released
+                // the moment this returns, so what is sent on has to be retained. A message which arrived
+                // in pieces goes back as one frame per piece
+            }
         };
 
-        final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(
+        final WsApiBuilder apiBuilder = new WsApiBuilder(
                 API_VERSION
         )
                 .withPathPrefix("ws")

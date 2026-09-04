@@ -71,8 +71,10 @@ public interface WsApiObserver {
     }
 
     /**
-     * A text frame arrived from the peer, before the application saw it. Fires per frame, so keep it cheap.
-     * Nothing is reported for the frames the protocol handles on its own - ping, pong and close.
+     * A data frame arrived from the peer, before the application saw it - text or binary, and one call per
+     * frame rather than per message, so a message which arrives in pieces is reported piece by piece. Fires
+     * per frame, so keep it cheap. Nothing is reported for the frames the protocol handles on its own -
+     * ping, pong and close.
      *
      * @param bytes of the payload, as it came off the wire
      */

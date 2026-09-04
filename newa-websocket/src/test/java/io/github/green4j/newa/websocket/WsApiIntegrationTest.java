@@ -34,6 +34,7 @@ import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 
 class WsApiIntegrationTest {
     private static final String HOST = "127.0.0.1";
+    private static final String GO_AWAY = "go-away"; // what the receiver below answers with a close
 
     private static final class Observed implements WsApiObserver {
         private final List<String> stages = Collections.synchronizedList(new ArrayList<>());
@@ -106,9 +108,15 @@ class WsApiIntegrationTest {
         bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
 
-        final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(1)
+        final WsApiBuilder apiBuilder = new WsApiBuilder(1)
                 .withPathPrefix("ws")
-                .withReceiver((session, message) -> session.send(message))
+                .withReceiver(Receivers.ofText((session, message) -> {
+                    if (GO_AWAY.contentEquals(message)) {
+                        session.closeWith(WebSocketCloseStatus.POLICY_VIOLATION);
+                        return;
+                    }
+                    session.sendText(message);
+                }))
                 .withPingIntervalMs(0)
                 .withObservers(() -> {
                     final Observed observer = new Observed();
@@ -203,6 +211,58 @@ class WsApiIntegrationTest {
         Assertions.assertEquals(
                 List.of("opened", "received:10", "sent:10", "closed"),
                 new ArrayList<>(observer.stages)
+        );
+    }
+
+    /**
+     * The status the server closed with is what reaches the client, and it reaches it as a close: a
+     * connection which merely went would arrive at onError instead, with nothing to tell it apart from
+     * the network dropping.
+     *
+     * @throws Exception if the client does.
+     */
+    @Test
+    public void testTheCloseStatusReachesTheClient() throws Exception {
+        final CompletableFuture<Integer> closeStatus = new CompletableFuture<>();
+
+        final HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+
+        final URI wsUri = URI.create(
+                "ws://" + HOST + ':' + serverPort() + "/ws/v1"
+        );
+
+        final WebSocket.Listener listener = new WebSocket.Listener() {
+
+            @Override
+            public void onOpen(final WebSocket webSocket) {
+                webSocket.sendText(GO_AWAY, true);
+                WebSocket.Listener.super.onOpen(webSocket);
+            }
+
+            @Override
+            public CompletionStage<?> onClose(final WebSocket webSocket,
+                                              final int statusCode,
+                                              final String reason) {
+                closeStatus.complete(statusCode);
+                return CompletableFuture.completedFuture(null);
+            }
+
+            @Override
+            public void onError(final WebSocket webSocket,
+                                final Throwable error) {
+                closeStatus.completeExceptionally(error);
+            }
+        };
+
+        httpClient.newWebSocketBuilder()
+                .buildAsync(wsUri, listener)
+                .get(10, TimeUnit.SECONDS);
+
+        Assertions.assertEquals(
+                WebSocketCloseStatus.POLICY_VIOLATION.code(),
+                closeStatus.get(10, TimeUnit.SECONDS)
         );
     }
 }

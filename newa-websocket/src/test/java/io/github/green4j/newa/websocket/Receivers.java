@@ -22,22 +22,39 @@
  * SOFTWARE.
  */
 
+
 package io.github.green4j.newa.websocket;
 
-public class SimpleWsApiBuilder extends WsApiBuilder<SimpleWsApiBuilder> {
+import java.util.function.BiConsumer;
 
-    public SimpleWsApiBuilder(final int version) {
-        super(version);
+/**
+ * The receivers the tests hand to an api. {@link Receiver} takes what it overrides and refuses the rest, so
+ * one written for a test is a class rather than a lambda - these keep that out of the tests themselves.
+ */
+final class Receivers {
+
+    /**
+     * @return a receiver which sends every text message back and takes no binary.
+     */
+    static Receiver echo() {
+        return ofText((session, message) -> session.sendText(message));
     }
 
-    public WsApi build() {
-        return new WsApi(
-                observers,
-                receiver,
-                websocketPath(),
-                pingIntervalMs,
-                readTimeoutMs,
-                skipOnBackPressure
-        );
+    /**
+     * @param handler what every text message goes to.
+     * @return a receiver which takes text and refuses binary with a 1003.
+     */
+    static Receiver ofText(final BiConsumer<ClientSession, CharSequence> handler) {
+        return new Receiver() {
+            @Override
+            public void text(final ClientSession session,
+                             final CharSequence message,
+                             final boolean last) {
+                handler.accept(session, message);
+            }
+        };
+    }
+
+    private Receivers() {
     }
 }

@@ -28,8 +28,8 @@ import io.github.green4j.newa.example.ws.StdOutWsApiObserver;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
-import io.github.green4j.newa.websocket.SimpleWsApiBuilder;
 import io.github.green4j.newa.websocket.WsApi;
+import io.github.green4j.newa.websocket.WsApiBuilder;
 import io.github.green4j.newa.websocket.WsServer;
 
 import java.util.concurrent.TimeUnit;
@@ -44,7 +44,7 @@ public class BroadcastWsServer {
     public static void main(final String[] args) throws Exception {
         final Life life = new Life();
 
-        final SimpleWsApiBuilder apiBuilder = new SimpleWsApiBuilder(
+        final WsApiBuilder apiBuilder = new WsApiBuilder(
                 API_VERSION
         )
                 .withPathPrefix("ws")
@@ -67,7 +67,7 @@ public class BroadcastWsServer {
 
             // on the loops the sessions already live on, so a broadcast reaches them without a hand-off
             server.workerGroup().scheduleWithFixedDelay(
-                    () -> api.broadcast("Hello from WS server"),
+                    () -> api.broadcastText("Hello from WS server"),
                     5_000,
                     5_000,
                     TimeUnit.MILLISECONDS

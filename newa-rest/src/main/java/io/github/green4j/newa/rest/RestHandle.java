@@ -33,6 +33,15 @@ import io.netty.util.AsciiString;
 import java.nio.ByteBuffer;
 
 public interface RestHandle {
+    /**
+     * One request is answered once. Whichever method here sends the response ends this result, and every
+     * call which follows - a second {@code ok}, an {@code error} after one, an {@code append} after
+     * {@code done} - is dropped rather than written: a second response would be read by the peer as the
+     * answer to its next request. What was handed to the dropped call is released, and the mistake is
+     * reported to the
+     * {@link io.github.green4j.newa.lang.ChannelErrorHandler} of the server, which is where a handler
+     * calling this twice - most easily from two callbacks of an async response - is to be found.
+     */
     interface Result {
         interface Content {
             Content append(byte[] array, int offset, int length);

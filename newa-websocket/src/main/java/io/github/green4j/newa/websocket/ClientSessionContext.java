@@ -36,7 +36,8 @@ public class ClientSessionContext {
      * for a caller which is assembling a session by hand and wants no timers it did not ask for.
      *
      * @param writingResult told how every write of the session went.
-     * @param receiver told about every text frame of the session, null to receive nothing.
+     * @param receiver told about every data frame of the session, null to receive nothing -
+     *                 an inbound frame is answered with a 1003 then.
      * @param channel of the session.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never.
      */
@@ -55,7 +56,8 @@ public class ClientSessionContext {
 
     /**
      * @param writingResult told how every write of the session went.
-     * @param receiver told about every text frame of the session, null to receive nothing.
+     * @param receiver told about every data frame of the session, null to receive nothing -
+     *                 an inbound frame is answered with a 1003 then.
      * @param channel of the session.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never.
      * @param readTimeoutMs how long the peer may say nothing at all before the session is closed,

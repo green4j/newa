@@ -79,7 +79,7 @@ class FrameOwnershipTest {
 
     @Test
     void shouldReleaseAFrameWhichWasSkipped() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withSkipOnBackPressure()
                 .build();
 
@@ -89,7 +89,7 @@ class FrameOwnershipTest {
         setWritable(channel, false);
 
         final ByteBuf frame = text("abc");
-        session.send(frame);
+        session.sendText(frame);
 
         Assertions.assertEquals(0, frame.refCnt(), "the skipped frame is released, not leaked");
         Assertions.assertFalse(session.isClosed(), "skipping keeps the session");
@@ -99,13 +99,13 @@ class FrameOwnershipTest {
 
     @Test
     void shouldReleaseAFrameWrittenToAChannelWhichIsGone() {
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         final ClientSession session = newSession(api);
         channels.get(0).close();
 
         final ByteBuf frame = text("abc");
-        session.send(frame);
+        session.sendText(frame);
 
         Assertions.assertEquals(0, frame.refCnt(), "a frame which could not be written is released");
         Assertions.assertTrue(session.isClosed());
@@ -113,14 +113,14 @@ class FrameOwnershipTest {
 
     @Test
     void shouldGiveEveryBroadcastSessionAFrameOfItsOwn() {
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         newSession(api);
         newSession(api);
         newSession(api);
 
         final ByteBuf frame = text("hello");
-        api.broadcastAndRelease(frame);
+        api.broadcastTextAndRelease(frame);
 
         Assertions.assertEquals(3, frame.refCnt(),
                 "one retained duplicate per session, and the buffer itself already released");
@@ -137,24 +137,24 @@ class FrameOwnershipTest {
 
     @Test
     void shouldReleaseABroadcastNoSessionIsThereToTake() {
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         final ByteBuf frame = text("hello");
-        api.broadcastAndRelease(frame);
+        api.broadcastTextAndRelease(frame);
 
         Assertions.assertEquals(0, frame.refCnt());
     }
 
     @Test
     void shouldLeaveABroadcastFrameToTheCallerWhenItIsNotHandedOver() {
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         newSession(api);
         newSession(api);
 
         final ByteBuf frame = text("hello");
-        api.broadcast(frame);
-        api.broadcast(frame); // the same buffer again, which handing it over would have made impossible
+        api.broadcastText(frame);
+        api.broadcastText(frame); // the same buffer again, which handing it over would have made impossible
 
         for (int i = 0; i < channels.size(); i++) {
             for (int j = 0; j < 2; j++) {
@@ -171,7 +171,7 @@ class FrameOwnershipTest {
 
     @Test
     void shouldPingWithAPingFrame() {
-        final WsApi api = new SimpleWsApiBuilder(1).build();
+        final WsApi api = new WsApiBuilder(1).build();
 
         final ClientSession session = newSession(api);
         session.ping("are you there");

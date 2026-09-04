@@ -82,7 +82,7 @@ class KeepAliveIntegrationTest {
     }
 
     private void start(final int pingIntervalMs) throws InterruptedException {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix("ws")
                 .withPingIntervalMs(pingIntervalMs)
                 .withReadTimeoutMs(READ_TIMEOUT_MS)

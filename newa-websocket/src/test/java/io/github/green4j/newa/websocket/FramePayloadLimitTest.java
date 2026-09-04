@@ -1,0 +1,165 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+
+package io.github.green4j.newa.websocket;
+
+import io.github.green4j.newa.lang.ChannelErrorHandler;
+import io.github.green4j.newa.server.NettyServer;
+import io.netty.channel.Channel;
+import io.netty.handler.codec.http.websocketx.CorruptedWebSocketFrameException;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+class FramePayloadLimitTest {
+    private static final String HOST = "127.0.0.1";
+    private static final String PATH = "/ws/v1";
+    private static final int LIMIT = 1024;
+
+    private static final int TEXT = 0x1;
+    private static final int CLOSE = 0x8;
+
+    private static final class RecordedErrors implements ChannelErrorHandler {
+        private final List<Throwable> errors = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void onError(final Channel channel,
+                            final Throwable cause) {
+            errors.add(cause);
+        }
+    }
+
+    private NettyServer server;
+
+    @AfterEach
+    public void tearDown() {
+        if (server != null) {
+            server.close();
+            server = null;
+        }
+    }
+
+    private static WsApi echoApi() {
+        return new WsApiBuilder(1)
+                .withPathPrefix("ws")
+                .withReceiver(Receivers.echo())
+                .build();
+    }
+
+    private static byte[] payloadOf(final int length) {
+        final byte[] payload = new byte[length];
+        Arrays.fill(payload, (byte) 'x');
+        return payload;
+    }
+
+    @Test
+    public void aFrameWithinTheLimitIsAnswered() throws Exception {
+        server = WsServer.of(echoApi())
+                .withMaxFramePayloadLength(LIMIT)
+                .start(0);
+
+        try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
+            client.handshake(PATH);
+            client.sendText(payloadOf(LIMIT));
+
+            Assertions.assertEquals(TEXT, client.readFrame()[0]);
+        }
+    }
+
+    @Test
+    public void aFramePastItEndsTheConnection() throws Exception {
+        final RecordedErrors errors = new RecordedErrors();
+
+        server = WsServer.of(echoApi())
+                .withMaxFramePayloadLength(LIMIT)
+                .withChannelErrorHandler(errors)
+                .start(0);
+
+        try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
+            client.handshake(PATH);
+            client.sendText(payloadOf(LIMIT + 1));
+
+            final int[] frame = client.readFrame();
+
+            Assertions.assertEquals(CLOSE, frame[0], "the frame was not a close");
+            Assertions.assertEquals(
+                    WebSocketCloseStatus.MESSAGE_TOO_BIG.code(), frame[1], "the wrong reason was given");
+            Assertions.assertTrue(client.awaitClose(), "the connection was left open");
+        }
+
+        Assertions.assertEquals(1, errors.errors.size(), "reported " + errors.errors);
+        Assertions.assertInstanceOf(CorruptedWebSocketFrameException.class, errors.errors.get(0));
+    }
+
+    @Test
+    public void thePayloadIsNotBoundedByWhatTheHandshakeMayBe() throws Exception {
+        // withMaxContentLength is the aggregator's, and the aggregator sees exactly one request per
+        // connection: the handshake. Nothing after it goes through one
+        server = WsServer.of(echoApi())
+                .withMaxContentLength(512)
+                .withMaxFramePayloadLength(LIMIT)
+                .start(0);
+
+        try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
+            client.handshake(PATH);
+            client.sendText(payloadOf(LIMIT));
+
+            Assertions.assertEquals(TEXT, client.readFrame()[0]);
+        }
+    }
+
+    @Test
+    public void theDefaultIsSixtyFourKilobytes() throws Exception {
+        server = WsServer.start(0, echoApi());
+
+        Assertions.assertEquals(65536, WsServer.DEFAULT_MAX_FRAME_PAYLOAD_LENGTH);
+
+        try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
+            client.handshake(PATH);
+            client.sendText(payloadOf(WsServer.DEFAULT_MAX_FRAME_PAYLOAD_LENGTH + 1));
+
+            Assertions.assertEquals(CLOSE, client.readFrame()[0]);
+        }
+    }
+
+    @Test
+    public void aLargerOneIsServedWhenItIsAskedFor() throws Exception {
+        server = WsServer.of(echoApi())
+                .withMaxFramePayloadLength(256 * 1024)
+                .start(0);
+
+        try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
+            client.handshake(PATH);
+            client.sendText(payloadOf(128 * 1024));
+
+            Assertions.assertEquals(TEXT, client.readFrame()[0]);
+        }
+    }
+}

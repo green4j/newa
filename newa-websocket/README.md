@@ -3,8 +3,10 @@
 WebSocket sessions, broadcasting and subscription channels built on Netty.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> [WebSocketServerCompressionHandler]
-           --> WsApiHandler --> [your handlers] --> HandshakeOnlyHandler
+Client --> HttpServerCodec --> HttpObjectAggregator --> RequestDeadlineHandler
+           --> ResponseDeadlineHandler --> DecoderFailureHandler --> OriginCheckHandler
+           --> [WebSocketServerCompressionHandler] --> WsApiHandler --> [your handlers]
+           --> HandshakeOnlyHandler
 ```
 
 `WsServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is one
@@ -15,9 +17,9 @@ server](#starting-a-server).
 ## Getting started
 
 ```java
-WsApi api = new SimpleWsApiBuilder(1)          // version 1, so the handshake path is /ws/v1
+WsApi api = new WsApiBuilder(1)          // version 1, so the handshake path is /ws/v1
         .withPathPrefix("ws")
-        .withReceiver((session, message) -> session.send(message))   // what handles inbound frames
+        .withReceiver(receiver)                // what handles inbound frames, see below
         .withPingIntervalMs(30_000)            // the keep-alive pair, and these are the defaults:
         .withReadTimeoutMs(90_000)             // ping an idle session, close one whose peer went silent
         .withObservers(AccessLog::new)         // optional, see Observing
@@ -26,16 +28,31 @@ WsApi api = new SimpleWsApiBuilder(1)          // version 1, so the handshake pa
 new Life().run(() -> WsServer.start(9010, api));   // serving ws://127.0.0.1:9010/ws/v1
 ```
 
+```java
+Receiver receiver = new Receiver() {
+    @Override
+    public void text(ClientSession session, CharSequence message, boolean last) {
+        session.sendText(message);
+    }
+    // binary() is not overridden here, so a binary frame is answered with a 1003 and the session ends
+};
+```
+
 Clients connect to `ws://host:port` plus `api.websocketPath()` - here `ws://127.0.0.1:9010/ws/v1`. The
 handshake path is the api's, and nothing repeats it. Leave `withReceiver` out for a connection which only
-ever listens.
+ever listens - one which answers anything a client does send with a `1003`, since there is nothing there to
+take it.
+
+A `Receiver` has a method per type of frame and neither is a no-op: it takes what it overrides and refuses
+the rest with a `1003`, so a client which sends a type this end does not serve is told so rather than left
+waiting for an answer to a frame which went nowhere. That is why it is a class and not a lambda.
 
 The `Receiver` belongs to the `WsApi` for the same reason a rest handle belongs to a `RestApi`: it is what
 handles what comes in. One consequence is worth knowing - the receiver is built before the api, so a receiver
-which wants to call `api.broadcast(...)` cannot simply capture it. Subclass `WsApi` and implement `Receiver`
-on the subclass when a receiver needs the api it belongs to.
+which wants to call `api.broadcastText(...)` cannot simply capture it. Subclass `WsApi` and implement
+`Receiver` on the subclass when a receiver needs the api it belongs to.
 
-`SimpleWsApiBuilder` builds an api of plain sessions; `SubscriptionWsApiBuilder` builds one which also keeps
+`WsApiBuilder` builds an api of plain sessions; `SubscriptionWsApiBuilder` builds one which also keeps
 what every session subscribed to - see below. Everything else on the builder is shared by both.
 
 ## Starting a server
@@ -47,15 +64,27 @@ is left is the pipeline and the bootstrap:
 ```java
 NettyServer server = WsServer.of(api)
         .withCompression()                       // permessage-deflate, off by default
+        .withOriginPolicy(OriginPolicy.allowing("https://app.example.com"))  // same-origin by default
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
-        .withMaxContentLength(65536)             // the handshake request, not what a session sends
+        .withMaxContentLength(65536)             // the handshake request body, not what a session sends
+        .withMaxInitialLineLength(4096)          // its request line: the method, the whole uri, the version
+        .withMaxHeaderSize(8192)                 // its header block - where a browser's cookies travel
+        .withMaxFramePayloadLength(65536)        // and this is what a session sends
+        .withRequestDeadlineMs(30_000)           // on by default, see The window before the handshake
+        .withResponseDeadlineMs(30_000)          // on by default, the peer which stops taking frames
         .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
         .start(new NettyServerBuilder()
                 .port(9010)
                 .host("127.0.0.1")               // every interface by default
                 .workerThreads(8)                // a worker per core by default
+                .maxConnections(4096)            // unlimited by default
                 .writeBufferWaterMark(low, high));
 ```
+
+`maxConnections` bounds the file descriptors this server holds, which a fan-out server is the likeliest of
+these to run out of: a session costs one for as long as it is subscribed. It is off unless a number is given -
+that number belongs to the deployment - and a connection above it is closed as it arrives, counted by
+`ConnectionLimitHandler.refused()` and told nothing.
 
 **One port for both.** `withHandler` puts a handler *behind* `WsApiHandler`, which is where a request that is
 not the handshake ends up - the handshake handler passes on a uri it does not recognise. So a `RestApiHandler`
@@ -70,7 +99,7 @@ already live on:
 
 ```java
 server.workerGroup().scheduleWithFixedDelay(
-        () -> api.broadcast("tick"), 5, 5, TimeUnit.SECONDS);
+        () -> api.broadcastText("tick"), 5, 5, TimeUnit.SECONDS);
 ```
 
 What runs it is `Life`: `new Life().run(() -> ...)` opens the server, parks this thread until the end is
@@ -112,15 +141,42 @@ A `ClientSession` appears when the handshake completes and lives until the chann
 everything else is expressed in terms of:
 
 ```java
-session.send("text");                         // encoded UTF-8, one frame
-session.send(text, StandardCharsets.UTF_8);
-session.send(byteBuf);                        // the session takes the buffer over
+session.sendText("text");                     // encoded UTF-8, one frame
+session.sendText(text, StandardCharsets.UTF_8);
+session.sendText(byteBuf);                    // the session takes the buffer over
+session.sendBinary(byteBuf);                  // the same, as a binary frame
 session.ping(payload);
 session.close();                              // idempotent
+session.closeWith(POLICY_VIOLATION);          // and the peer is told which close this is
 ```
 
-`Receiver.receive(session, text)` is called for text frames only, on that session's event loop; ping, pong
-and close are answered by Netty underneath. The `CharSequence` is valid for the call - copy what outlives it.
+Every call which sends a buffer says which frame it makes of it, `Text` or `Binary`, and every one of them
+takes the buffer over: it is released whatever happens to it - written, skipped because the session cannot
+keep up, or dropped because the channel is gone. `send(CharSequence)` is the same as `sendText` and is there
+because the `Sender` interface asks for that name.
+
+`close()` closes the connection and says nothing, which a client reads as a `1006` - the status it invents
+for a connection which went - and a `1006` is indistinguishable from the network dropping. That difference is
+what a client's reconnect is built on: `1001` and it comes back at once, `1008` and it does not come back at
+all, `1006` and it backs off. So say which one it is whenever this end knows - the statuses are Netty's
+`WebSocketCloseStatus`: `NORMAL_CLOSURE` for a session which is simply over, `ENDPOINT_UNAVAILABLE` for a
+server going down, `POLICY_VIOLATION` for a client which broke your protocol. The status goes out over a
+channel which is open and writable - a frame put into a buffer nobody is draining would hold the session open
+instead of ending it, so a peer which stopped reading gets the bare close it was going to get anyway - and
+the session ends once the frame has left, without waiting for the close the peer answers with.
+
+`Receiver.text(session, message, last)` and `Receiver.binary(session, payload, last)` are called on that
+session's event loop, one call per frame; ping, pong and close are answered by Netty underneath, and a frame
+of a type the receiver did not override is answered with a `1003` and the session ends. What is handed over
+is valid for the call and no longer - the decoder releases the frame the moment the call returns, so a
+`ByteBuf` which has to outlive it needs a `retain()` and a `CharSequence` needs a copy.
+
+`last` is what a message which arrives in pieces looks like: `false` says it goes on in the frames which
+follow, `true` closes it. Nothing here holds the pieces - the frame limit of the pipeline bounds one frame,
+not what several of them add up to - so a receiver which assembles them owes itself a limit of its own, and
+one which does not want them may end the session as soon as it is handed a piece which is not the last. The
+one thing which is put back together is a character cut in two by a frame boundary: a text piece always
+arrives as whole characters.
 
 Everything that touches a session must end up on its event loop. `session.executor()` hops back onto it and
 `session.scheduler()` repeats work on it; never block either. `channel()`, `isClosed()`, `createTimeMs()`,
@@ -134,7 +190,7 @@ frame the peer sends, a pong included, not by text frames alone.
 The two keep-alive settings answer one question: is anybody still on the other end? `withPingIntervalMs`
 creates the traffic - a fixed-delay task per session pings it when it has been idle and its channel is
 writable, since a channel with data still pending needs no keep-alive - and `withReadTimeoutMs` is what
-closes: nothing from the peer for that long and the session goes, through the same `close()` and the same
+closes: nothing from the peer for that long and the session goes with a `1001`, through the same
 `onSessionClosed` as any other ending. Neither works alone. Without the timeout a dead peer is noticed only
 once the send buffer fills and the channel stops being writable, which is late and depends on how much you
 send rather than on time; without the ping a perfectly healthy subscriber which does nothing but listen is
@@ -145,17 +201,41 @@ heartbeat.
 Upgrading from a version before this pair existed: sessions now carry a timer and a peer silent for 90 s is
 disconnected. `withPingIntervalMs(0).withReadTimeoutMs(0)` is the old behaviour.
 
+## Upgrading to the frame types
+
+Binary frames used to reach nothing at all - they were discarded in silence at the end of the pipeline - and
+every call which sent a buffer made a text frame of it without saying so. Both are named now, which is a
+break rather than an addition:
+
+| was | is |
+|---|---|
+| `Receiver.receive(session, message)`, a lambda | `Receiver.text(session, message, last)`, a class - `binary(session, payload, last)` is the other half |
+| `session.send(ByteBuf)` / `send(CharSequence, Charset)` | `session.sendText(...)`, and `session.sendBinary(ByteBuf)` |
+| `api.broadcast(...)` / `broadcastAndRelease(ByteBuf)` | `broadcastText(...)` / `broadcastTextAndRelease(ByteBuf)`, plus the `Binary` twins |
+| `entity.publish(ByteBuf)` / `publishAndRelease(ByteBuf)` | `publishText(...)` / `publishTextAndRelease(...)`, plus the `Binary` twins |
+| `entity.forEachSession(ByteBuf)` / `forEachSessionAndRelease(ByteBuf)` | `forEachSessionText(...)` / `forEachSessionTextAndRelease(...)`, plus the `Binary` twins |
+
+`send(CharSequence)`, `publish(Consumer)` and `forEachSession(Consumer)` keep their names: the first is the
+`Sender` interface's, and the other two never knew the type of the frame in the first place.
+
+Two behaviours changed with them. A frame of a type the receiver did not override, and any frame at all when
+there is no receiver, is answered with a `1003` and the session ends - where before it was dropped in
+silence. And a message which arrives in several frames is now handed over piece by piece, with `last` saying
+which piece ends it; before, the first fragment of a text message was handed over as if it were the whole of
+it and the rest was lost.
+
 ## Broadcasting
 
 ```java
-api.broadcast("hello");        // every open session
+api.broadcastText("hello");        // every open session
 ```
 
 A broadcast walks the sessions without a lock and without making anything wait, and opening or closing a
-session neither copies that list nor blocks a broadcast. `broadcast(CharSequence)` encodes the text once per
-session; the `ByteBuf` forms encode nothing at all - they give every session a retained duplicate of the
-buffer. `broadcastAndRelease(ByteBuf)` takes the buffer over and releases it once the fan-out is done;
-`broadcast(ByteBuf)` leaves it to the caller, so the same buffer can be sent again or kept.
+session neither copies that list nor blocks a broadcast. `broadcastText(CharSequence)` encodes the text once
+per session; the `ByteBuf` forms encode nothing at all - they give every session a retained duplicate of the
+buffer. `broadcastTextAndRelease(ByteBuf)` takes the buffer over and releases it once the fan-out is done;
+`broadcastText(ByteBuf)` leaves it to the caller, so the same buffer can be sent again or kept.
+`broadcastBinary(ByteBuf)` and `broadcastBinaryAndRelease(ByteBuf)` are the same two on the binary side.
 
 A fan-out is walked to the end. One session which throws - an observer of yours, an allocation, a channel
 already torn down - costs that session and nothing else: it is reported through `onWriteFailed` and closed,
@@ -196,14 +276,14 @@ final class Prices extends Channel<Prices.Price> {
 
         void publishValue(String value) {
             last = value;                                                  // the state first
-            publish(session -> session.send(entityId() + '=' + value));    // then the fan-out
+            publish(session -> session.sendText(entityId() + '=' + value));  // then the fan-out
         }
 
         @Override
         protected void onClientSessionSubscribed(ClientSession session, long publicationSequence) {
             String snapshot = last;
             if (snapshot != null) {
-                session.send(entityId() + '=' + snapshot);   // goes out before any concurrent update
+                session.sendText(entityId() + '=' + snapshot);  // goes out before any concurrent update
             }
         }
     }
@@ -246,8 +326,8 @@ idempotent. `publicationSequence` is handed to the snapshot for a subscriber whi
 
 Two rules are yours: mutate the state of the entity **before** calling `publish`, and serialize the
 publications of one entity. Two concurrent publishers of the same entity have no order between them and
-nothing here can invent one. `forEachSession` walks the subscribers without numbering anything - for
-inspection and administrative sends, not for state.
+nothing here can invent one. `forEachSession` and its `forEachSessionText` / `forEachSessionBinary` forms
+walk the subscribers without numbering anything - for inspection and administrative sends, not for state.
 
 ## Slow consumers
 
@@ -277,6 +357,20 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
         new WriteBufferWaterMark(32 * 1024, 64 * 1024));
 ```
 
+**`newa-rest` answers this differently on purpose**, which is worth knowing if you use both. A response there
+is paced rather than dropped - its cursor is simply not stepped while the channel is over the watermark - and
+it is given thirty seconds without progress before it is abandoned. Here nothing is paced: the question is
+settled on the first frame which cannot be written, whichever way the table above is set. Neither module is
+the more careful one. A fan-out frame is perishable and the next one
+is already better, so waiting buys nothing and holding it costs memory per subscriber; a response there has no
+successor, and half of one is not a smaller one. Dropping is offered here and not there for the same reason:
+it is only ever safe where something can rebuild what was dropped, which is what the snapshot does.
+
+One thing is shared, and it is the same pair of handlers: `withRequestDeadlineMs` bounds what has begun
+arriving - the handshake, and every frame after it - and `withResponseDeadlineMs` bounds what has been written
+and is not being taken. Neither is armed while nothing is happening, so a session which is quiet in both
+directions is watched by its own ping and `readTimeoutMs` and by nothing else.
+
 ## Errors
 
 A websocket has no response left to render once the handshake is done, so there is no error handler here and
@@ -291,15 +385,19 @@ and each failure is reported once, by the stage which knows what it was:
 | the channel itself failed | `ChannelErrorHandler` | the connection goes |
 | an HTTP request nothing took - not the handshake path, nothing mounted behind | `ChannelErrorHandler`, a `NotAHandshakeException` carrying the method and the uri | the connection goes, unanswered |
 | the client sent something you do not serve | wherever your `Receiver` reports it | whatever your protocol says |
+| you ended the session yourself | nowhere - it is not a failure | `closeWith(status)` says which close it is, `close()` says nothing |
 
 ```java
-final Receiver receiver = (session, message) -> {
-    if (!command.isKnown(message)) {
-        session.send("ERR: unknown command");   // your protocol, your error, and the session lives on
-        return;
+final Receiver receiver = new Receiver() {
+    @Override
+    public void text(ClientSession session, CharSequence message, boolean last) {
+        if (!command.isKnown(message)) {
+            session.sendText("ERR: unknown command");  // your protocol, your error, session lives on
+            return;
+        }
+        handle(session, message);              // if this throws, the session is closed with a 1011
     }
-    handle(session, message);                   // if this throws, the session is closed with a 1011
-};
+};                                             // binary is not taken here, so a binary frame gets a 1003
 ```
 
 A `Receiver` which throws ends its session on purpose: it has said nothing about whether the state behind it
@@ -340,7 +438,7 @@ from the peer, so whatever writes them to a log is writing what somebody else ch
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per session, made by
-a factory given to `WsApiBuilder.withObservers(...)` - it belongs to the api, like the receiver, so `WsServer`
+a factory given to `AbstractWsApiBuilder.withObservers(...)` - it belongs to the api, like the receiver, so `WsServer`
 has nothing to say about it:
 
 ```java
@@ -366,7 +464,7 @@ public class AccessLog implements WsApiObserver {
     }
 }
 
-new SimpleWsApiBuilder(1).withObservers(AccessLog::new).build();
+new WsApiBuilder(1).withObservers(AccessLog::new).build();
 ```
 
 `onSessionClosed` fires **exactly once per session**, however it ended, so counting sessions never means
@@ -474,22 +572,23 @@ put in it. Under `WsServer` that number and the thread counts are set on the `Ne
 `start(...)`: `writeBufferWaterMark(low, high)` and `workerThreads(n)`. There is no queue of ours behind it: a frame the channel cannot take is never queued, it is
 released, and the session is closed or marked lagging there and then.
 
-**Encode a fan-out once.** `send(CharSequence)` encodes UTF-8 per session, which for a publication reaching
-thousands of subscribers is most of the work. Render the frame once and give it to
-`publishAndRelease(ByteBuf)`, which hands every session a retained duplicate of it and releases the buffer
-when the fan-out is done - a session releases the frame it was given whatever becomes of it, written or
-skipped:
+**Encode a fan-out once.** `sendText(CharSequence)` encodes UTF-8 per session, which for a publication
+reaching thousands of subscribers is most of the work. Render the frame once and give it to
+`publishTextAndRelease(ByteBuf)`, which hands every session a retained duplicate of it and releases the
+buffer when the fan-out is done - a session releases the frame it was given whatever becomes of it, written
+or skipped:
 
 ```java
 ByteBuf encoded = allocator.buffer();
 // ... render the update into it ...
-entity.publishAndRelease(encoded);   // rendered once, a duplicate per session, released here
+entity.publishTextAndRelease(encoded);   // rendered once, a duplicate per session, released here
 ```
 
-It is `broadcastAndRelease(ByteBuf)` for one entity instead of every open session. `publish(ByteBuf)` is the
-same fan-out without taking the buffer over - for a frame the publisher keeps, pools or sends to more than
-one entity. Each has a `forEachSession` twin for an administrative frame which is not a change of the state,
-and `publish(session -> ...)` stays for the case where a session needs a frame of its own.
+It is `broadcastTextAndRelease(ByteBuf)` for one entity instead of every open session. `publishText(ByteBuf)`
+is the same fan-out without taking the buffer over - for a frame the publisher keeps, pools or sends to more
+than one entity. `publishBinary` and `publishBinaryAndRelease` are the binary twins of both. Each has a
+`forEachSessionText` / `forEachSessionBinary` twin for an administrative frame which is not a change of the
+state, and `publish(session -> ...)` stays for the case where a session needs a frame of its own.
 
 **Keep the snapshot cheap.** `onClientSessionSubscribed` runs inline on the event loop of the subscribing
 session; a heavy snapshot delays every other session sharing that loop. Build it from state that is already in
@@ -523,9 +622,78 @@ counts.
 every frame - the price of a fan-out grows with the number of subscribers, not with the number of distinct
 messages. Bandwidth against CPU and memory: measure before enabling it for a broadcast-heavy server.
 
-**Frames come in at 64 KB.** That is Netty's default payload limit for an inbound frame; the
-`HttpObjectAggregator` in front only bounds the handshake request. Neither is what an outbound frame is
-measured against.
+**Frames come in at 64 KB** unless `withMaxFramePayloadLength` says otherwise. The `HttpObjectAggregator`
+in front bounds the *body* of the handshake request and nothing after it, so `withMaxContentLength` is not
+this and this is not it. A frame past the limit is answered with close status 1009 and the connection goes. Neither
+number is what an outbound frame is measured against.
+
+**The handshake's headers are the codec's**, 4096 bytes of request line and 8192 of header block by default -
+`withMaxInitialLineLength` and `withMaxHeaderSize`. That block is where a browser puts the cookies of this
+origin, and it is the only HTTP request a session ever makes, so it is the number a handshake reaches first.
+Past either, the answer is `414` or `431` and the connection closes - the decoder has stopped reading it
+anyway.
+
+**Extensions follow `withCompression()`.** With it, `permessage-deflate` is negotiated and the decoder
+accepts the reserved bits it sets; without it, nothing in the pipeline could inflate a frame and the
+reserved bits are a protocol violation. This is not a preference and there is no knob for it: the two have
+to agree, and `WsServer` makes them. A pipeline assembled by hand says it itself, in the four-argument
+`WsApiHandler` constructor - the two-argument one means "no compression handler here", which is what a
+pipeline that does not add one means.
+
+**The window before the handshake is guarded, and by default.** A session pings what has gone quiet and
+closes what has said nothing for `readTimeoutMs` - but a session begins at the handshake. Before it there is
+no ping interval, no read timeout and nothing at all on a timer, and Netty's own handshake timeout does not
+help: that clock starts when the handshake *request* arrives, so a connection which opens and sends nothing is
+not covered by it. `WsServer.withRequestDeadlineMs` closes such a connection after thirty seconds;
+`withRequestDeadlineMs(0)` turns it off.
+
+Nothing is taken out of the pipeline afterwards, and nothing has to be sized around the ping interval. The
+deadline judges what has *begun arriving* and has not finished - before the handshake that is the handshake,
+after it a half-arrived frame - so a session which is merely quiet is not being read from at all and is on no
+clock. A session deliberately run without pings, `withPingIntervalMs(0)`, which the measuring instruments do,
+is not touched by it either.
+
+The other half, `withResponseDeadlineMs`, is the peer which stops *taking* frames. Nothing is queued for it -
+a frame the channel cannot take is skipped or fails the session, see [Slow consumers](#slow-consumers) - so what
+this bounds is the connection itself, which the session's `readTimeoutMs` would otherwise be the only thing to
+reach. Both handlers are `newa-common`'s and public: a pipeline assembled by hand adds them itself, behind the
+aggregator.
+
+**The `Origin` of a handshake is read, and by default only this server's own is let in.** The same-origin
+policy does not cover a websocket handshake: a page on any site may open one here, and the browser sends the
+cookies of *this* origin with it - what a `fetch` would have been refused, a `new WebSocket(...)` is not. All
+the browser does is say who opened it, in the `Origin` header, so a server which authenticates by cookie and
+reads nothing is one anybody's page can read through. That is why `WsServer` checks with
+`OriginPolicy.sameOrigin()` until it is given something else, and why opening it up is a line somebody has to
+write:
+
+```java
+WsServer.of(api)
+        .withOriginPolicy(OriginPolicy.allowing("https://app.example.com"))  // the page is served elsewhere
+        .start(9010);
+
+WsServer.of(api)
+        .withOriginPolicy(OriginPolicy.any())        // a gateway in front has already decided this
+        .start(9010);
+```
+
+Same means the `Origin` names the host the request was addressed to - its `Host` header, compared without
+regard to case and with the port of the scheme filled in where one side left it out. The scheme itself is
+**not** compared: behind a TLS terminator this server sees plain HTTP and does not know its own, so the
+`https` of the page which opened the session would never match. What the check closes is another origin
+using the browser's credentials; the channel is TLS's to defend.
+
+`sameOrigin()` accepts a request carrying **no** `Origin` at all, and so does `allowing(...)` - a browser
+always sends one, so its absence says the caller is not a browser and is not what this defends against, and
+refusing it would break every service, load generator and test while defending nothing. `strictly(...)` for
+a server only ever reached by a browser. `allowing` and `strictly` *replace* the default rather than add to
+it; `sameOrigin().or(allowing(...))` keeps both. A refusal is answered `403`, the connection is closed, and a
+`ForbiddenOriginException` goes to the `ChannelErrorHandler`. A pipeline assembled by hand gets none of this
+until it adds an `OriginCheckHandler` itself.
+
+This is not CORS and does not become it - there is no preflight on a handshake and no `Access-Control-`
+header on its response, so the answer is yes or no. The rest api answers the browser protocol proper; see
+`RestServer.withCors` in `newa-rest`.
 
 **Size the container for direct memory, not just the heap.** Outbound frames live off-heap, where `-Xmx` does
 not bound them and the cgroup limit does. The limit has to cover heap plus direct memory plus metaspace, code
@@ -549,8 +717,9 @@ counter, or return `null` from the factory for the sessions you do not need to w
 
 In `newa-example`, package `io.github.green4j.newa.example.ws`:
 
-- **`echo.EchoWsServer`** - the smallest thing that serves a session: a `Receiver` echoing text back.
-- **`broadcast.BroadcastWsServer`** - `WsApi.broadcast` to every open session, on a timer scheduled on
+- **`echo.EchoWsServer`** - the smallest thing that serves a session: a `Receiver` echoing text back, and
+  binary back as binary.
+- **`broadcast.BroadcastWsServer`** - `WsApi.broadcastText` to every open session, on a timer scheduled on
   `NettyServer.workerGroup()`.
 - **`subscriptions.SubscriptionsWsServer`** - two channels of five entities, a client protocol of
   `[A|B]:[S|U]:[ID]` commands, publications on a timer and snapshots on subscribe, with

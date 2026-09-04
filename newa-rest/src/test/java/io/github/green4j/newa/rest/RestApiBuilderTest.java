@@ -63,8 +63,10 @@ class RestApiBuilderTest {
         b.getJson("/a", (context, output) ->
                 output.stringValue("a"));
         final Method[] methods = b.methods();
-        Assertions.assertEquals(5, methods.length);
+        Assertions.assertEquals(7, methods.length);
         Assertions.assertEquals("GET", methods[0].name());
+        Assertions.assertEquals("HEAD", methods[5].name());
+        Assertions.assertEquals("OPTIONS", methods[6].name());
     }
 
     @Test

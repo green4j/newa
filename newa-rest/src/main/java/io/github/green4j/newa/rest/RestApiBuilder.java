@@ -34,8 +34,10 @@ public final class RestApiBuilder implements RestApiParameters, RestEndpointer {
     private final Method post = new Method("POST");
     private final Method delete = new Method("DELETE");
     private final Method patch = new Method("PATCH");
+    private final Method head = new Method("HEAD");
+    private final Method options = new Method("OPTIONS");
 
-    private final Method[] methods = new Method[]{get, put, post, delete, patch};
+    private final Method[] methods = new Method[]{get, put, post, delete, patch, head, options};
 
     private final RestEndpointer root;
 
@@ -195,6 +197,60 @@ public final class RestApiBuilder implements RestApiParameters, RestEndpointer {
                         new TxtRestHandler(handle)
                 );
             }
+
+            @Override
+            public Endpoint head(final String pathExpression,
+                                 final RestHandle handle) {
+                return head.withRootEndpoint(
+                        pathExpression,
+                        handle
+                );
+            }
+
+            @Override
+            public Endpoint headJson(final String pathExpression,
+                                     final JsonRestHandle handle) {
+                return head(
+                        pathExpression,
+                        new JsonRestHandler(handle)
+                );
+            }
+
+            @Override
+            public Endpoint headTxt(final String pathExpression,
+                                    final TxtRestHandle handle) {
+                return head(
+                        pathExpression,
+                        new TxtRestHandler(handle)
+                );
+            }
+
+            @Override
+            public Endpoint options(final String pathExpression,
+                                    final RestHandle handle) {
+                return options.withRootEndpoint(
+                        pathExpression,
+                        handle
+                );
+            }
+
+            @Override
+            public Endpoint optionsJson(final String pathExpression,
+                                        final JsonRestHandle handle) {
+                return options(
+                        pathExpression,
+                        new JsonRestHandler(handle)
+                );
+            }
+
+            @Override
+            public Endpoint optionsTxt(final String pathExpression,
+                                       final TxtRestHandle handle) {
+                return options(
+                        pathExpression,
+                        new TxtRestHandler(handle)
+                );
+            }
         };
     }
 
@@ -343,6 +399,62 @@ public final class RestApiBuilder implements RestApiParameters, RestEndpointer {
     }
 
     @Override
+    public Endpoint head(final String pathExpression,
+                         final RestHandle handle) {
+        return head.withEndpoint(
+                rootPath,
+                pathExpression,
+                handle
+        );
+    }
+
+    @Override
+    public Endpoint headJson(final String pathExpression,
+                             final JsonRestHandle handle) {
+        return head(
+                pathExpression,
+                new JsonRestHandler(handle)
+        );
+    }
+
+    @Override
+    public Endpoint headTxt(final String pathExpression,
+                            final TxtRestHandle handle) {
+        return head(
+                pathExpression,
+                new TxtRestHandler(handle)
+        );
+    }
+
+    @Override
+    public Endpoint options(final String pathExpression,
+                            final RestHandle handle) {
+        return options.withEndpoint(
+                rootPath,
+                pathExpression,
+                handle
+        );
+    }
+
+    @Override
+    public Endpoint optionsJson(final String pathExpression,
+                                final JsonRestHandle handle) {
+        return options(
+                pathExpression,
+                new JsonRestHandler(handle)
+        );
+    }
+
+    @Override
+    public Endpoint optionsTxt(final String pathExpression,
+                               final TxtRestHandle handle) {
+        return options(
+                pathExpression,
+                new TxtRestHandler(handle)
+        );
+    }
+
+    @Override
     public String name() {
         return name;
     }
@@ -411,6 +523,14 @@ public final class RestApiBuilder implements RestApiParameters, RestEndpointer {
 
     Method patch() {
         return patch;
+    }
+
+    Method head() {
+        return head;
+    }
+
+    Method options() {
+        return options;
     }
 
     Endpoint helpEndpoint() {

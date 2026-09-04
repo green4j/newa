@@ -22,18 +22,24 @@
  * SOFTWARE.
  */
 
-package io.github.green4j.newa.example.rest.files;
+package io.github.green4j.newa.example.files;
 
+import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
+import io.github.green4j.newa.rest.JsonErrorHandler;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
-import io.github.green4j.newa.rest.RestServer;
+import io.github.green4j.newa.rest.RestApiHandler;
+import io.github.green4j.newa.rest.files.FileServer;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.rest.files.PathMask;
 import io.github.green4j.newa.rest.handles.JsonHelp;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.cors.CorsConfigBuilder;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -41,8 +47,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Files served straight from the page cache, with the REST API behind them answering everything the file
- * server does not own.
+ * Files served straight from the page cache, with a small REST API sharing the port and answering
+ * everything the files do not own.
  * <pre>
  * curl -sD- http://127.0.0.1:9012/files/                    # the index of the root
  * curl -sD- -o /tmp/big.bin http://127.0.0.1:9012/files/img/big.bin
@@ -52,18 +58,28 @@ import java.nio.file.Path;
  * curl -sD- -o /dev/null "http://127.0.0.1:9012/files/../../etc/passwd"           # 404
  * curl -sD- http://127.0.0.1:9012/download/report.bin       # the file named at configuration time
  * curl -sD- http://127.0.0.1:9012/v1/zero-copy              # whether sendfile(2) is carrying them
- * curl -sD- http://127.0.0.1:9012/v1/hello/world            # still routed by the REST API
+ * curl -sD- http://127.0.0.1:9012/v1/hello/world            # answered by the api behind the files
+ * curl -sD- http://127.0.0.1:9012/nothing/here              # 404, and the connection is still usable
  * </pre>
- * Those last two are the point of the example: the file handler takes what it owns and passes on what it
- * does not, and it answers what the pipeline it was put in allows.
+ * The composition is the point of it. {@link FileServer} is a file server and nothing else; a
+ * {@link RestApiHandler} handed to {@link FileServer#withHandler} goes behind the files, where a request no
+ * file owns arrives - the file handler passes on a path it does not own. That is the same shape
+ * {@code WsServer.withHandler(() -> new RestApiHandler(...))} has, and the mirror image of a REST server
+ * which also serves files, where the {@link FileServerHandler} is what goes into
+ * {@code RestServer.withHandler(...)}.
  * <p>
- * {@link RestServer#withCompression()} would not change that answer - it places the compressor behind the
- * file handler, where it compresses what the api returns and never sees a file. One in <i>front</i> of the
- * file handler costs {@code sendfile(2)}, and that is only reachable by assembling the pipeline yourself:
- * {@code rest.pipeline.PipelineRestServer} does exactly that, and reports {@code false} on the same
- * endpoint.
+ * {@link FileServer#withCompression()} is deliberately not used here: on this side it would go in front of
+ * the file handler - the only place from which a file can be compressed at all - and that costs
+ * {@code sendfile(2)}. {@code rest.pipeline.PipelineRestServer} makes exactly that placement by hand and
+ * reports {@code false} on the same endpoint.
+ * <p>
+ * {@link FileServer#withCors} is here, in front of the files, so a page on the allowed origin may read them
+ * as well as the api:
+ * <pre>
+ * curl -sD- -H 'Origin: https://app.example.com' http://127.0.0.1:9012/files/index.html
+ * </pre>
  */
-public class FileServer {
+public class SimpleFileServer {
     public static final String API_NAME = "File API";
     public static final String API_DESCRIPTION = "My File Server";
     public static final int API_VERSION = 1;
@@ -75,6 +91,8 @@ public class FileServer {
 
     private static final int BIG_FILE_SIZE = 4 * 1024 * 1024;
 
+    private static final String ALLOWED_ORIGIN = "https://app.example.com";
+
     public static void main(final String[] args) throws Exception {
         final Path root = createContent();
 
@@ -82,12 +100,29 @@ public class FileServer {
 
         final RestApi api = buildApi();
 
+        // one error handler and one channel error handler for both halves: the api handler is built here,
+        // so it is this code which hands it what the file server would otherwise have given it alone
+        final ChannelErrorHandler channelErrors = new StdErrChannelErrorHandler();
+        final JsonErrorHandler errors = new JsonErrorHandler();
+
         // the water marks are what a file pumped through NIO is paced by: past the high mark the channel
-        // reports itself unwritable and nothing more is read from the file until it drains. RestServer
+        // reports itself unwritable and nothing more is read from the file until it drains. FileServer
         // takes the defaults, which are the 32K/64K this example used to set by hand.
         new Life().run(() -> {
-            final NettyServer server = RestServer.of(api)
-                    .withFiles(files) // in front of the api, which then never sees a request for a file
+            final NettyServer server = FileServer.of(files)
+                    // behind the files, which is where a request no file owns arrives
+                    .withHandler(() -> new RestApiHandler(api, errors, channelErrors))
+                    .withChannelErrorHandler(channelErrors)
+                    .withErrorHandler(errors)
+                    // and this goes in front of the files, so a browser on another origin may read them
+                    // as well as the api. Nothing is added without it
+                    .withCors(CorsConfigBuilder.forOrigin(ALLOWED_ORIGIN)
+                            .allowedRequestMethods(HttpMethod.GET, HttpMethod.HEAD)
+                            .build())
+                    // nothing here reads a file - sendfile(2) carries them all, as /v1/zero-copy reports.
+                    // Put a compressor or TLS in front of them and it cannot, and then this is what keeps
+                    // the reading off the event loop, one chunk read ahead of the one being written:
+                    // .withReadExecutor(Executors.newFixedThreadPool(4))
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
             System.out.printf("Server started and listening on %s. Files are served from %s. Try:%n",
@@ -106,7 +141,9 @@ public class FileServer {
                     LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -s %s/v1/zero-copy           -> whether sendfile(2) is carrying them%n",
                     LOCAL_SERVER_ADDRESS);
-            System.out.printf("  curl -s %s/v1/hello/world         -> still routed by the REST api%n",
+            System.out.printf("  curl -s %s/v1/hello/world         -> the api behind the files%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -sD- %s/nothing/here         -> 404, connection still usable%n",
                     LOCAL_SERVER_ADDRESS);
 
             return server;

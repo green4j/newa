@@ -32,6 +32,7 @@ import io.github.green4j.newa.lang.Sender;
 import io.github.green4j.newa.lang.WallClock;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -67,6 +68,8 @@ public class ClientSession implements Sender, Closeable {
     private volatile long lastReadTimeMs = createTimeMs;
 
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean closeFrameSent = new AtomicBoolean(); // one status per session, whichever
+    // caller got here first
 
     private final AtomicReference<Object> userData = new AtomicReference<>();
 
@@ -111,9 +114,12 @@ public class ClientSession implements Sender, Closeable {
         final long now = WallClock.currentTimeMillis();
 
         if (readTimeoutMs > 0 && now - lastReadTimeMs > readTimeoutMs) {
-            CloseHelper.closeQuiet(this); // nothing has come from the peer for long enough to call it
-            return; // gone. Checked whatever the channel is doing: a peer which stopped reading is
-            // exactly the one whose channel stopped being writable, and it is no less gone for that
+            closeWith(WebSocketCloseStatus.ENDPOINT_UNAVAILABLE); // nothing has come from the peer for
+            return; // long enough to call it gone, and a peer which is merely silent - not gone, and
+            // still reading - is told so rather than left to infer it from a disconnect. Checked
+            // whatever the channel is doing: a peer which stopped reading is exactly the one whose
+            // channel stopped being writable, it is no less gone for that, and closeWith closes it
+            // where the status can not go out
         }
 
         if (pingIntervalMs > 0
@@ -183,18 +189,34 @@ public class ClientSession implements Sender, Closeable {
      *
      * @param frame to send.
      */
-    public void send(final ByteBuf frame) {
+    public void sendText(final ByteBuf frame) {
         writeAndFlush(new TextWebSocketFrame(frame));
     }
 
-    public void send(final CharSequence frame,
-                     final Charset charset) {
-        send(Unpooled.copiedBuffer(frame, charset));
+    public void sendText(final CharSequence frame,
+                         final Charset charset) {
+        sendText(Unpooled.copiedBuffer(frame, charset));
+    }
+
+    public void sendText(final CharSequence frame) {
+        sendText(frame, DEFAULT_CHARSET);
+    }
+
+    /**
+     * Sends the buffer as one binary frame and takes it over, on the same terms
+     * {@link #sendText(ByteBuf)} does: it is released whatever happens to it, and one buffer fanned out to
+     * several sessions means a {@link ByteBuf#retainedDuplicate()} per session.
+     *
+     * @param frame to send.
+     */
+    public void sendBinary(final ByteBuf frame) {
+        writeAndFlush(new BinaryWebSocketFrame(frame));
     }
 
     @Override
     public void send(final CharSequence frame) {
-        send(frame, DEFAULT_CHARSET);
+        sendText(frame); // the name is the Sender interface's rather than this class's, and text is the
+        // only thing a CharSequence can be sent as
     }
 
     void frameArrived() {
@@ -208,16 +230,56 @@ public class ClientSession implements Sender, Closeable {
         }
     }
 
+    /**
+     * Hands a whole text message to the {@link Receiver} of this session.
+     *
+     * @param frame the text.
+     */
     public void receive(final CharSequence frame) {
+        receive(frame, true);
+    }
+
+    /**
+     * Hands a text message, or one piece of it, to the {@link Receiver} of this session, and answers the
+     * peer itself when there is nobody to take it.
+     *
+     * @param frame the text, valid for the call and no longer as far as the receiver is concerned.
+     * @param last whether the message ends here.
+     */
+    public void receive(final CharSequence frame,
+                        final boolean last) {
         final Receiver receiver = context.receiver();
         if (receiver == null) {
+            closeWith(WebSocketCloseStatus.INVALID_MESSAGE_TYPE); // an api which only ever sends takes
+            // nothing at all, and a client which sends anyway is told so
             return;
         }
         try {
-            receiver.receive(this, frame);
+            receiver.text(this, frame, last);
         } catch (final Exception failed) {
             // the application failing to handle a frame is not the channel failing, and it is not the
             // decoder's business either: it is reported to this session's observer and ends this session
+            receiveFailed(failed);
+        }
+    }
+
+    /**
+     * Hands a binary message, or one piece of it, to the {@link Receiver} of this session, on the same
+     * terms {@link #receive(CharSequence, boolean)} does.
+     *
+     * @param frame the bytes, which the receiver must retain to keep.
+     * @param last whether the message ends here.
+     */
+    public void receive(final ByteBuf frame,
+                        final boolean last) {
+        final Receiver receiver = context.receiver();
+        if (receiver == null) {
+            closeWith(WebSocketCloseStatus.INVALID_MESSAGE_TYPE);
+            return;
+        }
+        try {
+            receiver.binary(this, frame, last);
+        } catch (final Exception failed) {
             receiveFailed(failed);
         }
     }
@@ -250,18 +312,43 @@ public class ClientSession implements Sender, Closeable {
 
     /**
      * Ends the session with a status the peer can read, rather than with a disconnect it can only guess at.
+     * A bare {@link #close()} is a close of the connection and nothing else, which a client sees as
+     * {@code 1006} and can not tell from the network going - and {@code 1006} is what a client backs off
+     * from, where a {@code 1001} is what it reconnects to at once and a {@code 1008} is what it does not
+     * reconnect from at all. Say which one it is whenever this end knows.
+     * <p>
+     * Never throws, and the session ends whatever happens to the status: the closing is what was asked
+     * for, the saying why is the extra. The status goes out only over a channel which is open and
+     * writable - a frame put into a buffer nobody is draining would hold the session open instead of
+     * ending it - and the session closes once the frame has left, without waiting for the close the peer
+     * answers with.
      *
-     * @param status to close with.
+     * @param status to close with. One of the codes an endpoint may send: {@code 1005}, {@code 1006} and
+     *               {@code 1015} are statuses a peer infers and never receives, and asking for one of
+     *               those closes the session with nothing said.
      */
-    private void closeWith(final WebSocketCloseStatus status) {
+    public void closeWith(final WebSocketCloseStatus status) {
         final io.netty.channel.Channel c = context.channel();
-        if (closed.get() || !c.isOpen()) {
-            close(); // idempotent, and there is nothing left to send the status on
+        if (closed.get() || !c.isOpen() || !c.isWritable()) {
+            CloseHelper.closeQuiet(this); // idempotent, and there is nothing left to send the status on
+            return;
+        }
+        if (!closeFrameSent.compareAndSet(false, true)) {
+            return; // the status of whoever got here first is on its way, and the write which carries it
+            // is what ends the session
+        }
+
+        final CloseWebSocketFrame frame;
+        try {
+            frame = new CloseWebSocketFrame(status);
+        } catch (final IllegalArgumentException notSendable) {
+            CloseHelper.closeQuiet(this); // asking for a status which may not be sent still asked for the
+            // session to end
             return;
         }
         // the frame first and the close after it has gone out: closing the channel here would take the
         // status with it
-        c.writeAndFlush(new CloseWebSocketFrame(status)).addListener(written -> close());
+        c.writeAndFlush(frame).addListener(written -> close());
     }
 
     public Executor executor() {

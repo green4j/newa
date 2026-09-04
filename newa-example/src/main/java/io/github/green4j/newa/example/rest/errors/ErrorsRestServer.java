@@ -56,8 +56,9 @@ import java.nio.charset.StandardCharsets;
  * only the status, which is the point. Ask for {@code /v1/boom} and watch the two halves land in different
  * places.
  * <p>
- * The same {@link HttpErrorHandler} would serve files put in front of the api with {@code withFiles(...)}: a 404
- * from the file server is rendered by whatever renders a 404 from the routing.
+ * The same {@link HttpErrorHandler} serves a file handler put in front of the api with
+ * {@code withHandler(() -> new FileServerHandler(files, errors, ...))}, and a {@code FileServer} of its own:
+ * a 404 from the files is rendered by whatever renders a 404 from the routing, wherever it is given.
  */
 public class ErrorsRestServer {
     public static final String API_NAME = "Errors API";

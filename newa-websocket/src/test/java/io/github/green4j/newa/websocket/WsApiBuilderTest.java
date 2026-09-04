@@ -31,17 +31,17 @@ class WsApiBuilderTest {
 
     @Test
     public void testKeepAliveIsOnByDefault() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .build();
-        Assertions.assertEquals(WsApiBuilder.DEFAULT_PING_INTERVAL_MS,
+        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_PING_INTERVAL_MS,
                 api.pingIntervalMs());
-        Assertions.assertEquals(WsApiBuilder.DEFAULT_READ_TIMEOUT_MS,
+        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_READ_TIMEOUT_MS,
                 api.readTimeoutMs());
     }
 
     @Test
     public void testKeepAliveCanBeTurnedOff() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPingIntervalMs(0)
                 .withReadTimeoutMs(0)
                 .build();
@@ -51,7 +51,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testDefaultPathPrefix() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .build();
         Assertions.assertEquals("/websocket/v1",
                 api.websocketPath());
@@ -59,7 +59,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testCustomPathPrefix() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix("ws")
                 .build();
         Assertions.assertEquals("/ws/v1",
@@ -68,7 +68,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testPathPrefixWithLeadingSlash() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix("/ws")
                 .build();
         Assertions.assertEquals("/ws/v1",
@@ -77,7 +77,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testDifferentVersion() {
-        final WsApi api = new SimpleWsApiBuilder(3)
+        final WsApi api = new WsApiBuilder(3)
                 .withPathPrefix("ws")
                 .build();
         Assertions.assertEquals("/ws/v3",
@@ -86,7 +86,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testNullPathPrefix() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix(null)
                 .build();
         Assertions.assertEquals("/v1",
@@ -95,7 +95,7 @@ class WsApiBuilderTest {
 
     @Test
     public void testEmptyPathPrefix() {
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix("")
                 .build();
         Assertions.assertEquals("/v1",

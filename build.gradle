@@ -275,7 +275,11 @@ configure(commonProject) {
     dependencies {
         api "io.github.green4j:green-jelly:$greenJellyVersion"
         api(groupDeps('io.netty', [
-                'netty-transport'
+                'netty-transport',
+                // IdleStateHandler, which IdleConnectionHandler is the closing half of
+                'netty-handler',
+                // the HTTP request DecoderFailureHandler answers, shared by both servers above it
+                'netty-codec-http'
         ], nettyVersion))
     }
 

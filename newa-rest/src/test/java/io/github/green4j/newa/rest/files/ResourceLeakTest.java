@@ -25,6 +25,8 @@
 package io.github.green4j.newa.rest.files;
 
 import com.sun.management.UnixOperatingSystemMXBean;
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
+import io.github.green4j.newa.rest.TextErrorHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -48,6 +50,8 @@ import java.nio.file.Path;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * Every branch of the handler, run enough times that anything it forgets to give back shows up as a file
@@ -63,6 +67,11 @@ class ResourceLeakTest {
 
     @TempDir
     private Path root;
+
+    /** Where the reads wait when this is asked to answer the way a server with an executor does. */
+    private final Deque<Runnable> reads = new ArrayDeque<>();
+
+    private boolean readAhead;
 
     @BeforeEach
     public void setUp() throws IOException {
@@ -84,14 +93,40 @@ class ResourceLeakTest {
                 .build();
     }
 
+    /**
+     * @param files to answer from
+     * @return a handler which reads the way this run asked for - on the loop, or on the queue below
+     */
+    private FileServerHandler handler(final FileSet files) {
+        if (!readAhead) {
+            return new FileServerHandler(files);
+        }
+        return new FileServerHandler(files, new TextErrorHandler(), new StdErrChannelErrorHandler(), null,
+                FileServerHandler.DEFAULT_CHUNK_SIZE, reads::add);
+    }
+
+    /**
+     * Runs the reads which are waiting, and the loop tasks each of them wakes. A read holds the file it is
+     * reading from, so a run which leaves one waiting has not finished with the descriptor yet.
+     *
+     * @param channel the response is being written to
+     */
+    private void drainReads(final EmbeddedChannel channel) {
+        while (!reads.isEmpty()) {
+            reads.poll().run();
+            channel.runPendingTasks();
+        }
+    }
+
     private void run(final FileSet files,
                      final HttpRequest request,
                      final boolean closeUnderIt) {
         final EmbeddedChannel channel = closeUnderIt
-                ? new EmbeddedChannel(new Closer(), new FileServerHandler(files))
-                : new EmbeddedChannel(new FileServerHandler(files));
+                ? new EmbeddedChannel(new Closer(), handler(files))
+                : new EmbeddedChannel(handler(files));
         try {
             channel.writeInbound(request);
+            drainReads(channel);
             channel.flushOutbound();
             Object outbound;
             while ((outbound = channel.readOutbound()) != null) {
@@ -100,6 +135,7 @@ class ResourceLeakTest {
         } catch (final Exception expectedOnAClosedChannel) {
             // the response could not be written, which is the point of that run
         } finally {
+            drainReads(channel); // a read left waiting is a file left open
             channel.finishAndReleaseAll();
         }
     }
@@ -139,9 +175,10 @@ class ResourceLeakTest {
      */
     private void runFailing(final FileSet files,
                             final HttpRequest request) {
-        final EmbeddedChannel channel = new EmbeddedChannel(new Failer(), new FileServerHandler(files));
+        final EmbeddedChannel channel = new EmbeddedChannel(new Failer(), handler(files));
         try {
             channel.writeInbound(request);
+            drainReads(channel);
             channel.flushOutbound();
             Object outbound;
             while ((outbound = channel.readOutbound()) != null) {
@@ -150,6 +187,7 @@ class ResourceLeakTest {
         } catch (final Exception expectedOnAClosedChannel) {
             // the failure took the connection with it, which is the point of that run
         } finally {
+            drainReads(channel);
             channel.finishAndReleaseAll();
         }
     }
@@ -206,6 +244,23 @@ class ResourceLeakTest {
         Assertions.assertTrue(after - before < TOLERANCE,
                 "open descriptors went from " + before + " to " + after + " over " + REQUESTS
                         + " requests, so a branch is not closing the file it opened");
+    }
+
+    @Test
+    public void testNoBranchHoldsOnToAFileWhenTheReadingIsSomebodyElse() {
+        readAhead = true;
+
+        final FileSet files = files();
+
+        hammer(files, 5);
+
+        final long before = openFiles();
+        hammer(files, REQUESTS / 12);
+        final long after = openFiles();
+
+        Assertions.assertTrue(after - before < TOLERANCE,
+                "open descriptors went from " + before + " to " + after + " over " + REQUESTS
+                        + " read-ahead requests, so a branch is not closing the file it opened");
     }
 
     @Test

@@ -3,14 +3,19 @@
 HTTP REST API routing and handlers built on Netty.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> [FileServerHandler] --> [HttpContentCompressor]
-           --> RestApiHandler
+Client --> IdleConnectionHandler --> HttpServerCodec --> HttpObjectAggregator
+           --> RequestDeadlineHandler --> ResponseDeadlineHandler --> DecoderFailureHandler
+           --> [CorsHandler] --> [your handlers] --> [HttpContentCompressor] --> RestApiHandler
 ```
 
 `RestServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is
 one line. Neither hides anything: they are made of the same public handlers, and the pipeline and the
 bootstrap are still yours to take over the moment either needs changing - see [Starting a
 server](#starting-a-server).
+
+Files are a server of their own - `FileServer`, the same shape and the same `with...`, with a
+`FileServerHandler` where the api handler is. Either one composes into the other through `withHandler`; see
+[Serving files](#serving-files).
 
 ## Getting started
 
@@ -37,24 +42,138 @@ and everything below the pipeline stays on `NettyServerBuilder`:
 ```java
 NettyServer server = RestServer.of(api)
         .withCompression()                       // off by default
-        .withFiles(fileSet)                      // served in front of the api
+        .withCors(corsConfig)                    // off by default, see Cross-origin requests
         .withResponseChunks(chunks)              // see Chunked responses
         .withObservers(observers)                // see Observing
         .withErrorHandler(new JsonErrorHandler())
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
-        .withMaxContentLength(65536)
+        .withMaxContentLength(65536)             // the request body, not its headers and not a response
+        .withMaxInitialLineLength(4096)          // the request line: the method, the whole uri, the version
+        .withMaxHeaderSize(8192)                 // the header block, all of it together
+        .withIdleTimeoutMs(60_000)               // on by default, see Idle connections
+        .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
+        .withResponseDeadlineMs(30_000)          // on by default, see Deadlines
         .withHandler(() -> new AuthFilter())     // in front of the api handler, one per channel
+        .withHandler(() -> new FileServerHandler(files, errors, channelErrors, observers))
         .start(new NettyServerBuilder()
                 .port(9009)
                 .host("127.0.0.1")               // every interface by default
                 .workerThreads(8)                // a worker per core by default
                 .writeBufferWaterMark(32 * 1024, 64 * 1024)
+                .maxConnections(4096)            // unlimited by default, see below
+                .backlog(1024)                   // what the OS says by default
                 .transport(Transport.auto()));   // kqueue, epoll, or NIO
 ```
 
+`maxConnections` is what bounds file descriptors, and it is off unless you say a number: the right one is
+what the process may open minus everything else it holds, which the deployment knows and this library does
+not - a number invented here would cut working traffic quietly. A connection arriving above it is closed as
+it arrives, without a byte written back, because writing a `503` means holding the descriptor through a write
+and a flush at the moment there are none to spare, and it would not arrive reliably either. Overload is
+therefore invisible to the peer and visible here: `ConnectionLimitHandler.refused()` counts it, and a
+hand-written pipeline can put that handler at its own head. `backlog` is `SO_BACKLOG`, how deep the kernel
+queues what has not been accepted yet; unset it is whatever the operating system allows, which is also the
+most it allows.
+
 `withHandler` puts a handler *in front of* `RestApiHandler`, which is the only place one can still act:
 the api handler answers every request it sees, with a 404 when nothing routed, so nothing behind it would
-ever run.
+ever run. That is where a filter goes, and where a `FileServerHandler` goes - it lands in front of the api
+and behind the compressor, which is the placement that keeps `sendfile(2)`.
+
+### Idle connections
+
+A connection on which nothing has been read and nothing has been written for a minute is closed. This is on
+by default - `withIdleTimeoutMs(0)` turns it off, and any other value moves it.
+
+What it takes back is a file descriptor: a connection which opened and never asked anything, a keep-alive
+connection whose client walked away, and a peer which died without a FIN - the last being the one no amount
+of correct client code prevents. Nothing else in the pipeline would ever close any of them.
+
+It only reclaims descriptors from connections nobody is using, which is the common case and not the dangerous
+one. Connections which are all busy at once cost one each until they are done, and that is what
+`NettyServerBuilder.maxConnections` is for.
+
+**Both directions count**, which is what makes it safe in front of a long response: a chunked response
+still being written keeps its own connection alive however long it takes, and only a connection where
+*neither* side has said anything is closed. A transfer counts while it is *moving*, not only when it
+lands - one big file to one slow peer is a single write which completes at the end, and a timer waiting
+for that completion would cut the download off in the middle of itself. Raise the timeout for a response
+which suspends for longer than it while writing nothing.
+
+**It judges neither of the two slow peers, and cannot.** All it knows is that bytes moved. A client
+dribbling a header block a byte at a time is reading and writing all the while; a peer taking a response a
+byte every ten seconds moves the outbound buffer every ten seconds. Both look busy from here, and both are
+bounded by the pair below, which counts what actually arrived. Keep the idle timeout above them - it defaults
+to twice their window - or the coarsest instrument takes the decisions of the precise ones.
+
+The handler is `IdleConnectionHandler`, and it is public: a pipeline assembled by hand wants one first of
+all, in front of the codec. Note that Netty's own `IdleStateHandler` is only half of it - it fires an
+`IdleStateEvent` and closes nothing, so a pipeline with one and no handler for that event holds the
+connection exactly as long as it would have without it.
+
+### Deadlines
+
+A connection has two ends, and a peer can be slow at either. Both are bounded by the same idea - *what has
+begun has this long to finish* - and by a pair of handlers standing together, directly behind the aggregator:
+
+```java
+RestServer.of(api)
+        .withRequestDeadlineMs(30_000)    // on by default, 0 turns it off
+        .withResponseDeadlineMs(30_000)   // on by default, 0 turns it off
+        .start(9009);
+```
+
+**`withRequestDeadlineMs`** is what an idle timeout cannot be: the bound on how long a request may take to
+arrive. nginx calls it `client_header_timeout`, Tomcat `connectionTimeout`, Node `headersTimeout`. Nothing
+the peer sends extends it once it is running, so a request dribbled out a byte at a time runs out of it.
+Every request of a keep-alive connection is judged, not only the first, and so is a connection which opens
+and asks nothing. It covers the request whole, body included, which is what `withMaxContentLength` makes
+honest: a server which raises that to take uploads raises this with it.
+
+**`withResponseDeadlineMs`** is what judges a slow reader, on what reached the peer rather than on whether
+anything moved:
+
+- **nothing is timed while nothing is owed.** The clock starts on a write and stops once every write has
+  landed, so a response which is merely slow to produce - a chunked one ticking once a minute, a suspended
+  cursor - is never on it. What is timed is a peer which has been given something and is not taking it;
+- **each write is given one window per 64K of it**, so a large response is not judged by the clock of a small
+  one, and a peer taking a megabyte honestly is never near it;
+- **a file renews its window every 64K that reaches the peer**, which is how a trickle is caught inside a
+  transfer of any size - the one case where progress exists and means nothing.
+
+Together the unit and the window are a floor on throughput: 64K per 30 seconds, about 2.2 KB/s, and the same
+floor for a chunked response, a file and an ordinary one. Before this pair they were three different answers,
+and an ordinary response had none at all.
+
+The handlers are `RequestDeadlineHandler` and `ResponseDeadlineHandler`, both public and both in
+`newa-common`: a pipeline assembled by hand adds them itself, *behind* the codec and the aggregator. That
+placement is not a preference - the request half tells bytes which became a message from bytes which did not,
+and in front of a decoder every read looks the same.
+
+### Cross-origin requests
+
+Nothing is answered cross-origin without `withCors`. It takes Netty's own `CorsConfig` and puts a
+`CorsHandler` in the pipeline, which does the whole protocol - the preflight, the `Access-Control-` headers,
+`allowCredentials()`, `shortCircuit()`:
+
+```java
+RestServer.of(api)
+        .withCors(CorsConfigBuilder.forOrigin("https://app.example.com")
+                .allowedRequestMethods(HttpMethod.GET, HttpMethod.POST)
+                .shortCircuit()                  // answer a wrong origin 403, rather than let it through
+                .build())                        // without the headers which would let the page read it
+        .start(9009);
+```
+
+It goes **in front of** the file handler, and that is what makes a file carry the headers too: the file
+handler writes its response head from its own place in the pipeline, so only a handler nearer the front than
+it ever sees one. The consequence to know about: a preflight `OPTIONS` is answered by the CORS handler and
+never reaches the files or the api, so the `405 Allow: GET, HEAD` a file path gives an `OPTIONS` is no
+longer what a browser sees.
+
+A websocket handshake is not covered by any of this and does not need to be - there is no preflight on one
+and no header to add to its response. It gets an `OriginPolicy` instead, which answers yes or no - and that
+one, unlike this, is on by default; see `newa-websocket`.
 
 `NettyServer` is what you get back, and it is an `AutoCloseable` and nothing more: `port()` (the one thing
 worth having after binding to port 0), `channel()`, `workerGroup()` for periodic work on the loops the
@@ -147,6 +266,15 @@ Two things stay yours, because neither is a `Life`'s business:
 `RestApi` resolves each `FullHttpRequest` with `PathMatcher`; routes are grouped by method inside
 `RestApiBuilder`.
 
+- **Methods**: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD` and `OPTIONS`, each as the `xxx` / `xxxJson` /
+  `xxxTxt` triple.
+- **HEAD follows GET**: a `HEAD` with no endpoint of its own on that path is answered by the `GET` one, so
+  every path served on `GET` answers `HEAD` too. The handler renders its response as usual and the codec
+  drops the body, so the peer is told the length it would have been sent. Register `head...` only where the
+  answer differs from running the `GET` - a length known without reading anything, say.
+- **OPTIONS is routed like any other method**: only where an endpoint was registered for it, 405 otherwise.
+  A CORS preflight never reaches it - `CorsHandler` answers that in front of the api, see
+  [Cross-origin requests](#cross-origin-requests).
 - **Version prefix**: routes registered on a builder of version `n` live under `/v<n>/...`.
   `RestApiBuilder.root()` registers without it - a top-level `/version`, say.
 - **Path templates**: `{name}` in a path expression requires a matching `.withPathParameterDescriptions(...)`
@@ -203,6 +331,13 @@ builder.get("/async", (context, result) ->
 
 `context.executor().schedule(...)` delays without blocking. Never block the `EventLoop` waiting for anything.
 
+A `Result` which outlives `handle()` is the easiest one to finish twice - two callbacks, or a callback and a
+timeout, each answering. **One request is answered once**: whatever sends the response ends the result, and
+every call after it is dropped rather than written, because a second response would be read by the peer as
+the answer to its next request. Whatever the dropped call was handed - a `ByteBuf`, a `ChunkedInput` - is
+released, and the mistake goes to the `ChannelErrorHandler`, with the stack of the call that was dropped.
+Nothing is thrown: the response which did go out is the correct one.
+
 ## Response memory
 
 JSON and text handlers render into a thread-local buffer, which is what keeps responses allocation-free. Such
@@ -234,11 +369,15 @@ N     =  (budget - workers x render buffer) / (largest request + largest respons
 At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the render buffers are 4 x 12 MB =
 48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
 
-- **The request** - `HttpObjectAggregator` caps it and nothing else does:
+- **The request body** - `HttpObjectAggregator` caps it and nothing else does; a body past the cap is
+  answered `413` and the connection closed. The request line and the header block are the codec's own limits,
+  4096 and 8192 bytes, and each has its own knob - past them the answer is `414` or `431`:
 
   ```java
-  RestServer.of(api).withMaxContentLength(2 * 1024 * 1024);            // largest request
-  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the same, by hand
+  RestServer.of(api).withMaxContentLength(2 * 1024 * 1024)             // largest request
+                    .withMaxInitialLineLength(16 * 1024)               // longest uri
+                    .withMaxHeaderSize(32 * 1024);                     // largest header block
+  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the body, by hand
   ```
 
 - **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
@@ -379,11 +518,12 @@ builder.get("/clock", (context, result) -> result.ok(TEXT_EVENT_STREAM, new Cloc
 ```
 
 `PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, the end which never comes by
-itself, and the progress the stall watchdog reads.
+itself, and the progress an observer is told.
 
-Two differences from pull. `maxOpenCursors` does not count these - it counts what `ChunkedRestHandler` and its
-siblings open, not what you hand to `Result.ok`. And `stallTimeoutMillis` measures time without a chunk, so it
-has to exceed the gap between two of them.
+One difference from pull: `maxOpenCursors` does not count these - it counts what `ChunkedRestHandler` and its
+siblings open, not what you hand to `Result.ok`. The gap between two ticks needs no thought at all, however
+long it is: `withResponseDeadlineMs` times what has been written and not taken, and between ticks nothing has
+been written.
 
 ### Settings
 
@@ -392,7 +532,6 @@ Built once, when the server is assembled, and handed to every `RestApiHandler`:
 ```java
 ResponseChunks chunks = ResponseChunks.builder()
         .size(64 * 1024)          // bytes a chunk is filled to
-        .stallTimeoutMillis(30_000)
         .maxOpenCursors(256)      // unlimited by default
         .build();
 
@@ -415,16 +554,48 @@ bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
 - **`size()`** is a floor, not a cap: the framework asks for more until the buffer has *crossed* it, so a
   chunk overshoots by up to one step. Memory is bounded by `size()` plus one step, and the step is the real
   knob - one that writes a hundred rows costs a hundred rows, whatever the collection behind it holds.
-- **`stallTimeoutMillis()`** (30 s, zero to disable) - a response which has not got a single chunk out within
-  it is abandoned and its connection closed. Counting chunks rather than bytes catches both the peer which
-  stopped dead and the one reading at a trickle, and never punishes a response which is merely large. Without
-  it a cursor - a snapshot, a file handle, a lock - is held for as long as a half-open connection lingers,
-  which can be hours.
+- giving up on a peer which is not taking the chunks is not here any more: it is
+  [`withResponseDeadlineMs`](#deadlines), in the pipeline, where a file and an ordinary response are judged
+  by the same rule. Without it a cursor - a snapshot, a file handle, a lock - is held for as long as a
+  half-open connection lingers, which can be hours.
 - **`maxOpenCursors()`** (unlimited by default) - a request which would open one cursor too many is answered
   `503` *before* its cursor is opened, so the resource is never taken. Unlimited because what a cursor holds
   is yours to know.
 
 `chunks.openCursors()` reports how many are open right now, across every channel.
+
+## Slow consumers
+
+Everything here reads one signal - Netty's write watermark, which is what `Channel.isWritable()` answers -
+and what is built on it is layered rather than alternative. A peer which falls behind meets each layer in
+turn:
+
+| layer | what happens | default |
+|---|---|---|
+| **pace** | the cursor is not stepped while the channel is over its watermark, so a chunked response takes exactly as long as its peer takes and costs one chunk of memory while it does | always |
+| **give up** | a write which has not reached the peer within its window - one window per 64K of it - is given up on and its connection closed, whether it is a chunk, a file or an ordinary response | 30 s, see [Deadlines](#deadlines) |
+| **refuse** | a request which would open one cursor too many is answered `503` before its cursor is opened | unlimited |
+| **backstop** | a connection where nothing at all has moved in either direction is closed, whatever it was or was not doing | 60 s, see [Idle connections](#idle-connections) |
+
+The first three know what they are protecting and measure exactly that - what reached the peer, and cursors
+held. The last one knows only that bytes moved, which is why it is the outermost and the loosest, and why its
+timeout has to stay above theirs: set it below and the coarsest instrument takes the decisions of the precise
+ones.
+
+**Nothing is ever dropped.** A response here is all or nothing - half a JSON document is not a smaller JSON
+document - so pacing is the only correct answer to a peer which cannot keep up, and the only question left is
+how long to keep pacing before giving up. That question is the whole of `withResponseDeadlineMs`.
+
+**`newa-websocket` answers it differently on purpose**, which is worth knowing if you use both. There the
+whole question is settled at one point and on the *first* frame which cannot go out: the session is closed,
+or - with `withSkipOnBackPressure()`, the same decision made the other way - that frame is dropped and the
+gap refilled from a snapshot once the channel drains. Either way nothing is paced and nothing waits, where a
+response here is paced and then given thirty seconds of grace.
+
+Neither module is the more careful one. A fan-out frame is perishable and the next one is already better, so
+waiting buys nothing and holding it costs memory per subscriber; a response here has no successor, and giving
+up on it throws away work already done. Dropping is on offer there and not here for the same reason: it is
+only ever safe where something can rebuild what was dropped.
 
 ## Errors
 
@@ -508,6 +679,7 @@ Every error is reported exactly once, by the stage which knows most about it. Co
 | the `HttpErrorHandler` itself threw | `ChannelErrorHandler`, and the connection goes: the response cannot be written |
 | the channel failed | `ChannelErrorHandler` |
 | the body was larger than `maxContentLength` | answered `413` by Netty's aggregator, ahead of any of this |
+| the request line or the headers were past their limits | answered `414` / `431` by `DecoderFailureHandler` and the connection closed, ahead of any of this |
 
 `onRequestNotRouted` and `onResponseFailed` are both on `HttpApiObserver`, so a plain observer sees the
 failures of the API and of the file server alike.
@@ -582,10 +754,6 @@ API, and a request whose path it does not own is passed on untouched:
 Client --> HttpServerCodec --> HttpObjectAggregator --> FileServerHandler --> RestApiHandler
 ```
 
-`RestServer.withFiles(fileSet)` puts it exactly there. Note that it also decides where a compressor goes:
-`withCompression()` places one *behind* the file handler, where it compresses what the api returns and never
-sees a file, so `sendfile(2)` survives. One in front costs it, silently - see below.
-
 ```java
 FileSet files = FileSet.builder()
         .serve("/files", Paths.get("/var/www"),          // a tree: the rest of the path resolves under it
@@ -594,17 +762,51 @@ FileSet files = FileSet.builder()
         .file("/download/report.pdf", Paths.get("/var/data/report.pdf"))   // one file, named here
         .index("index.html")                             // without one, a directory is a 404
         .build();
+```
 
-RestServer.of(api).withFiles(files);                     // put in front of the API handler
+`FileServer` is that handler with a pipeline around it, and reads exactly like `RestServer` - the same
+`with...`, the same `pipeline()` and `start(...)`, both on the same `AbstractHttpServer`:
+
+```
+Client --> [IdleConnectionHandler] --> HttpServerCodec --> HttpObjectAggregator
+       --> [RequestDeadlineHandler] --> [ResponseDeadlineHandler] --> DecoderFailureHandler
+           --> [CorsHandler] --> [HttpContentCompressor] --> FileServerHandler --> [your handlers]
+           --> FilesOnlyHandler
+```
+
+```java
+FileServer.start(9012, files);                           // the whole file server
+FileServer.of(files)                                     // and with an api sharing the port
+        .withHandler(() -> new RestApiHandler(api, errors, channelErrors))
+        .start(9012);
+
+RestServer.of(api)                                       // or the other way round: an api which also
+        .withHandler(() -> new FileServerHandler(        // serves files
+                files, errors, channelErrors, observers))
+        .start(9009);
+
 pipeline.addLast(new FileServerHandler(files));          // the same by hand, in initChannel
 ```
 
+Which of the two you start from decides where the compressor may go, and that is not a detail:
+`RestServer.withCompression()` places one *behind* everything `withHandler` added, where it compresses what
+the api returns and never sees a file, so `sendfile(2)` survives. `FileServer.withCompression()` places one
+*in front of* the file handler - the only place from which a file can be compressed at all - and pays
+`sendfile(2)` for it. Off by default on both.
+
+`FilesOnlyHandler` ends a file server's pipeline, because `FileServerHandler` passes on what it does not own
+and a request nothing answered would otherwise sit at the end of the pipeline holding its connection open. It
+answers with the file handler's own `404`, message included: a path which is not served and a file which may
+not be served have to look the same, or the shape of the answer says which prefixes are served and which
+files are being kept back.
+
 A channel which fails ends at whichever handler catches it: the file handler reports the cause to its own
 `ChannelErrorHandler` and closes the connection, which is what releases a file still being written. It does
-not pass the event on, so assembling by hand means giving the file handler and the API handler the same
-`ChannelErrorHandler` - `RestServer` does that for you, and `new FileServerHandler(files)` alone prints
-what is not an `IOException` to stderr and renders its errors with a plain `TextErrorHandler`, which says
-nothing of a failure beyond its status.
+not pass the event on, so composing the two means giving the file handler and the API handler the same
+`ChannelErrorHandler` and the same `HttpErrorHandler` - `FileServer` does that for the handlers it builds
+itself, and the one you hand to `withHandler` is yours to construct with them. `new FileServerHandler(files)`
+alone prints what is not an `IOException` to stderr and renders its errors with a plain `TextErrorHandler`,
+which says nothing of a failure beyond its status.
 
 - **Matching** is one walk of the path, longest prefix first, nothing copied out of it to compare.
   `/files/img/logo.png` is `img/logo.png` under the root of `/files`.
@@ -620,7 +822,16 @@ nothing of a failure beyond its status.
   mid-response is still the file which was measured; one *truncated* after it was measured cannot keep the
   `Content-Length` it promised, so the connection is closed rather than left never ending.
 - **`GET` and `HEAD`**, `405` with `Allow` otherwise. A single-range `Range` gets `206`, a range past the end
-  `416`, anything odder is ignored and the whole file sent. `Last-Modified` always, `If-Modified-Since` `304`.
+  `416`, anything odder is ignored and the whole file sent.
+- **`Last-Modified` and a strong `ETag`** on everything, the tag being when the file changed and how large it
+  is - a server which sends from the page cache does not read every file to hash it. `If-None-Match` answers
+  `304` and is asked *first*: an `If-Modified-Since` sent beside a tag is not looked at. `If-Range` decides
+  whether a `Range` may be answered at all - a peer resuming a download of a file which has changed under it
+  gets the new one whole rather than ten bytes spliced into what it kept. The tag is strong on purpose;
+  a weak one may not be ranged against, so it would silently cost every resumed download its range.
+- **`x-content-type-options: nosniff`** on every response, the `404` of `FilesOnlyHandler` included. The type
+  of a file is what the `FileSet` says it is; a browser sniffing one of its own out of the first bytes is how
+  something uploaded as a picture comes to be run as a script.
 
 ### Zero-copy, or not
 
@@ -637,10 +848,39 @@ handler never sees a file:
 Client --> HttpServerCodec --> HttpObjectAggregator --> FileServerHandler --> HttpContentCompressor --> RestApiHandler
 ```
 
-Put it in front instead and every file falls back to being pumped: correct, just slower. That path installs a
+Put it in front instead - which is what `FileServer.withCompression()` does, and the only way a file gets
+compressed at all - and every file falls back to being pumped: correct, just slower. That path installs a
 `ChunkedWriteHandler` once per channel and reads on the event loop, so set
 `ChannelOption.WRITE_BUFFER_WATER_MARK` - that is where its backpressure comes from. A transfer whose peer
-stops taking it is given up on, either way, after `FileServerHandler.DEFAULT_STALL_TIMEOUT_MILLIS`.
+stops taking it is given up on either way, after `FileServer.withResponseDeadlineMs` - the pumped path is
+judged a chunk at a time, and `sendfile(2)` by the bytes the region reports, both against the same window.
+
+Reading on the event loop is a stall the other connections of that loop pay for whenever a page is not in the
+cache. `FileServer.withReadExecutor(executor)` - the last argument of `new FileServerHandler(...)` by hand -
+moves the read to threads of yours:
+
+```java
+ExecutorService reads = Executors.newFixedThreadPool(4);
+
+new Life().run(Life.all(
+        () -> reads::shutdown,                   // the pool is not the server's to close
+        () -> FileServer.of(files)
+                .withCompression()               // which is what put the files on this path
+                .withReadExecutor(reads)         // and this is what keeps them off the loop
+                .start(9012)
+));
+```
+
+One chunk is read *ahead*, while the one before it is being written, so a thread of that pool is held for one
+`read(2)` and never for a transfer: the pool bounds the reads in flight, not the downloads, and a peer which
+stops taking the response stops asking for reads. The threads are yours and nothing here shuts them down,
+which is what the opener above is for - the pool then ends exactly where the server does.
+
+It is not the default, and for the assets of a page it should not be: those sit in the page cache, where a
+read is a memcpy and the hop to another thread costs more than the read itself. It is for files large or cold
+enough to be waited for. Note what it does not cover - `sendfile(2)` blocks on a cold page too, and so do the
+`stat` and `open` every request begins with; this moves the reading of the body, which on that path is all of
+the file and most of the waiting.
 
 ## Runnable examples
 
@@ -656,12 +896,15 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
 - **`errors.ErrorsRestServer`** - both halves of an error: a page of your own for every status, an exception
   of your own carrying a `409`, and a `500` whose cause reaches the observer while the client is told the
   status and no more. `curl` lines to try are printed at startup.
-- **`files.FileServer`** - files from the page cache, filtered, with ranges and an index, and the REST API
-  behind them answering everything they do not own.
-- **`pipeline.PipelineRestServer`** - the same server as `files.FileServer` with the bootstrap and the
+- **`pipeline.PipelineRestServer`** - the same server as `files.SimpleFileServer` with the bootstrap and the
   pipeline written out by hand: the transport and the groups chosen directly, `SO_BACKLOG`, an
-  `IdleStateHandler`, and a compressor placed in front of the file handler. Run it beside `FileServer` and
-  ask both for `/v1/zero-copy`: they answer the opposite, which is the cost of that one placement.
+  `IdleStateHandler`, and a compressor placed in front of the file handler. Run it beside `SimpleFileServer`
+  and ask both for `/v1/zero-copy`: they answer the opposite, which is the cost of that one placement.
 
-All but `pipeline.PipelineRestServer` are started with `RestServer`; that one is the reason the manual path
-is documented.
+And in `io.github.green4j.newa.example.files`:
+
+- **`files.SimpleFileServer`** - files from the page cache, filtered, with ranges and an index, started with
+  `FileServer`, and a REST API handed to `withHandler` answering everything the files do not own.
+
+All but `pipeline.PipelineRestServer` are started with `RestServer` or `FileServer`; that one is the reason
+the manual path is documented.

@@ -199,10 +199,9 @@ class ChunkedResponseLimitTest {
         workerGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         httpClient = HttpClient.newHttpClient();
 
-        // no stall timeout: these tests decide themselves when a cursor goes away
+        // nothing in this pipeline gives up on a peer: these tests decide themselves when a cursor goes away
         chunks = ResponseChunks.builder()
                 .maxOpenCursors(MAX_OPEN_CURSORS)
-                .stallTimeoutMillis(0)
                 .build();
 
         final RestApi api = buildTestApi();

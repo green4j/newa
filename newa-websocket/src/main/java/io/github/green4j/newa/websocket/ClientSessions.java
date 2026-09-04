@@ -25,8 +25,8 @@
 package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.collections.ObjectListReadSafe;
-import io.github.green4j.newa.lang.CloseHelper;
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 
 import java.nio.charset.Charset;
 
@@ -75,16 +75,18 @@ public class ClientSessions implements ClientSessionFactory {
                 observer.onSessionOpened(session);
             }
         } catch (final RuntimeException | Error e) {
-            CloseHelper.closeQuiet(session); // it went into the list before it was assembled, and nothing
-            // else would ever take it out again. Closing it is the whole unwind: the list, whatever the
-            // api attached, the channel, and the terminal event the observer is owed
+            session.closeWith(WebSocketCloseStatus.INTERNAL_SERVER_ERROR); // it went into the list before
+            // it was assembled, and nothing else would ever take it out again. Closing it is the whole
+            // unwind: the list, whatever the api attached, the channel, and the terminal event the
+            // observer is owed. The channel is as new as a channel gets, so the peer is told that the
+            // server broke rather than left to read a handshake followed by nothing
             throw e;
         }
 
         return session;
     }
 
-    public void broadcast(final CharSequence text) {
+    public void broadcastText(final CharSequence text) {
         final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
         for (int i = 0; i < snapshot.limit(); i++) {
             final ClientSession session = snapshot.get(i);
@@ -92,7 +94,7 @@ public class ClientSessions implements ClientSessionFactory {
                 continue;
             }
             try {
-                session.send(text);
+                session.sendText(text);
             } catch (final Exception cause) {
                 session.deliveryFailed(cause); // never throws, and never touches the buffer: whatever
                 // was allocated for this session was released before it got here
@@ -100,8 +102,8 @@ public class ClientSessions implements ClientSessionFactory {
         }
     }
 
-    public void broadcast(final CharSequence text,
-                          final Charset charset) {
+    public void broadcastText(final CharSequence text,
+                              final Charset charset) {
         final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
         for (int i = 0; i < snapshot.limit(); i++) {
             final ClientSession session = snapshot.get(i);
@@ -109,7 +111,7 @@ public class ClientSessions implements ClientSessionFactory {
                 continue;
             }
             try {
-                session.send(text, charset);
+                session.sendText(text, charset);
             } catch (final Exception cause) {
                 session.deliveryFailed(cause);
             }
@@ -117,12 +119,49 @@ public class ClientSessions implements ClientSessionFactory {
     }
 
     /**
-     * Sends the buffer to every open session and takes it over: each session is given a retained
-     * duplicate of it, with its own reader index, and the buffer itself is released here.
+     * Sends the buffer to every open session as a text frame and takes it over: each session is given a
+     * retained duplicate of it, with its own reader index, and the buffer itself is released here.
      *
      * @param text to send. Released here whatever happens to it.
      */
-    public void broadcastAndRelease(final ByteBuf text) {
+    public void broadcastTextAndRelease(final ByteBuf text) {
+        broadcastAndRelease(text, false);
+    }
+
+    /**
+     * Sends the buffer to every open session as a text frame and leaves it to the caller: each session is
+     * given a retained duplicate of it, with its own reader index, and the reference of the caller is
+     * neither taken nor released, so the buffer can be sent again or kept.
+     *
+     * @param text to send. Stays the caller's to release.
+     */
+    public void broadcastText(final ByteBuf text) {
+        broadcastAndRelease(text.retain(), false); // the reference taken below is the one added here,
+        // so the caller keeps its own
+    }
+
+    /**
+     * Sends the buffer to every open session as a binary frame and takes it over, the way
+     * {@link #broadcastTextAndRelease(ByteBuf)} does.
+     *
+     * @param payload to send. Released here whatever happens to it.
+     */
+    public void broadcastBinaryAndRelease(final ByteBuf payload) {
+        broadcastAndRelease(payload, true);
+    }
+
+    /**
+     * Sends the buffer to every open session as a binary frame and leaves it to the caller, the way
+     * {@link #broadcastText(ByteBuf)} does.
+     *
+     * @param payload to send. Stays the caller's to release.
+     */
+    public void broadcastBinary(final ByteBuf payload) {
+        broadcastAndRelease(payload.retain(), true);
+    }
+
+    private void broadcastAndRelease(final ByteBuf frame,
+                                     final boolean binary) {
         try {
             final ObjectListReadSafe.Snapshot<ClientSession> snapshot = sessions.snapshot();
             for (int i = 0; i < snapshot.limit(); i++) {
@@ -131,28 +170,21 @@ public class ClientSessions implements ClientSessionFactory {
                     continue;
                 }
                 try {
-                    session.send(text.retainedDuplicate()); // a session consumes the frame it is given,
-                    // so one buffer can not be handed to all of them
+                    final ByteBuf theirs = frame.retainedDuplicate(); // a session consumes the frame it
+                    // is given, so one buffer can not be handed to all of them
+                    if (binary) {
+                        session.sendBinary(theirs);
+                    } else {
+                        session.sendText(theirs);
+                    }
                 } catch (final Exception cause) {
                     session.deliveryFailed(cause); // the duplicate is already released - the session
                     // takes it over the moment it is handed one, failure included
                 }
             }
         } finally {
-            text.release();
+            frame.release();
         }
-    }
-
-    /**
-     * Sends the buffer to every open session and leaves it to the caller: each session is given a retained
-     * duplicate of it, with its own reader index, and the reference of the caller is neither taken nor
-     * released, so the buffer can be sent again or kept.
-     *
-     * @param text to send. Stays the caller's to release.
-     */
-    public void broadcast(final ByteBuf text) {
-        broadcastAndRelease(text.retain()); // the reference taken below is the one added here,
-        // so the caller keeps its own
     }
 
     void onClientSessionClosed(final ClientSession session) {

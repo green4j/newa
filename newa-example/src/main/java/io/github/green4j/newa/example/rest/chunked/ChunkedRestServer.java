@@ -89,7 +89,6 @@ public class ChunkedRestServer {
     /** Everything about chunked responses, decided once, here. */
     private static final ResponseChunks CHUNKS = ResponseChunks.builder()
             .size(64 * 1024)
-            .stallTimeoutMillis(10_000)
             .maxOpenCursors(4)
             .build();
 
@@ -314,6 +313,9 @@ public class ChunkedRestServer {
         life.run(() -> {
             final NettyServer server = RestServer.of(api)
                     .withResponseChunks(CHUNKS)
+                    // how long a peer may take a chunk of this: the same bound for a chunked response, a
+                    // file and an ordinary one, and it is the pipeline which applies it
+                    .withResponseDeadlineMs(10_000)
                     .withObservers(StdOutRestApiObserver.factory())
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 

@@ -35,6 +35,7 @@ import io.github.green4j.newa.rest.MethodNotAllowedException;
 import io.github.green4j.newa.rest.PathNotFoundException;
 import io.github.green4j.newa.rest.HttpException;
 import io.github.green4j.newa.rest.TextErrorHandler;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -67,7 +68,6 @@ import io.netty.handler.stream.ChunkedNioFile;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.AsciiString;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.concurrent.ScheduledFuture;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -79,8 +79,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executor;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.ACCEPT_RANGES;
 import static io.netty.handler.codec.http.HttpHeaderNames.ALLOW;
@@ -88,7 +87,10 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_RANGE;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
+import static io.netty.handler.codec.http.HttpHeaderNames.ETAG;
 import static io.netty.handler.codec.http.HttpHeaderNames.IF_MODIFIED_SINCE;
+import static io.netty.handler.codec.http.HttpHeaderNames.IF_NONE_MATCH;
+import static io.netty.handler.codec.http.HttpHeaderNames.IF_RANGE;
 import static io.netty.handler.codec.http.HttpHeaderNames.LAST_MODIFIED;
 import static io.netty.handler.codec.http.HttpHeaderNames.RANGE;
 import static io.netty.handler.codec.http.HttpHeaderValues.BYTES;
@@ -112,9 +114,23 @@ import static io.netty.handler.codec.http.HttpHeaderValues.KEEP_ALIVE;
  * from the pipeline and the transport, neither of which changes under a live channel, so it is worked out
  * once per channel and then simply done.
  * <p>
- * Serves {@code GET} and {@code HEAD}, answers {@code 405} to anything else on a path it owns, honours a
- * single-range {@code Range} and an {@code If-Modified-Since}, and answers a file it may not serve exactly as
- * it answers one which is not there.
+ * That second path reads the file on the event loop, where a page which is not in the cache stalls every
+ * other connection the loop carries. Give this an {@link Executor} and the read moves off it - see
+ * {@link ReadAheadFile}, which is where the whole of that decision is. It is worth an executor where files
+ * are large or cold enough to be waited for; where they are the assets of a page and sit in the page cache,
+ * a read is a memcpy and the hop would cost more than it saves, which is why there is no executor by
+ * default.
+ * <p>
+ * Serves {@code GET} and {@code HEAD}, answers {@code 405} to anything else on a path it owns, and answers a
+ * file it may not serve exactly as it answers one which is not there.
+ * <p>
+ * Every file is answered with a {@code Last-Modified} and an {@link EntityTag}, and the conditional headers
+ * asked against them are honoured: {@code If-None-Match} - which is looked at first, and which makes an
+ * {@code If-Modified-Since} beside it irrelevant - answers {@code 304}, and a single-range {@code Range}
+ * answers {@code 206} unless an {@code If-Range} says the peer is holding a different file, in which case it
+ * gets this one whole. Every response carries {@code x-content-type-options: nosniff}: the content type of a
+ * file is what this server was told to call it, and a browser guessing otherwise turns an upload into
+ * whatever the guess was.
  * <p>
  * A channel which fails ends here: the cause goes to the {@link ChannelErrorHandler} this was given and the
  * connection is closed, which is what releases a response still on its way out - a queued {@link FileRegion},
@@ -128,14 +144,22 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      */
     public static final int DEFAULT_CHUNK_SIZE = 64 * 1024;
 
-    /**
-     * How long a transfer may go without a byte of it reaching the peer before the connection is given up on.
-     */
-    public static final int DEFAULT_STALL_TIMEOUT_MILLIS = 30_000;
-
     private static final int MAX_PATH_BYTES = 4096;
 
     private static final AsciiString ALLOWED = AsciiString.cached("GET, HEAD");
+
+    /**
+     * Told to the browser about everything this handler answers, and about the {@code 404} which
+     * {@link FilesOnlyHandler} answers in its place. What a file is called here is what the {@link FileSet}
+     * says it is called; a browser which sniffs a type of its own out of the first bytes instead is a
+     * browser which can be made to run what was uploaded as a picture.
+     */
+    static final AsciiString CONTENT_TYPE_OPTIONS = AsciiString.cached("x-content-type-options");
+
+    /**
+     * @see #CONTENT_TYPE_OPTIONS
+     */
+    static final AsciiString NOSNIFF = AsciiString.cached("nosniff");
 
     private static final int UNDECIDED = 0;
     private static final int ZERO_COPY = 1;
@@ -192,7 +216,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     private final ChannelErrorHandler channelErrorHandler;
     private final HttpApiObserverFactory observerFactory;
     private final int chunkSize;
-    private final int stallTimeoutMillis;
+    private final Executor reads;
 
     private final FileSet.Match match = new FileSet.Match();
     private final ContentTypes contentTypes;
@@ -206,8 +230,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param files this handler owns the paths of
      */
     public FileServerHandler(final FileSet files) {
-        this(files, new TextErrorHandler(), new StdErrChannelErrorHandler(), null,
-                DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
+        this(files, new TextErrorHandler(), new StdErrChannelErrorHandler(), null, DEFAULT_CHUNK_SIZE, null);
     }
 
     /**
@@ -220,8 +243,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                              final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory) {
-        this(files, errorHandler, channelErrorHandler, observerFactory,
-                DEFAULT_CHUNK_SIZE, DEFAULT_STALL_TIMEOUT_MILLIS);
+        this(files, errorHandler, channelErrorHandler, observerFactory, DEFAULT_CHUNK_SIZE, null);
     }
 
     /**
@@ -230,20 +252,37 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * @param channelErrorHandler told about a channel which failed, or null to say nothing
      * @param observerFactory asked for an observer per request, or null to observe nothing
      * @param chunkSize a file is read in when it cannot be sent from the page cache
-     * @param stallTimeoutMillis a transfer may go without a byte reaching the peer, zero to wait forever
+     */
+    public FileServerHandler(final FileSet files,
+                             final HttpErrorHandler errorHandler,
+                             final ChannelErrorHandler channelErrorHandler,
+                             final HttpApiObserverFactory observerFactory,
+                             final int chunkSize) {
+        this(files, errorHandler, channelErrorHandler, observerFactory, chunkSize, null);
+    }
+
+    /**
+     * @param files this handler owns the paths of
+     * @param errorHandler rendering what a refused request is answered with
+     * @param channelErrorHandler told about a channel which failed, or null to say nothing
+     * @param observerFactory asked for an observer per request, or null to observe nothing
+     * @param chunkSize a file is read in when it cannot be sent from the page cache
+     * @param reads a file which cannot be sent from the page cache is read on, or null to read it on the
+     *              event loop. Shared by every channel, and owned by whoever made it: nothing here shuts it
+     *              down. It is never asked for anything while {@code sendfile(2)} is what carries a file
      */
     public FileServerHandler(final FileSet files,
                              final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
                              final HttpApiObserverFactory observerFactory,
                              final int chunkSize,
-                             final int stallTimeoutMillis) {
+                             final Executor reads) {
         this.files = files;
         this.errorHandler = errorHandler;
         this.channelErrorHandler = channelErrorHandler;
         this.observerFactory = observerFactory;
         this.chunkSize = chunkSize;
-        this.stallTimeoutMillis = stallTimeoutMillis;
+        this.reads = reads;
         this.contentTypes = new ContentTypes(files.contentTypes());
     }
 
@@ -362,15 +401,10 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
         final long lastModified = attributes.lastModifiedTime().toMillis();
 
-        if (notModified(request, lastModified)) {
-            respondEmpty(ctx, request, observer, startedAt, HttpResponseStatus.NOT_MODIFIED, null, -1);
-            return;
-        }
-
         if (bodyless) {
             // nothing is going to be sent, so nothing is opened either: the size of the response which was
             // not asked for is the size the file has at this moment, and no more can be said about it
-            answerBodyless(ctx, request, observer, startedAt, contentType, attributes);
+            answerBodyless(ctx, request, observer, startedAt, contentType, attributes, lastModified);
             return;
         }
 
@@ -387,19 +421,29 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
             throw notFound();
         }
 
-        final ByteRange range = ByteRange.parse(request.headers().get(RANGE), size);
+        // taken from the size the descriptor reports rather than the one the path reported a moment ago, so
+        // that the tag a peer caches names the bytes this response is actually about to promise
+        final String etag = EntityTag.of(lastModified, size);
+
+        if (notModified(request, lastModified, etag)) {
+            // the file was opened to be measured and is not going to be sent after all
+            closeQuietly(channel);
+            respondNotModified(ctx, request, observer, startedAt, lastModified, etag);
+            return;
+        }
+
+        final ByteRange range = rangeOf(request, size, etag, lastModified);
         if (range == ByteRange.UNSATISFIABLE) {
             closeQuietly(channel);
-            respondEmpty(ctx, request, observer, startedAt,
-                    HttpResponseStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
-                    "bytes */" + size, 0);
+            respondUnsatisfiable(ctx, request, observer, startedAt, size);
             return;
         }
 
         final long offset = range != null ? range.offset() : 0;
         final long length = range != null ? range.length() : size;
 
-        final HttpResponse head = headOf(request, contentType, lastModified, range, offset, length, size);
+        final HttpResponse head = headOf(request, contentType, lastModified, etag, range, offset, length,
+                size);
         final boolean keepAlive = keepAlive(ctx, request, head.headers());
 
         if (length == 0) {
@@ -423,21 +467,27 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                                 final HttpApiObserver observer,
                                 final long startedAt,
                                 final AsciiString contentType,
-                                final BasicFileAttributes attributes) {
+                                final BasicFileAttributes attributes,
+                                final long lastModified) {
         final long size = attributes.size();
-        final ByteRange range = ByteRange.parse(request.headers().get(RANGE), size);
+        final String etag = EntityTag.of(lastModified, size);
+
+        if (notModified(request, lastModified, etag)) {
+            respondNotModified(ctx, request, observer, startedAt, lastModified, etag);
+            return;
+        }
+
+        final ByteRange range = rangeOf(request, size, etag, lastModified);
         if (range == ByteRange.UNSATISFIABLE) {
-            respondEmpty(ctx, request, observer, startedAt,
-                    HttpResponseStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
-                    "bytes */" + size, 0);
+            respondUnsatisfiable(ctx, request, observer, startedAt, size);
             return;
         }
 
         final long offset = range != null ? range.offset() : 0;
         final long length = range != null ? range.length() : size;
 
-        final HttpResponse head = headOf(request, contentType,
-                attributes.lastModifiedTime().toMillis(), range, offset, length, size);
+        final HttpResponse head = headOf(request, contentType, lastModified, etag, range, offset, length,
+                size);
         final boolean keepAlive = keepAlive(ctx, request, head.headers());
 
         ctx.write(head);
@@ -448,6 +498,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     private static HttpResponse headOf(final HttpRequest request,
                                        final AsciiString contentType,
                                        final long lastModified,
+                                       final CharSequence etag,
                                        final ByteRange range,
                                        final long offset,
                                        final long length,
@@ -456,8 +507,10 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                 range != null ? HttpResponseStatus.PARTIAL_CONTENT : HttpResponseStatus.OK);
         final HttpHeaders headers = head.headers();
         headers.set(CONTENT_TYPE, contentType);
+        headers.set(CONTENT_TYPE_OPTIONS, NOSNIFF);
         headers.set(ACCEPT_RANGES, BYTES);
         headers.set(LAST_MODIFIED, DateFormatter.format(new Date(lastModified)));
+        headers.set(ETAG, etag);
         if (range != null) {
             headers.set(CONTENT_RANGE, "bytes " + offset + '-' + (offset + length - 1) + '/' + size);
         }
@@ -593,13 +646,38 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private static PathNotFoundException notFound() {
+    /**
+     * The one answer a request which is not served gets, whatever the reason - missing, filtered out,
+     * outside the root, or on a path no mapping owns at all. Shared with {@link FilesOnlyHandler} so that
+     * the last of those cannot be told from the others by the shape of what comes back.
+     *
+     * @return the 404 to answer with
+     */
+    static PathNotFoundException notFound() {
         // the same answer whether it is missing, filtered out or outside the root: asking must not tell which
         return new PathNotFoundException(null, "No such file");
     }
 
-    private boolean notModified(final HttpRequest request,
-                                final long lastModified) {
+    /**
+     * Whether the peer already holds what it is asking for.
+     * <p>
+     * A tag settles it on its own: an {@code If-Modified-Since} sent beside one is not looked at, which is
+     * what RFC 9110 asks for and is the answer a caching client wants anyway - the tag is the more exact of
+     * the two, and a file whose date moved without its content changing is one it need not fetch again.
+     *
+     * @param request being answered
+     * @param lastModified of the file
+     * @param etag of the file
+     * @return whether the answer is a 304
+     */
+    private static boolean notModified(final HttpRequest request,
+                                       final long lastModified,
+                                       final CharSequence etag) {
+        final CharSequence tags = request.headers().get(IF_NONE_MATCH);
+        if (tags != null) {
+            return EntityTag.matches(tags, etag);
+        }
+
         final String since = request.headers().get(IF_MODIFIED_SINCE);
         if (since == null) {
             return false;
@@ -610,6 +688,28 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         }
         // the header carries seconds, so a file changed within the second it was sent in is not "modified"
         return lastModified / 1000 <= date.getTime() / 1000;
+    }
+
+    /**
+     * The part of the file to answer with, once the peer's own copy has been taken into account. A
+     * {@code Range} resumes a download of a file the peer already holds part of, so a file which is no longer
+     * that one has to be sent whole rather than spliced into what it kept.
+     *
+     * @param request being answered
+     * @param size of the file
+     * @param etag of the file
+     * @param lastModified of the file
+     * @return the range to send, {@link ByteRange#UNSATISFIABLE}, or null for the whole file
+     */
+    private static ByteRange rangeOf(final HttpRequest request,
+                                     final long size,
+                                     final CharSequence etag,
+                                     final long lastModified) {
+        final HttpHeaders headers = request.headers();
+        if (!EntityTag.rangeApplies(headers.get(IF_RANGE), etag, lastModified)) {
+            return null;
+        }
+        return ByteRange.parse(headers.get(RANGE), size);
     }
 
     private void sendRegion(final ChannelHandlerContext ctx,
@@ -638,7 +738,6 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
         // the listener first: it is what closes things, and it must be there before anything which can fail
         complete(written, null, region::transferred, length, keepAlive, observer, head.status(), startedAt);
-        watch(ctx, written, region::transferred);
     }
 
     private void pump(final ChannelHandlerContext ctx,
@@ -649,12 +748,15 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                       final boolean keepAlive,
                       final HttpApiObserver observer,
                       final long startedAt) throws IOException {
-        ChunkedNioFile body = null;
+        ChunkedInput<ByteBuf> body = null;
         try {
-            body = new ChunkedNioFile(channel, offset, length, chunkSize);
-            // both of these can fail on a channel which is on its way out - the pipeline this is asked to
-            // change may no longer hold this handler - and an open file must not be what is left of that
-            ensureChunkedWrites(ctx);
+            // the writer first: the read-ahead body is woken through it, so it has to exist before one is
+            // made. Both of these can fail on a channel which is on its way out - the pipeline this is asked
+            // to change may no longer hold this handler - and an open file must not be what is left of that
+            final ChunkedWriteHandler writer = ensureChunkedWrites(ctx);
+            body = reads == null
+                    ? new ChunkedNioFile(channel, offset, length, chunkSize)
+                    : new ReadAheadFile(ctx, writer, reads, channel, offset, length, chunkSize);
             ctx.write(head);
         } catch (final IOException | RuntimeException error) {
             if (body != null) {
@@ -672,7 +774,6 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         // the listener first: it is what closes the body when the write never got as far as the handler which
         // would have closed it
         complete(written, body, body::progress, length, keepAlive, observer, head.status(), startedAt);
-        watch(ctx, written, body::progress);
     }
 
     /**
@@ -681,12 +782,17 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      * writes in one go have no use for.
      *
      * @param ctx of this handler
+     * @return the one this channel pumps through, which a {@link ReadAheadFile} needs to wake
      */
-    private static void ensureChunkedWrites(final ChannelHandlerContext ctx) {
+    private static ChunkedWriteHandler ensureChunkedWrites(final ChannelHandlerContext ctx) {
         final ChannelPipeline pipeline = ctx.pipeline();
-        if (pipeline.get(ChunkedWriteHandler.class) == null) {
-            pipeline.addBefore(ctx.name(), null, new ChunkedWriteHandler());
+        final ChunkedWriteHandler existing = pipeline.get(ChunkedWriteHandler.class);
+        if (existing != null) {
+            return existing;
         }
+        final ChunkedWriteHandler writer = new ChunkedWriteHandler();
+        pipeline.addBefore(ctx.name(), null, writer);
+        return writer;
     }
 
     private boolean zeroCopy(final ChannelHandlerContext ctx) {
@@ -727,39 +833,65 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         });
     }
 
-    private void watch(final ChannelHandlerContext ctx,
-                       final ChannelFuture written,
-                       final Progress progress) {
-        if (stallTimeoutMillis < 1) {
-            return;
-        }
+    /**
+     * Answers that the peer's own copy is still the file, and says which file that is: a {@code 304} carries
+     * the validators of the response it stands in for, or the copy it refreshes goes on being compared
+     * against the ones it was first given.
+     *
+     * @param ctx of this handler
+     * @param request being answered
+     * @param observer of this request, or null
+     * @param startedAt nanos the request was received at
+     * @param lastModified of the file
+     * @param etag of the file
+     */
+    private void respondNotModified(final ChannelHandlerContext ctx,
+                                    final HttpRequest request,
+                                    final HttpApiObserver observer,
+                                    final long startedAt,
+                                    final long lastModified,
+                                    final CharSequence etag) {
+        final FullHttpResponse response = new DefaultFullHttpResponse(
+                request.protocolVersion(), HttpResponseStatus.NOT_MODIFIED, Unpooled.EMPTY_BUFFER);
+        final boolean keepAlive;
         try {
-            new StallWatch(ctx, progress, stallTimeoutMillis).start(written);
-        } catch (final RejectedExecutionException shuttingDown) {
-            // the event loop is going, so the connection is going with it, and there is nothing left to watch
-            // for. Never worth failing a response which is already on its way over
-            ctx.close();
+            final HttpHeaders headers = response.headers();
+            headers.set(CONTENT_TYPE_OPTIONS, NOSNIFF);
+            headers.set(LAST_MODIFIED, DateFormatter.format(new Date(lastModified)));
+            headers.set(ETAG, etag);
+            keepAlive = keepAlive(ctx, request, headers);
+        } catch (final RuntimeException error) {
+            response.release();
+            throw error;
         }
+        complete(ctx.writeAndFlush(response), null, null, 0, keepAlive, observer,
+                HttpResponseStatus.NOT_MODIFIED, startedAt);
     }
 
-    private void respondEmpty(final ChannelHandlerContext ctx,
-                              final HttpRequest request,
-                              final HttpApiObserver observer,
-                              final long startedAt,
-                              final HttpResponseStatus status,
-                              final String contentRange,
-                              final int contentLength) {
+    /**
+     * Answers a {@code Range} which named a first byte the file does not have - the one range a server may
+     * not simply ignore - and says how large the file it was asked of really is.
+     *
+     * @param ctx of this handler
+     * @param request being answered
+     * @param observer of this request, or null
+     * @param startedAt nanos the request was received at
+     * @param size of the file
+     */
+    private void respondUnsatisfiable(final ChannelHandlerContext ctx,
+                                      final HttpRequest request,
+                                      final HttpApiObserver observer,
+                                      final long startedAt,
+                                      final long size) {
+        final HttpResponseStatus status = HttpResponseStatus.REQUESTED_RANGE_NOT_SATISFIABLE;
         final FullHttpResponse response = new DefaultFullHttpResponse(
                 request.protocolVersion(), status, Unpooled.EMPTY_BUFFER);
         final boolean keepAlive;
         try {
             final HttpHeaders headers = response.headers();
-            if (contentRange != null) {
-                headers.set(CONTENT_RANGE, contentRange);
-            }
-            if (contentLength > -1) {
-                headers.setInt(CONTENT_LENGTH, contentLength);
-            }
+            headers.set(CONTENT_TYPE_OPTIONS, NOSNIFF);
+            headers.set(CONTENT_RANGE, "bytes */" + size);
+            headers.setInt(CONTENT_LENGTH, 0);
             keepAlive = keepAlive(ctx, request, headers);
         } catch (final RuntimeException error) {
             response.release();
@@ -791,6 +923,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
         final boolean keepAlive;
         try {
             final HttpHeaders headers = response.headers();
+            headers.set(CONTENT_TYPE_OPTIONS, NOSNIFF);
             if (content.contentType() != null) {
                 headers.set(CONTENT_TYPE, content.contentType());
             }
@@ -846,63 +979,5 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     @FunctionalInterface
     private interface Progress {
         long get();
-    }
-
-    /**
-     * Gives up on a transfer whose peer has stopped taking it. Nothing is blocked while that happens - the
-     * write simply sits in the channel\'s outbound buffer - but it holds an open file until the connection
-     * goes, so at some point the connection has to be the thing that goes.
-     */
-    private static final class StallWatch implements Runnable {
-        private final ChannelHandlerContext ctx;
-        private final Progress progress;
-        private final long timeoutNanos;
-        private final long periodMillis;
-
-        private long written;
-        private long progressedAt;
-        private ScheduledFuture<?> scheduled;
-
-        private StallWatch(final ChannelHandlerContext ctx,
-                           final Progress progress,
-                           final int timeoutMillis) {
-            this.ctx = ctx;
-            this.progress = progress;
-            this.timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-            this.periodMillis = Math.max(1, timeoutMillis / 2);
-        }
-
-        private void start(final ChannelFuture completion) {
-            progressedAt = System.nanoTime();
-            scheduled = ctx.executor().scheduleWithFixedDelay(
-                    this,
-                    periodMillis,
-                    periodMillis,
-                    TimeUnit.MILLISECONDS
-            );
-            completion.addListener((ChannelFutureListener) done -> cancel());
-        }
-
-        @Override
-        public void run() {
-            final long now = progress.get();
-            if (now != written) {
-                written = now;
-                progressedAt = System.nanoTime();
-                return;
-            }
-            if (System.nanoTime() - progressedAt < timeoutNanos) {
-                return;
-            }
-            cancel();
-            ctx.close();
-        }
-
-        private void cancel() {
-            if (scheduled != null) {
-                scheduled.cancel(false);
-                scheduled = null;
-            }
-        }
     }
 }

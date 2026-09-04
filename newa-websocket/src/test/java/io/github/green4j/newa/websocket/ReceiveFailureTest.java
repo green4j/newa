@@ -110,9 +110,9 @@ class ReceiveFailureTest {
         final Observed observer = new Observed();
         final ClientSessions sessions = new ClientSessions(null, () -> observer);
 
-        final ClientSession session = newSession(sessions, (s, message) -> {
+        final ClientSession session = newSession(sessions, Receivers.ofText((s, message) -> {
             throw boom;
-        }, new EmbeddedChannel());
+        }), new EmbeddedChannel());
 
         session.receive("anything"); // and nothing comes back out of it
 
@@ -128,9 +128,9 @@ class ReceiveFailureTest {
         final ClientSessions sessions = new ClientSessions(null, () -> observer);
 
         final EmbeddedChannel channel = new EmbeddedChannel();
-        final ClientSession session = newSession(sessions, (s, message) -> {
+        final ClientSession session = newSession(sessions, Receivers.ofText((s, message) -> {
             throw new IllegalStateException("Boom");
-        }, channel);
+        }), channel);
 
         session.receive("anything");
 
@@ -156,7 +156,7 @@ class ReceiveFailureTest {
 
         final List<String> received = new ArrayList<>();
         final ClientSession session = newSession(sessions,
-                (s, message) -> received.add(message.toString()), new EmbeddedChannel());
+                Receivers.ofText((s, message) -> received.add(message.toString())), new EmbeddedChannel());
 
         session.receive("hello");
 
@@ -178,9 +178,9 @@ class ReceiveFailureTest {
             }
         });
 
-        final ClientSession session = newSession(sessions, (s, message) -> {
+        final ClientSession session = newSession(sessions, Receivers.ofText((s, message) -> {
             throw new IllegalStateException("Boom");
-        }, new EmbeddedChannel());
+        }), new EmbeddedChannel());
 
         session.receive("anything");
 

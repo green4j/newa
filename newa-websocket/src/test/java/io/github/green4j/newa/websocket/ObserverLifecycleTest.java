@@ -25,6 +25,9 @@
 package io.github.green4j.newa.websocket;
 
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -224,9 +227,17 @@ class ObserverLifecycleTest {
 
         Assertions.assertThrows(IllegalStateException.class, () -> newSession(sessions));
 
-        sessions.broadcast("hello"); // a session which was never assembled is not in the fan-out
+        sessions.broadcastText("hello"); // a session which was never assembled is not in the fan-out
 
-        Assertions.assertNull(channels.get(0).readOutbound());
+        final Object farewell = channels.get(0).readOutbound();
+        Assertions.assertInstanceOf(CloseWebSocketFrame.class, farewell,
+                "the only thing written is the status the session was closed with");
+        Assertions.assertEquals(WebSocketCloseStatus.INTERNAL_SERVER_ERROR.code(),
+                ((CloseWebSocketFrame) farewell).statusCode(),
+                "an api which threw on the way in is the server breaking, not the peer misbehaving");
+        ReferenceCountUtil.release(farewell);
+
+        Assertions.assertNull(channels.get(0).readOutbound(), "and the broadcast did not reach it");
         Assertions.assertEquals(List.of("closed"), observer.stages);
     }
 
@@ -250,7 +261,7 @@ class ObserverLifecycleTest {
     @Test
     void shouldReportAWriteWhichFailedAndTheSessionItEnded() {
         final Observed observer = new Observed();
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withObservers(() -> observer)
                 .build();
 

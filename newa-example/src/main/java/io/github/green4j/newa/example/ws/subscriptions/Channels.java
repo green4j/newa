@@ -78,8 +78,9 @@ public class Channels implements Receiver, Closeable {
     }
 
     @Override
-    public void receive(final ClientSession session,
-                        final CharSequence message) {
+    public void text(final ClientSession session,
+                     final CharSequence message,
+                     final boolean last) {
         final String[] command = message.toString().split(":");
         if (command.length != 3) {
             session.send("Error: invalid command format: " + message);

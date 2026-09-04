@@ -241,8 +241,9 @@ public final class NewaWsServer implements WsServer {
         }
 
         @Override
-        public void receive(final ClientSession session,
-                            final CharSequence message) {
+        public void text(final ClientSession session,
+                         final CharSequence message,
+                         final boolean last) {
             final String command = message.toString();
             if (!command.startsWith(WsPayload.SUBSCRIBE)) {
                 session.send("Error: expected " + WsPayload.SUBSCRIBE + "<channel>, got " + command);
@@ -323,7 +324,7 @@ public final class NewaWsServer implements WsServer {
 
             final ByteBuf frame = PooledByteBufAllocator.DEFAULT.directBuffer(buffer.length());
             frame.writeBytes(buffer.array(), buffer.start(), buffer.length());
-            publishAndRelease(frame); // published unconditionally, even into an empty channel: skipping
+            publishTextAndRelease(frame); // published unconditionally, even into an empty channel: skipping
             // the call would skip the bump of the sequence, and the numbers a subscriber counts holes by
             // would then stop meaning what they say
         }
@@ -337,7 +338,7 @@ public final class NewaWsServer implements WsServer {
             }
             // a buffer of its own, because this thread may not touch the publisher's. Once per
             // subscription, off the measured window, so what it allocates is nobody's cost
-            session.send(Unpooled.wrappedBuffer(
+            session.sendText(Unpooled.wrappedBuffer(
                     WsPayload.render(channel, sequence, System.nanoTime(), pad)));
         }
     }

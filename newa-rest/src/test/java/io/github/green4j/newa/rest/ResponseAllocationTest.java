@@ -39,6 +39,8 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Response content is copied into a buffer taken from the channel's allocator rather than into a heap buffer
@@ -53,6 +55,8 @@ class ResponseAllocationTest {
     private static final byte[] BYTES = "0123456789".getBytes(StandardCharsets.US_ASCII);
 
     private final ByteBuffer byteBufferContent = ByteBuffer.wrap(BYTES);
+
+    private final List<Throwable> reported = new ArrayList<>();
 
     private UnpooledByteBufAllocator allocator;
     private EmbeddedChannel channel;
@@ -110,9 +114,7 @@ class ResponseAllocationTest {
                 new RestApiHandler(
                         buildTestApi(),
                         new JsonErrorHandler(),
-                        (ch, cause) -> {
-                            throw new AssertionError(cause);
-                        }
+                        (ch, cause) -> reported.add(cause)
                 )
         );
         channel.config().setAllocator(allocator);
@@ -122,6 +124,7 @@ class ResponseAllocationTest {
     @AfterEach
     public void tearDown() {
         channel.finishAndReleaseAll();
+        Assertions.assertTrue(reported.isEmpty(), "unexpected channel error: " + reported);
     }
 
     private long usedMemory() {
@@ -232,18 +235,20 @@ class ResponseAllocationTest {
     @Test
     public void testHandlerFailingAfterWritingLeavesTheWrittenResponseIntact() {
         final FullHttpResponse written = get("/v1/fails-after-writing");
-        final FullHttpResponse error = channel.readOutbound();
-        Assertions.assertNotNull(error, "the failure must still be reported");
         try {
             // the first response was handed to the pipeline before the failure, so it must be readable
             Assertions.assertEquals(200, written.status().code());
             Assertions.assertEquals("0123456789",
                     written.content().toString(StandardCharsets.UTF_8));
-            Assertions.assertEquals(500, error.status().code());
         } finally {
             written.release();
-            error.release();
         }
+        // the answer has gone out, so the failure has no response left to be told in: a 500 written after
+        // it would be read by the peer as the answer to its next request. See SingleResponseTest
+        Assertions.assertNull(channel.readOutbound(), "one request is answered once");
+        Assertions.assertEquals(1, reported.size(), "and the failure is still told, to the channel");
+        reported.clear();
+
         Assertions.assertEquals(0, usedMemory());
     }
 

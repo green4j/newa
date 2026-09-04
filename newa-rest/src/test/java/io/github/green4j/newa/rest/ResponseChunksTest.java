@@ -36,7 +36,6 @@ class ResponseChunksTest {
         final ResponseChunks chunks = ResponseChunks.defaults();
 
         Assertions.assertEquals(ResponseChunks.DEFAULT_SIZE, chunks.size());
-        Assertions.assertEquals(ResponseChunks.DEFAULT_STALL_TIMEOUT_MILLIS, chunks.stallTimeoutMillis());
         Assertions.assertEquals(ResponseChunks.UNLIMITED_OPEN_CURSORS, chunks.maxOpenCursors());
     }
 
@@ -44,12 +43,10 @@ class ResponseChunksTest {
     public void testValuesComeFromTheBuilder() {
         final ResponseChunks chunks = ResponseChunks.builder()
                 .size(128 * 1024)
-                .stallTimeoutMillis(5_000)
                 .maxOpenCursors(7)
                 .build();
 
         Assertions.assertEquals(128 * 1024, chunks.size());
-        Assertions.assertEquals(5_000, chunks.stallTimeoutMillis());
         Assertions.assertEquals(7, chunks.maxOpenCursors());
     }
 
@@ -57,12 +54,10 @@ class ResponseChunksTest {
     public void testNonsensicalValuesAreBroughtBackIntoRange() {
         final ResponseChunks chunks = ResponseChunks.builder()
                 .size(1)
-                .stallTimeoutMillis(-1)
                 .maxOpenCursors(-1)
                 .build();
 
         Assertions.assertTrue(chunks.size() >= 256);
-        Assertions.assertEquals(0, chunks.stallTimeoutMillis());
         Assertions.assertEquals(ResponseChunks.UNLIMITED_OPEN_CURSORS, chunks.maxOpenCursors());
     }
 

@@ -27,7 +27,6 @@ package io.github.green4j.newa.example.rest.chunked;
 import io.github.green4j.newa.example.rest.StdOutRestApiObserver;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.PushedResponseBody;
-import io.github.green4j.newa.rest.ResponseChunks;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestContext;
@@ -83,11 +82,6 @@ public class ScheduledChunkedRestServer {
     private static final AsciiString NO_STORE = AsciiString.cached("no-store");
 
     private static final DateTimeFormatter HH_MM_SS = DateTimeFormatter.ofPattern("HH:mm:ss");
-
-    private static final ResponseChunks CHUNKS = ResponseChunks.builder()
-            // a tick is due every second, so a minute without one means the peer is gone, not merely slow
-            .stallTimeoutMillis(60_000)
-            .build();
 
     private static final String CLOCK_PAGE =
             "<!doctype html><meta charset=\"utf-8\"><title>Clock</title>"
@@ -177,8 +171,10 @@ public class ScheduledChunkedRestServer {
         final RestApi api = buildApi();
 
         life.run(() -> {
+            // nothing is set about giving up on a peer, and nothing needs to be: a clock which sends a line
+            // a second owes the peer nothing between ticks, and the response deadline only runs while
+            // something written has not reached it
             final NettyServer server = RestServer.of(api)
-                    .withResponseChunks(CHUNKS)
                     .withObservers(StdOutRestApiObserver.factory())
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 

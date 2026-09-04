@@ -24,6 +24,8 @@
 
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
+import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
@@ -151,15 +153,17 @@ class RestServerTest {
     public void filesAreServedInFrontOfTheApiAndStayUncompressed() throws Exception {
         writeFile();
 
+        final FileSet files = FileSet.builder().serve("/files", filesRoot).build();
+
         server = RestServer.of(buildApi())
-                .withFiles(FileSet.builder().serve("/files", filesRoot).build())
+                .withHandler(() -> new FileServerHandler(files))
                 .withCompression()
                 .start(0);
 
         final HttpResponse<byte[]> file = get("/files/thing.txt");
         Assertions.assertEquals(200, file.statusCode());
-        // the compressor sits behind the file handler, so it never sees a file - which is what keeps
-        // sendfile(2) available
+        // the compressor sits behind everything withHandler added, so it never sees a file - which is
+        // what keeps sendfile(2) available for a file handler put there
         Assertions.assertTrue(file.headers().firstValue("Content-Encoding").isEmpty());
         Assertions.assertEquals(FILE_BODY, new String(file.body(), StandardCharsets.UTF_8));
 
@@ -184,6 +188,58 @@ class RestServerTest {
                 HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE.code(),
                 response.statusCode()
         );
+    }
+
+    @Test
+    public void maxInitialLineLengthIsHonoured() throws Exception {
+        final String longName = repeated('a', 5000);
+
+        server = RestServer.start(0, buildApi());
+        Assertions.assertEquals(
+                HttpResponseStatus.REQUEST_URI_TOO_LONG.code(),
+                get("/v1/hello/" + longName).statusCode()
+        );
+        server.close();
+
+        server = RestServer.of(buildApi()).withMaxInitialLineLength(16 * 1024).start(0);
+        final HttpResponse<byte[]> raised = get("/v1/hello/" + longName);
+        Assertions.assertEquals(200, raised.statusCode());
+        Assertions.assertEquals("\"Hello " + longName + "!\"", text(raised));
+    }
+
+    @Test
+    public void maxHeaderSizeIsHonoured() throws Exception {
+        server = RestServer.start(0, buildApi());
+        Assertions.assertEquals(
+                HttpResponseStatus.REQUEST_HEADER_FIELDS_TOO_LARGE.code(),
+                getWithABigHeader().statusCode()
+        );
+        server.close();
+
+        server = RestServer.of(buildApi()).withMaxHeaderSize(32 * 1024).start(0);
+        final HttpResponse<byte[]> raised = getWithABigHeader();
+        Assertions.assertEquals(200, raised.statusCode());
+        Assertions.assertEquals("\"Hello world!\"", text(raised));
+    }
+
+    private HttpResponse<byte[]> getWithABigHeader() throws Exception {
+        return httpClient.send(
+                java.net.http.HttpRequest.newBuilder()
+                        .uri(URI.create("http://" + HOST + ":" + server.port() + "/v1/hello/world"))
+                        .header("X-Big", repeated('a', 10_000))
+                        .GET()
+                        .build(),
+                BodyHandlers.ofByteArray()
+        );
+    }
+
+    private static String repeated(final char of,
+                                   final int times) {
+        final StringBuilder result = new StringBuilder(times);
+        for (int i = 0; i < times; i++) {
+            result.append(of);
+        }
+        return result.toString();
     }
 
     @Test
@@ -217,30 +273,36 @@ class RestServerTest {
         // client already has the body - the count is what this waits on rather than the assertion
         final CountDownLatch bothCompleted = new CountDownLatch(2);
 
+        final FileSet files = FileSet.builder().serve("/files", filesRoot).build();
+        // one factory for both, which is what makes a request observed once wherever it was answered: the
+        // file handler is built here, so it is this call which hands it the same one the api gets
+        final RestApiObserverFactory observers = () -> new RestApiObserver() {
+            private String uri;
+
+            @Override
+            public void onRequestReceived(final ChannelHandlerContext ctx,
+                                          final HttpRequest request) {
+                uri = request.uri();
+            }
+
+            @Override
+            public void onHandlingStarted(final RestContext context) {
+                routed.add(context.pathExpression());
+            }
+
+            @Override
+            public void onRequestCompleted(final HttpResponseStatus status,
+                                           final long bytes,
+                                           final long nanos) {
+                completed.add(uri);
+                bothCompleted.countDown();
+            }
+        };
+
         server = RestServer.of(buildApi())
-                .withFiles(FileSet.builder().serve("/files", filesRoot).build())
-                .withObservers((RestApiObserverFactory) () -> new RestApiObserver() {
-                    private String uri;
-
-                    @Override
-                    public void onRequestReceived(final ChannelHandlerContext ctx,
-                                                  final HttpRequest request) {
-                        uri = request.uri();
-                    }
-
-                    @Override
-                    public void onHandlingStarted(final RestContext context) {
-                        routed.add(context.pathExpression());
-                    }
-
-                    @Override
-                    public void onRequestCompleted(final HttpResponseStatus status,
-                                                   final long bytes,
-                                                   final long nanos) {
-                        completed.add(uri);
-                        bothCompleted.countDown();
-                    }
-                })
+                .withHandler(() -> new FileServerHandler(
+                        files, new JsonErrorHandler(), new StdErrChannelErrorHandler(), observers))
+                .withObservers(observers)
                 .start(0);
 
         Assertions.assertEquals(200, get("/v1/hello/world").statusCode());

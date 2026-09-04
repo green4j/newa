@@ -25,6 +25,7 @@
 package io.github.green4j.newa.rest;
 
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.QueryStringDecoder;
 
 public final class RestApi implements RestRouter {
@@ -59,6 +60,8 @@ public final class RestApi implements RestRouter {
     private final ThreadLocalMatchers putMatchers;
     private final ThreadLocalMatchers deleteMatchers;
     private final ThreadLocalMatchers patchMatchers;
+    private final ThreadLocalMatchers headMatchers;
+    private final ThreadLocalMatchers optionsMatchers;
 
     RestApi(final RestApiBuilder builder) {
         this.builder = builder;
@@ -68,6 +71,8 @@ public final class RestApi implements RestRouter {
         putMatchers = new ThreadLocalMatchers(builder.put().prepareMatcher());
         deleteMatchers = new ThreadLocalMatchers(builder.delete().prepareMatcher());
         patchMatchers = new ThreadLocalMatchers(builder.patch().prepareMatcher());
+        headMatchers = new ThreadLocalMatchers(builder.head().prepareMatcher());
+        optionsMatchers = new ThreadLocalMatchers(builder.options().prepareMatcher());
     }
 
     public boolean hasHelp() {
@@ -83,18 +88,44 @@ public final class RestApi implements RestRouter {
         return helpEndpoint.pathExpression();
     }
 
+    /**
+     * Routes a request to the endpoint which answers it. Every method is looked up among the endpoints
+     * registered for it alone, except {@code HEAD}: a {@code HEAD} which finds no endpoint of its own falls
+     * back to the {@code GET} one for that path, which is what makes every path served on {@code GET}
+     * answer {@code HEAD} as well. The handler renders the whole response there and the codec drops the
+     * body, so the length the peer is told is the length it would have been sent.
+     *
+     * @param request to route.
+     * @return the endpoint which answers it, and the path parameters it was matched with.
+     * @throws MethodNotAllowedException if the API serves nothing on that method at all.
+     * @throws PathNotFoundException if it serves nothing on that path.
+     */
     public RestHandling resolve(final FullHttpRequest request)
             throws MethodNotAllowedException, PathNotFoundException {
         final String method = request.method().name();
+        final boolean head = HttpMethod.HEAD.equals(request.method());
+
         final PathMatcher<RestHandle> pathMatcher = getThreadLocalMethodPathMatcher(method);
-        if (pathMatcher == null) {
+        if (pathMatcher == null && !head) {
             throw new MethodNotAllowedException(method);
         }
 
         final QueryStringDecoder qsd = new QueryStringDecoder(request.uri());
-        final PathMatcher<RestHandle>.Result match = pathMatcher.match(qsd.path());
+        final String path = qsd.path();
+
+        PathMatcher<RestHandle>.Result match = pathMatcher == null ? null : pathMatcher.match(path);
+
+        if (match == null && head) {
+            final PathMatcher<RestHandle> getMatcher = getMatchers.get();
+            if (getMatcher == null) {
+                // nothing is served on GET either, so this API has no answer to a HEAD at all
+                throw new MethodNotAllowedException(method);
+            }
+            match = getMatcher.match(path);
+        }
+
         if (match == null) {
-            throw new PathNotFoundException(qsd.path());
+            throw new PathNotFoundException(path);
         }
 
         return new RestHandling(match.handler(), match, match.pathExpression());
@@ -112,6 +143,10 @@ public final class RestApi implements RestRouter {
                 return deleteMatchers.get();
             case "PATCH":
                 return patchMatchers.get();
+            case "HEAD":
+                return headMatchers.get();
+            case "OPTIONS":
+                return optionsMatchers.get();
             default:
                 break;
         }

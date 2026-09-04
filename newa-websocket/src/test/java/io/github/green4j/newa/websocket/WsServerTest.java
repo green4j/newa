@@ -29,6 +29,7 @@ import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -82,14 +83,43 @@ class WsServerTest {
 
     private static WsApi echoApi(final String pathPrefix,
                                  final int version) {
-        return new SimpleWsApiBuilder(version)
+        return new WsApiBuilder(version)
                 .withPathPrefix(pathPrefix)
-                .withReceiver((session, message) -> session.send(message))
+                .withReceiver(Receivers.echo())
                 .build();
+    }
+
+    /**
+     * Answers every request the handshake handler passed on, which is how one port serves both.
+     *
+     * @return a handler of one channel.
+     */
+    private static ChannelHandler health() {
+        return new SimpleChannelInboundHandler<FullHttpRequest>() {
+            @Override
+            protected void channelRead0(final ChannelHandlerContext ctx,
+                                        final FullHttpRequest request) {
+                final FullHttpResponse response = new DefaultFullHttpResponse(
+                        HttpVersion.HTTP_1_1,
+                        HttpResponseStatus.OK,
+                        Unpooled.copiedBuffer(HEALTH_BODY, StandardCharsets.UTF_8)
+                );
+                response.headers().set(HttpHeaderNames.CONTENT_LENGTH,
+                        response.content().readableBytes());
+                ctx.writeAndFlush(response);
+            }
+        };
     }
 
     private String echoOnce(final String path,
                             final String sent) throws Exception {
+        return echoOnce(path, sent, null, null);
+    }
+
+    private String echoOnce(final String path,
+                            final String sent,
+                            final String headerName,
+                            final String headerValue) throws Exception {
         final CompletableFuture<String> received = new CompletableFuture<>();
 
         final WebSocket.Listener listener = new WebSocket.Listener() {
@@ -109,11 +139,16 @@ class WsServerTest {
             }
         };
 
-        HttpClient.newBuilder()
+        final WebSocket.Builder handshake = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build()
-                .newWebSocketBuilder()
-                .buildAsync(URI.create("ws://" + HOST + ":" + server.port() + path), listener)
+                .newWebSocketBuilder();
+
+        if (headerName != null) {
+            handshake.header(headerName, headerValue);
+        }
+
+        handshake.buildAsync(URI.create("ws://" + HOST + ":" + server.port() + path), listener)
                 .get(10, TimeUnit.SECONDS);
 
         return received.get(10, TimeUnit.SECONDS);
@@ -153,6 +188,65 @@ class WsServerTest {
     }
 
     @Test
+    public void maxHeaderSizeIsHonoured() throws Exception {
+        // the handshake is the one HTTP request a session makes, and a browser's cookies for this origin
+        // travel in it - which is what reaches this limit first
+        final String big = repeated('a', 10_000);
+
+        server = WsServer.start(0, echoApi("ws", 1));
+        Assertions.assertThrows(
+                ExecutionException.class,
+                () -> echoOnce("/ws/v1", "too big a handshake", "X-Big", big)
+        );
+        server.close();
+
+        server = WsServer.of(echoApi("ws", 1)).withMaxHeaderSize(32 * 1024).start(0);
+        Assertions.assertEquals("room for it", echoOnce("/ws/v1", "room for it", "X-Big", big));
+    }
+
+    @Test
+    public void maxInitialLineLengthIsHonoured() throws Exception {
+        // the handshake path is the api's and is short, so what reaches this limit here is a request the
+        // handshake handler passed on - a rest api sharing the port
+        final String longPath = "/health/" + repeated('a', 5000);
+
+        server = WsServer.of(echoApi("ws", 1)).withHandler(WsServerTest::health).start(0);
+        Assertions.assertEquals(
+                HttpResponseStatus.REQUEST_URI_TOO_LONG.code(),
+                get(longPath).statusCode()
+        );
+        server.close();
+
+        server = WsServer.of(echoApi("ws", 1))
+                .withHandler(WsServerTest::health)
+                .withMaxInitialLineLength(16 * 1024)
+                .start(0);
+
+        final HttpResponse<String> answered = get(longPath);
+        Assertions.assertEquals(200, answered.statusCode());
+        Assertions.assertEquals(HEALTH_BODY, answered.body());
+    }
+
+    private HttpResponse<String> get(final String path) throws Exception {
+        return HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder()
+                        .uri(URI.create("http://" + HOST + ":" + server.port() + path))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+    }
+
+    private static String repeated(final char of,
+                                   final int times) {
+        final StringBuilder result = new StringBuilder(times);
+        for (int i = 0; i < times; i++) {
+            result.append(of);
+        }
+        return result.toString();
+    }
+
+    @Test
     public void echoesWithCompressionEnabled() throws Exception {
         // the JDK client does not negotiate permessage-deflate, so what this catches is a compression
         // handler which breaks a handshake that never asked for it
@@ -165,9 +259,9 @@ class WsServerTest {
     public void observersOfTheApiAreReached() throws Exception {
         final List<String> stages = new CopyOnWriteArrayList<>();
 
-        final WsApi api = new SimpleWsApiBuilder(1)
+        final WsApi api = new WsApiBuilder(1)
                 .withPathPrefix("ws")
-                .withReceiver((session, message) -> session.send(message))
+                .withReceiver(Receivers.echo())
                 .withObservers(() -> new WsApiObserver() {
                     @Override
                     public void onSessionOpened(final ClientSession session) {
@@ -201,20 +295,7 @@ class WsServerTest {
 
         server = WsServer.of(echoApi("ws", 1))
                 .withChannelErrorHandler(errors)
-                .withHandler(() -> new SimpleChannelInboundHandler<FullHttpRequest>() {
-                    @Override
-                    protected void channelRead0(final ChannelHandlerContext ctx,
-                                                final FullHttpRequest request) {
-                        final FullHttpResponse response = new DefaultFullHttpResponse(
-                                HttpVersion.HTTP_1_1,
-                                HttpResponseStatus.OK,
-                                Unpooled.copiedBuffer(HEALTH_BODY, StandardCharsets.UTF_8)
-                        );
-                        response.headers().set(HttpHeaderNames.CONTENT_LENGTH,
-                                response.content().readableBytes());
-                        ctx.writeAndFlush(response);
-                    }
-                })
+                .withHandler(WsServerTest::health)
                 .start(0);
 
         final HttpResponse<String> health = HttpClient.newHttpClient().send(

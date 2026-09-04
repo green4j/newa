@@ -25,6 +25,7 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.jelly.JsonGenerator;
+import io.github.green4j.newa.server.ResponseDeadlineHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -65,6 +66,9 @@ class SlowConsumerChunkedTest {
     private static final String HOST = "127.0.0.1";
     private static final String ITEM = "0123456789abcdef".repeat(16);
     private static final int TINY_SOCKET_BUFFER = 4 * 1024;
+
+    /** A second instead of the default thirty, so that giving up on a peer can be watched. */
+    private static final int STALL_TIMEOUT_MS = 1000;
     private static final int STALLED_CONSUMERS = 20;
 
     private static final AtomicLong STEPS = new AtomicLong();
@@ -124,6 +128,9 @@ class SlowConsumerChunkedTest {
                 65536,
                 true
         ));
+        // a second instead of the default thirty, so that giving up on a peer can be watched. In a pipeline
+        // built by RestServer this is withResponseDeadlineMs
+        pipeline.addLast(new ResponseDeadlineHandler(STALL_TIMEOUT_MS));
         pipeline.addLast(
                 new RestApiHandler(
                         api,
@@ -150,10 +157,7 @@ class SlowConsumerChunkedTest {
 
         final RestApi api = buildTestApi();
 
-        // a second instead of the default thirty, so the watchdog can be watched
-        chunks = ResponseChunks.builder()
-                .stallTimeoutMillis(1000)
-                .build();
+        chunks = ResponseChunks.defaults();
 
         final ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.group(bossGroup, workerGroup)

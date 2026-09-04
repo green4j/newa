@@ -33,7 +33,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <pre>{@code
  * ResponseChunks chunks = ResponseChunks.builder()
  *         .size(128 * 1024)
- *         .stallTimeoutMillis(10_000)
  *         .maxOpenCursors(256)
  *         .build();
  * }</pre>
@@ -46,16 +45,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * That leaves the peer which stops reading. Nothing is blocked by it - the cursor is simply not stepped - but
  * a cursor which is never stepped again is a database snapshot, a file handle or a lock held for as long as
- * the connection lingers, which for a peer that vanished without a FIN can be hours. Two things bound that:
+ * the connection lingers, which for a peer that vanished without a FIN can be hours. Two things bound that,
+ * and only one of them is here:
  * <ul>
- *   <li>{@link #stallTimeoutMillis()} - a response which has not got a single chunk out within it is
- *       abandoned and its connection closed. Counting whole chunks rather than bytes catches both the peer
- *       which stopped dead and the one reading at a trickle, and never punishes a response which is merely
- *       large.</li>
  *   <li>{@link #maxOpenCursors()} - a request which would open one cursor too many is answered
  *       {@code 503 Service Unavailable} before its cursor is opened at all, so the resource is never taken.
  *       Unlimited by default: what a cursor holds is yours to know, and refusing requests is not something to
  *       start doing behind your back.</li>
+ *   <li>{@link io.github.green4j.newa.server.ResponseDeadlineHandler}, in the pipeline rather than in this
+ *       policy, closes a connection whose peer has stopped taking what was written to it - a chunk per
+ *       window, which is what a chunked response has always been given here. It is not a property of chunked
+ *       responses and never was: a file and an ordinary response are owed the same judgement, and one handler
+ *       is where all three get it. {@code RestServer.withResponseDeadlineMs} sets it.</li>
  * </ul>
  */
 public final class ResponseChunks {
@@ -64,13 +65,6 @@ public final class ResponseChunks {
      * the per-chunk write, flush and chunk header are negligible against the payload.
      */
     public static final int DEFAULT_SIZE = 64 * 1024;
-
-    /**
-     * Long enough that an ordinary pause - a client working through what it already has, a network hiccup -
-     * is not mistaken for a peer which is gone; short enough that a cursor is not held for the lifetime of a
-     * half-open connection.
-     */
-    public static final int DEFAULT_STALL_TIMEOUT_MILLIS = 30_000;
 
     /**
      * No limit, which is what the framework itself needs: a suspended cursor costs it one buffer. Set it to
@@ -95,7 +89,6 @@ public final class ResponseChunks {
 
     public static final class Builder {
         private int size = DEFAULT_SIZE;
-        private int stallTimeoutMillis = DEFAULT_STALL_TIMEOUT_MILLIS;
         private int maxOpenCursors = UNLIMITED_OPEN_CURSORS;
 
         private Builder() {
@@ -111,16 +104,6 @@ public final class ResponseChunks {
         }
 
         /**
-         * @param millis a response may go without getting a chunk out before it is abandoned; zero to let it
-         *               go without one for as long as its connection lives
-         * @return this
-         */
-        public Builder stallTimeoutMillis(final int millis) {
-            this.stallTimeoutMillis = Math.max(0, millis);
-            return this;
-        }
-
-        /**
          * @param cursors that may be open at once across the whole server, or
          *                {@link #UNLIMITED_OPEN_CURSORS}
          * @return this
@@ -131,21 +114,18 @@ public final class ResponseChunks {
         }
 
         public ResponseChunks build() {
-            return new ResponseChunks(size, stallTimeoutMillis, maxOpenCursors);
+            return new ResponseChunks(size, maxOpenCursors);
         }
     }
 
     private final int size;
-    private final int stallTimeoutMillis;
     private final int maxOpenCursors;
 
     private final AtomicInteger openCursors = new AtomicInteger();
 
     private ResponseChunks(final int size,
-                           final int stallTimeoutMillis,
                            final int maxOpenCursors) {
         this.size = size;
-        this.stallTimeoutMillis = stallTimeoutMillis;
         this.maxOpenCursors = maxOpenCursors;
     }
 
@@ -155,14 +135,6 @@ public final class ResponseChunks {
      */
     public int size() {
         return size;
-    }
-
-    /**
-     * @return how long, in milliseconds, a chunked response may go without getting a chunk out before it is
-     *         abandoned and its cursor released; zero if it may go without one indefinitely
-     */
-    public int stallTimeoutMillis() {
-        return stallTimeoutMillis;
     }
 
     /**

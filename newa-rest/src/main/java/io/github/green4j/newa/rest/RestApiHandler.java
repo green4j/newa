@@ -25,6 +25,8 @@
 package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
+import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -38,6 +40,8 @@ public class RestApiHandler
     private final ResponseChunks responseChunks;
     private final HttpApiObserverFactory observers;
     private final RestApiObserverFactory restObservers;
+
+    private ChunkedResponseBody stalling;
 
     public RestApiHandler(final RestRouter restApi,
                           final HttpErrorHandler errorHandler,
@@ -75,6 +79,46 @@ public class RestApiHandler
                 : null;
     }
 
+    /**
+     * Says that the peer stopped taking the response being written, so that the cursor behind it reports
+     * having been given up on rather than looking like an ordinary disconnect. The event comes from
+     * {@link ResponseDeadlineHandler}, which knows that nothing is reaching the peer and not what was being
+     * sent; this is the other half of that.
+     *
+     * @param ctx of this handler.
+     * @param evt which happened on this channel.
+     */
+    @Override
+    public void userEventTriggered(final ChannelHandlerContext ctx,
+                                   final Object evt) throws Exception {
+        if (evt == ResponseDeadlineHandler.RESPONSE_STALLED && stalling != null) {
+            stalling.markStalled();
+        }
+        super.userEventTriggered(ctx, evt);
+    }
+
+    /**
+     * @param body being written a chunk at a time, or null once it is no longer being written.
+     */
+    void stalling(final ChunkedResponseBody body) {
+        stalling = body;
+    }
+
+    /**
+     * The one way anything here reaches the {@link ChannelErrorHandler}: a failure of the channel rather
+     * than of a request, and a handler answering one request twice, which is a mistake of this server and
+     * not an answer to give the peer.
+     *
+     * @param channel it happened on
+     * @param cause of it
+     */
+    void report(final Channel channel,
+                final Throwable cause) {
+        if (channelErrorHandler != null) {
+            channelErrorHandler.onError(channel, cause);
+        }
+    }
+
     @Override
     public void channelRead0(final ChannelHandlerContext ctx,
                              final FullHttpRequest request) {
@@ -96,6 +140,7 @@ public class RestApiHandler
         final RestResult result = new RestResult(
                 ctx,
                 request,
+                this,
                 errorHandler,
                 responseChunks,
                 observer
@@ -146,9 +191,7 @@ public class RestApiHandler
     public void exceptionCaught(final ChannelHandlerContext ctx,
                                 final Throwable cause) {
         try {
-            if (channelErrorHandler != null) {
-                channelErrorHandler.onError(ctx.channel(), cause);
-            }
+            report(ctx.channel(), cause);
         } finally {
             ctx.close();
         }

@@ -25,19 +25,25 @@ new Life().run(() -> RestServer.start(9009, api));   // REST, GET /v1/hello/worl
 ```
 
 ```java
-WsApi api = new SimpleWsApiBuilder(1)
-        .withReceiver((session, message) -> session.send(message))
+WsApi api = new WsApiBuilder(1)
+        .withReceiver(new Receiver() {
+            @Override
+            public void text(ClientSession session, CharSequence message, boolean last) {
+                session.sendText(message);
+            }
+        })
         .build();
 
 new Life().run(() -> WsServer.start(9010, api));     // WebSocket, echoing
 ```
 
-`RestServer` and `WsServer` assemble the documented pipeline out of the same public handlers, on a
-`NettyServerBuilder` which picks the best transport this machine has and a worker per core. `Life` opens the
+`RestServer`, `FileServer` and `WsServer` assemble the documented pipeline out of the same public handlers,
+on a `NettyServerBuilder` which picks the best transport this machine has and a worker per core. `Life` opens the
 server, parks the main thread until it should stop, closes it, and does the same when the JVM is going down. Everything is
-still yours to take over: `NettyServerBuilder` for the transport, the threads and the channel options, and
-`RestServer.pipeline()` / `WsServer.pipeline()` - or a hand-written pipeline - for what runs above the
-socket. The module READMEs document both, and `newa-example` has a server of each shape:
+still yours to take over: `NettyServerBuilder` for the transport, the threads, the channel options and how
+many connections a server will hold at once, and
+`RestServer.pipeline()` / `FileServer.pipeline()` / `WsServer.pipeline()` - or a hand-written pipeline - for
+what runs above the socket. The module READMEs document both, and `newa-example` has a server of each shape:
 `rest.pipeline.PipelineRestServer` and `ws.pipeline.PipelineWsServer` are the ones assembled from scratch.
 
 Both in one process is `Life.all(...)`, which runs any number of them as one - opened in the order given,

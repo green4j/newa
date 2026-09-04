@@ -68,4 +68,22 @@ public interface RestEndpointer {
 
     Endpoint patchTxt(String pathExpression,
                       TxtRestHandle handle);
+
+    Endpoint head(String pathExpression,
+                  RestHandle handle);
+
+    Endpoint headJson(String pathExpression,
+                      JsonRestHandle handle);
+
+    Endpoint headTxt(String pathExpression,
+                     TxtRestHandle handle);
+
+    Endpoint options(String pathExpression,
+                     RestHandle handle);
+
+    Endpoint optionsJson(String pathExpression,
+                         JsonRestHandle handle);
+
+    Endpoint optionsTxt(String pathExpression,
+                        TxtRestHandle handle);
 }
