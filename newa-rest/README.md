@@ -601,7 +601,7 @@ only ever safe where something can rebuild what was dropped.
 
 Two things happen when a request ends badly, and they are separate on purpose: something is **rendered** for
 the client, and something is **reported** for a log or a metric. The first is an `HttpErrorHandler`, the second
-an `HttpApiObserver`. A response never carries what only a log should have.
+an `HttpObserver`. A response never carries what only a log should have.
 
 ### What the client is told
 
@@ -674,6 +674,7 @@ Every error is reported exactly once, by the stage which knows most about it. Co
 |---|---|
 | nothing served the request, `404` / `405` - API or files | `onRequestNotRouted(HttpException)` |
 | a handler threw, or the file server failed | `onResponseFailed(status, cause)`, the cause as it was thrown |
+| a file was cut short - truncated under the transfer, or the peer went away mid-download | `onResponseFailed(status, cause)`, with the status the head already promised, and the connection goes |
 | a chunked response was refused, `503` | `onCursorRefused(openCursors)`, and `onResponseFailed` for the response |
 | a chunked response stalled or was abandoned | `onCursorClosed(..., Outcome)` |
 | the `HttpErrorHandler` itself threw | `ChannelErrorHandler`, and the connection goes: the response cannot be written |
@@ -681,17 +682,21 @@ Every error is reported exactly once, by the stage which knows most about it. Co
 | the body was larger than `maxContentLength` | answered `413` by Netty's aggregator, ahead of any of this |
 | the request line or the headers were past their limits | answered `414` / `431` by `DecoderFailureHandler` and the connection closed, ahead of any of this |
 
-`onRequestNotRouted` and `onResponseFailed` are both on `HttpApiObserver`, so a plain observer sees the
-failures of the API and of the file server alike.
+`onRequestNotRouted` and `onResponseFailed` are both on `HttpObserver`, so a plain observer sees the
+failures of the API and of the file server alike. For a request which reached an endpoint it also falls
+inside the handling bracket, so it is the failing close of that bracket as well - however the handle ended in
+it, throwing or declaring.
 
 ## Observing
 
 The library keeps no metrics. It reports, and what that turns into is yours. One observer per request, made by
 a factory - `RestServer.withObservers(factory)`, or the `RestApiHandler` constructor which takes one. The
-same factory reaches the file handler too, so a request is observed once wherever it is answered:
+same factory reaches the file handler too, so a request is observed once wherever it is answered - and
+`HttpObserver` is what a file request is observed through, every method of it: the file server serves,
+refuses and fails through the same four stages an endpoint does.
 
 ```java
-public class AccessLog implements HttpApiObserver {
+public class AccessLog implements HttpObserver {
     private HttpMethod method;
     private String uri;
 
@@ -718,26 +723,50 @@ requests never means adding two events up. `bytes` is the body as the source pro
 the transfer encoding adds.
 
 `onRequestNotRouted` and `onResponseFailed` are on this interface too - see `## Errors` for which failure
-reaches which. `RestApiObserver extends HttpApiObserver` adds the stages after routing - pass a
+reaches which. `RestApiObserver extends HttpObserver` adds the stages after routing - pass a
 `RestApiObserverFactory` to get them:
 
+One rule orders all of it: **`onRequestCompleted` is outermost, brackets nest and never cross, and a failure
+is reported before the close of its own level.**
+
 ```
+in one piece:   onRequestReceived -> onHandlingStarted -> onHandlingFinished -> onRequestCompleted
+handler failed: onRequestReceived -> onHandlingStarted -> onResponseFailed
+                                                       -> onHandlingFinished -> onRequestCompleted
+chunked:        onRequestReceived -> onHandlingStarted -> onCursorOpened -> onChunkWritten*
+                                  -> onCursorClosed -> onHandlingFinished -> onRequestCompleted
+refused (503):  onRequestReceived -> onHandlingStarted -> onCursorRefused -> onResponseFailed
+                                                       -> onHandlingFinished -> onRequestCompleted
 not routed:     onRequestReceived -> onRequestNotRouted -> onRequestCompleted (404 | 405)
-in one piece:   onRequestReceived -> onHandlingStarted  -> onRequestCompleted
-handler failed: onRequestReceived -> onHandlingStarted  -> onResponseFailed -> onRequestCompleted
-chunked:        onRequestReceived -> onHandlingStarted  -> onCursorOpened
-                                  -> onChunkWritten*    -> onCursorClosed -> onRequestCompleted
-refused (503):  onRequestReceived -> onHandlingStarted  -> onCursorRefused
-                                  -> onResponseFailed   -> onRequestCompleted
 a file:         onRequestReceived -> onRequestCompleted
-a file failed:  onRequestReceived -> onResponseFailed   -> onRequestCompleted
+a file failed:  onRequestReceived -> onResponseFailed  -> onRequestCompleted
 ```
+
+A file fails in two shapes and both are that one line. Before anything was written it is answered as an
+error, and the status of the two events is the same. After the head has gone there is nothing left to answer
+with: `onResponseFailed` carries the status which was promised, `onRequestCompleted` carries the bytes which
+really reached the channel - fewer than the `Content-Length` the peer was given - and the connection is
+closed rather than left carrying a response which will not end. A response present in `onRequestCompleted`
+and absent from `onResponseFailed` is a response the peer got whole.
+
+That holds by construction rather than by timing, which is the point of it. A write from the event loop
+completes its listener inline, so a whole cursor can be opened, drained and closed before the handle has
+returned - and on a peer which reads slowly, none of it has. `onHandlingFinished` fires immediately before
+`onRequestCompleted` and only for a request which was routed, so neither ordering is visible to an observer.
+Its place being fixed, it does not say *when* the handle returned: it is where you take back what you put
+aside at `onHandlingStarted`.
+
+It is handed the same `(status, bytes, durationNanos)` as `onRequestCompleted`, and that is the one thing in
+this interface which is said twice. What the bracket measures is a request which was routed, told apart by
+the endpoint `onHandlingStarted` named - a latency per endpoint rather than per server - and an observer
+which measures that and nothing else has all of it in the one call, with no field to carry the status
+forward and no second reading of a clock.
 
 Every method has a no-op default. Calls come from event loop threads, so do not block in them.
 
-Nothing is repeated after the opening stages, and that is the point: the channel and the request come with
-`onRequestReceived`, the `RestContext` with `onHandlingStarted`, and neither survives what follows. Copy what
-a later stage needs - `context.pathExpression()` is a plain string and the label a metric wants, where the URI
+Nothing else is repeated after the opening stages, and that is the point: the channel and the request come
+with `onRequestReceived`, the `RestContext` with `onHandlingStarted`, and neither survives what follows. Copy
+what a later stage needs - `context.pathExpression()` is a plain string and the label a metric wants, where the URI
 is one of unboundedly many.
 
 `newObserver()` may return a shared instance instead, and then telling the requests apart is yours. Return

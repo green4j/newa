@@ -48,7 +48,7 @@ import java.util.List;
 
 /**
  * Where the cause of an error goes now that the response no longer carries it. Everything which ends as an
- * error response is reported exactly once, to a plain {@link HttpApiObserver} - the file server has nothing
+ * error response is reported exactly once, to a plain {@link HttpObserver} - the file server has nothing
  * else - and with the exception as it was thrown rather than as it was wrapped to be answered.
  */
 class ErrorReportingTest {
@@ -57,14 +57,14 @@ class ErrorReportingTest {
     /**
      * One observer for every request of a channel, so a test can count what a whole exchange reported.
      */
-    private static final class Recorder implements HttpApiObserver, HttpApiObserverFactory {
+    private static final class Recorder implements HttpObserver, HttpObserverFactory {
         private final List<HttpException> notRouted = new ArrayList<>();
         private final List<Throwable> failed = new ArrayList<>();
         private final List<HttpResponseStatus> failedWith = new ArrayList<>();
         private final List<HttpResponseStatus> completed = new ArrayList<>();
 
         @Override
-        public HttpApiObserver newObserver() {
+        public HttpObserver newObserver() {
             return this;
         }
 

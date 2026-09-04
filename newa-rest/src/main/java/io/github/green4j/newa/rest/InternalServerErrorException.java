@@ -34,7 +34,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
  * {@code toString()} - a type of the implementation and whatever that type had to say, a file path as often
  * as not - and its stack trace names the classes the server is built from. A default {@link HttpErrorHandler}
  * renders nothing of that: the client is told the status and no more, and the cause goes to
- * {@link HttpApiObserver#onResponseFailed} instead, where a log can have it.
+ * {@link HttpObserver#onResponseFailed} instead, where a log can have it.
  * <p>
  * A {@code 500} which is a deliberate answer rather than a failure is not this: throw
  * {@code new HttpException(INTERNAL_SERVER_ERROR, "...")} and the message is rendered, because a message

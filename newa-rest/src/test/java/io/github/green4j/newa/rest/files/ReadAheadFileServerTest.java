@@ -25,6 +25,8 @@
 
 package io.github.green4j.newa.rest.files;
 
+import io.github.green4j.newa.rest.HttpObserver;
+import io.github.green4j.newa.rest.HttpObserverFactory;
 import io.github.green4j.newa.rest.TextErrorHandler;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -37,6 +39,7 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
@@ -49,7 +52,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
+import java.util.List;
 
 /**
  * The same downloads as the ones the loop reads for itself, with the reading given to somebody else: what the
@@ -65,6 +71,7 @@ class ReadAheadFileServerTest {
     private Path root;
 
     private final Deque<Runnable> reads = new ArrayDeque<>();
+    private final Recorder observer = new Recorder();
 
     private byte[] content;
 
@@ -82,10 +89,41 @@ class ReadAheadFileServerTest {
                 FileSet.builder().serve("/files", root).build(),
                 new TextErrorHandler(),
                 null,
-                null,
+                observer,
                 CHUNK,
                 reads::add
         );
+    }
+
+    /**
+     * The stages of the one request each of these tests makes, in the order they were reported.
+     */
+    private static final class Recorder implements HttpObserver, HttpObserverFactory {
+        private final List<String> stages = new ArrayList<>();
+        private HttpResponseStatus failedWith;
+        private Throwable failure;
+        private long completedBytes = -1;
+
+        @Override
+        public HttpObserver newObserver() {
+            return this; // one request per channel here, so one of these is enough
+        }
+
+        @Override
+        public void onResponseFailed(final HttpResponseStatus status,
+                                     final Throwable error) {
+            stages.add("failed");
+            failedWith = status;
+            failure = error;
+        }
+
+        @Override
+        public void onRequestCompleted(final HttpResponseStatus status,
+                                       final long bytes,
+                                       final long durationNanos) {
+            stages.add("completed");
+            completedBytes = bytes;
+        }
     }
 
     private static final class Response {
@@ -146,6 +184,9 @@ class ReadAheadFileServerTest {
         Assertions.assertEquals(String.valueOf(SIZE), response.head.headers().get("Content-Length"));
         Assertions.assertArrayEquals(content, response.body.toByteArray());
         Assertions.assertTrue(response.open, "and the connection is as good as it was");
+        Assertions.assertEquals(Arrays.asList("completed"), observer.stages,
+                "a response the peer got whole is not a failure of anything");
+        Assertions.assertEquals(SIZE, observer.completedBytes);
     }
 
     @Test
@@ -190,5 +231,15 @@ class ReadAheadFileServerTest {
         Assertions.assertTrue(response.body.size() < SIZE, "which it can no longer keep");
         Assertions.assertFalse(response.open,
                 "so the connection goes, rather than leaving the peer reading a response which cannot end");
+        Assertions.assertEquals(Arrays.asList("failed", "completed"), observer.stages,
+                "and the observer is told the response was not the one promised, before the request closes");
+        Assertions.assertEquals(HttpResponseStatus.OK, observer.failedWith,
+                "with the status the head already carried: there is nothing left to answer with");
+        Assertions.assertTrue(observer.failure instanceof IOException, String.valueOf(observer.failure));
+        Assertions.assertTrue(observer.failure.getMessage().contains("ended short"),
+                "the write itself succeeded - what failed is the promise it was written against: "
+                        + observer.failure.getMessage());
+        Assertions.assertEquals(response.body.size(), observer.completedBytes,
+                "and the bytes are what really reached the channel, not what was promised");
     }
 }

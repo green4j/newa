@@ -24,6 +24,10 @@
 
 package io.github.green4j.newa.rest.files;
 
+import io.github.green4j.newa.rest.HttpException;
+import io.github.green4j.newa.rest.HttpObserver;
+import io.github.green4j.newa.rest.HttpObserverFactory;
+import io.github.green4j.newa.rest.TextErrorHandler;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -34,6 +38,7 @@ import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
@@ -45,6 +50,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * A file is not a snapshot: it can be appended to, truncated, replaced or unlinked while it is being sent,
@@ -70,6 +78,45 @@ class FileChangedUnderUsTest {
 
     private FileSet files() {
         return FileSet.builder().serve("/files", root).build();
+    }
+
+    /**
+     * The stages of the one request each of these tests makes, in the order they were reported. What a
+     * truncated response looks like to an observer is the whole of the question here: the head has gone,
+     * so the status stands, and the only thing which can still say the response was not the one promised is
+     * {@code onResponseFailed}.
+     */
+    private static final class Recorder implements HttpObserver, HttpObserverFactory {
+        private final List<String> stages = new ArrayList<>();
+        private HttpResponseStatus failedWith;
+        private Throwable failure;
+        private long completedBytes = -1;
+
+        @Override
+        public HttpObserver newObserver() {
+            return this; // one request per channel here, so one of these is enough
+        }
+
+        @Override
+        public void onRequestNotRouted(final HttpException cause) {
+            stages.add("notRouted");
+        }
+
+        @Override
+        public void onResponseFailed(final HttpResponseStatus status,
+                                     final Throwable error) {
+            stages.add("failed");
+            failedWith = status;
+            failure = error;
+        }
+
+        @Override
+        public void onRequestCompleted(final HttpResponseStatus status,
+                                       final long bytes,
+                                       final long durationNanos) {
+            stages.add("completed");
+            completedBytes = bytes;
+        }
     }
 
     private static final class Response {
@@ -133,6 +180,7 @@ class FileChangedUnderUsTest {
 
     @Test
     public void testAFileWhichIsGoneBeforeItIsResolved() {
+        final Recorder observer = new Recorder();
         final EmbeddedChannel channel = new EmbeddedChannel(
                 new ChannelInboundHandlerAdapter() {
                     @Override
@@ -146,16 +194,19 @@ class FileChangedUnderUsTest {
                         ctx.fireChannelRead(msg);
                     }
                 },
-                new FileServerHandler(files()));
+                new FileServerHandler(files(), new TextErrorHandler(), null, observer));
 
         final Response response = request(channel);
         Assertions.assertNotNull(response.head);
         Assertions.assertEquals(404, response.head.status().code(),
                 "nothing was written before it was opened, so it can still be answered honestly");
+        Assertions.assertEquals(Arrays.asList("notRouted", "completed"), observer.stages,
+                "an error which was answered is told once, by the stage which answered it");
     }
 
     @Test
     public void testAFileUnlinkedWhileItIsBeingSent() throws IOException {
+        final Recorder observer = new Recorder();
         final EmbeddedChannel channel = new EmbeddedChannel(
                 new WhenTheHeadIsWritten(() -> {
                     try {
@@ -164,7 +215,7 @@ class FileChangedUnderUsTest {
                         // then there is nothing to test here, and nothing to worry about either
                     }
                 }),
-                new FileServerHandler(files()));
+                new FileServerHandler(files(), new TextErrorHandler(), null, observer));
 
         final Response response = request(channel);
         Assertions.assertEquals(200, response.head.status().code());
@@ -172,6 +223,9 @@ class FileChangedUnderUsTest {
         Assertions.assertEquals(SIZE, response.body.size(),
                 "the descriptor was open before the name went, and the bytes are behind the descriptor");
         Assertions.assertTrue(response.open, "so the connection is as good as it was");
+        Assertions.assertEquals(Arrays.asList("completed"), observer.stages,
+                "a response the peer got whole is not a failure of anything");
+        Assertions.assertEquals(SIZE, observer.completedBytes);
     }
 
     @Test
@@ -179,6 +233,7 @@ class FileChangedUnderUsTest {
         final Path other = root.resolve("other.bin");
         Files.write(other, new byte[SIZE / 2]);
 
+        final Recorder observer = new Recorder();
         final EmbeddedChannel channel = new EmbeddedChannel(
                 new WhenTheHeadIsWritten(() -> {
                     try {
@@ -187,7 +242,7 @@ class FileChangedUnderUsTest {
                         throw new AssertionError(e);
                     }
                 }),
-                new FileServerHandler(files()));
+                new FileServerHandler(files(), new TextErrorHandler(), null, observer));
 
         final Response response = request(channel);
         Assertions.assertEquals(200, response.head.status().code());
@@ -195,10 +250,12 @@ class FileChangedUnderUsTest {
         Assertions.assertEquals(SIZE, response.body.size(),
                 "a name pointed at something else is not the file this response is of");
         Assertions.assertTrue(response.open);
+        Assertions.assertEquals(Arrays.asList("completed"), observer.stages);
     }
 
     @Test
     public void testAFileTruncatedWhileItIsBeingSent() {
+        final Recorder observer = new Recorder();
         final EmbeddedChannel channel = new EmbeddedChannel(
                 new WhenTheHeadIsWritten(() -> {
                     try {
@@ -207,7 +264,7 @@ class FileChangedUnderUsTest {
                         throw new AssertionError(e);
                     }
                 }),
-                new FileServerHandler(files()));
+                new FileServerHandler(files(), new TextErrorHandler(), null, observer));
 
         final Response response = request(channel);
         Assertions.assertEquals(200, response.head.status().code());
@@ -216,5 +273,13 @@ class FileChangedUnderUsTest {
         Assertions.assertTrue(response.body.size() < SIZE, "which it can no longer keep");
         Assertions.assertFalse(response.open,
                 "so the connection goes, rather than leaving the peer reading a response which cannot end");
+        Assertions.assertEquals(Arrays.asList("failed", "completed"), observer.stages,
+                "and the observer is told the response was not the one promised, before the request closes");
+        Assertions.assertEquals(HttpResponseStatus.OK, observer.failedWith,
+                "with the status the head already carried: there is nothing left to answer with");
+        Assertions.assertNotNull(observer.failure,
+                "and the cause is reported in full, which is the only place it is");
+        Assertions.assertEquals(response.body.size(), observer.completedBytes,
+                "and the bytes are what really reached the channel, not what was promised");
     }
 }

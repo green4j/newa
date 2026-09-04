@@ -66,12 +66,13 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     private final RestApiHandler handler;
     private final HttpErrorHandler errorHandler;
     private final ResponseChunks responseChunks;
-    private final HttpApiObserver observer;
+    private final HttpObserver observer;
     private final HttpRequest request;
     private final long startedAt;
 
     private FullHttpResponse response;
     private boolean routed;
+    private RestApiObserver restObserver;
     private boolean responded;
 
     RestResult(final ChannelHandlerContext ctx,
@@ -79,7 +80,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
                final RestApiHandler handler,
                final HttpErrorHandler errorHandler,
                final ResponseChunks responseChunks,
-               final HttpApiObserver observer) {
+               final HttpObserver observer) {
         this.ctx = ctx;
         this.request = request;
         this.handler = handler;
@@ -103,9 +104,13 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
      * The request reached an endpoint, so a failure from here on is the handler's rather than the routing's -
      * and the routing kind has already been reported as such.
      *
+     * @param restObserver watching the stages after routing, or null when the request is observed only as
+     *                     far as {@link HttpObserver} goes - which is also what makes it the one thing that
+     *                     says whether {@link RestApiObserver#onHandlingFinished} is owed
      */
-    void routed() {
+    void routed(final RestApiObserver restObserver) {
         routed = true;
+        this.restObserver = restObserver;
     }
 
     /**
@@ -375,17 +380,26 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     }
 
     /**
-     * Reports the one terminal event a request gets, whatever form its response took.
+     * Reports the one terminal event a request gets, whatever form its response took - preceded by the close
+     * of the handling bracket when there was one to open.
      *
      * @param status responded with
      * @param bytes of content written
      */
     private void reportCompleted(final HttpResponseStatus status,
                                  final long bytes) {
+        final long durationNanos = System.nanoTime() - startedAt;
+
+        if (restObserver != null) {
+            // the inner bracket closes first, whatever wrote the response and whenever the peer took it:
+            // this is the one place a request is reported complete, so the nesting holds by construction
+            restObserver.onHandlingFinished(status, bytes, durationNanos);
+        }
+
         observer.onRequestCompleted(
                 status,
                 bytes,
-                System.nanoTime() - startedAt
+                durationNanos
         );
     }
 

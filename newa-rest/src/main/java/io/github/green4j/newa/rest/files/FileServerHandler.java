@@ -28,8 +28,8 @@ import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
 import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.FullHttpResponseContent;
-import io.github.green4j.newa.rest.HttpApiObserver;
-import io.github.green4j.newa.rest.HttpApiObserverFactory;
+import io.github.green4j.newa.rest.HttpObserver;
+import io.github.green4j.newa.rest.HttpObserverFactory;
 import io.github.green4j.newa.rest.InternalServerErrorException;
 import io.github.green4j.newa.rest.MethodNotAllowedException;
 import io.github.green4j.newa.rest.PathNotFoundException;
@@ -214,7 +214,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     private final FileSet files;
     private final HttpErrorHandler errorHandler;
     private final ChannelErrorHandler channelErrorHandler;
-    private final HttpApiObserverFactory observerFactory;
+    private final HttpObserverFactory observerFactory;
     private final int chunkSize;
     private final Executor reads;
 
@@ -242,7 +242,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     public FileServerHandler(final FileSet files,
                              final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
-                             final HttpApiObserverFactory observerFactory) {
+                             final HttpObserverFactory observerFactory) {
         this(files, errorHandler, channelErrorHandler, observerFactory, DEFAULT_CHUNK_SIZE, null);
     }
 
@@ -256,7 +256,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     public FileServerHandler(final FileSet files,
                              final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
-                             final HttpApiObserverFactory observerFactory,
+                             final HttpObserverFactory observerFactory,
                              final int chunkSize) {
         this(files, errorHandler, channelErrorHandler, observerFactory, chunkSize, null);
     }
@@ -274,7 +274,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
     public FileServerHandler(final FileSet files,
                              final HttpErrorHandler errorHandler,
                              final ChannelErrorHandler channelErrorHandler,
-                             final HttpApiObserverFactory observerFactory,
+                             final HttpObserverFactory observerFactory,
                              final int chunkSize,
                              final Executor reads) {
         this.files = files;
@@ -351,7 +351,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
     private void answer(final ChannelHandlerContext ctx,
                         final HttpRequest request) {
-        final HttpApiObserver observer = observerFactory != null ? observerFactory.newObserver() : null;
+        final HttpObserver observer = observerFactory != null ? observerFactory.newObserver() : null;
         final long startedAt = observer != null ? System.nanoTime() : 0;
         if (observer != null) {
             observer.onRequestReceived(ctx, request);
@@ -368,7 +368,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
     private void serve(final ChannelHandlerContext ctx,
                        final HttpRequest request,
-                       final HttpApiObserver observer,
+                       final HttpObserver observer,
                        final long startedAt) throws HttpException, IOException {
         final HttpMethod method = request.method();
         final boolean bodyless = HttpMethod.HEAD.equals(method);
@@ -464,7 +464,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
     private void answerBodyless(final ChannelHandlerContext ctx,
                                 final HttpRequest request,
-                                final HttpApiObserver observer,
+                                final HttpObserver observer,
                                 final long startedAt,
                                 final AsciiString contentType,
                                 final BasicFileAttributes attributes,
@@ -718,7 +718,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                             final long offset,
                             final long length,
                             final boolean keepAlive,
-                            final HttpApiObserver observer,
+                            final HttpObserver observer,
                             final long startedAt) {
         final FileRegion region = new DefaultFileRegion(file, offset, length);
 
@@ -746,7 +746,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                       final long offset,
                       final long length,
                       final boolean keepAlive,
-                      final HttpApiObserver observer,
+                      final HttpObserver observer,
                       final long startedAt) throws IOException {
         ChunkedInput<ByteBuf> body = null;
         try {
@@ -809,9 +809,39 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
                           final Progress progress,
                           final long expected,
                           final boolean keepAlive,
-                          final HttpApiObserver observer,
+                          final HttpObserver observer,
                           final HttpResponseStatus status,
                           final long startedAt) {
+        complete(written, body, progress, expected, keepAlive, observer, status, startedAt, true);
+    }
+
+    /**
+     * Waits for the write which ends this response, and closes what is owed: the body when nothing else will,
+     * the connection when the response did not reach the peer as it was promised, and the request itself
+     * towards the observer.
+     *
+     * @param written the future of the last write of this response
+     * @param body being pumped through {@link ChunkedWriteHandler}, or null when there is none to close
+     * @param progress of what really reached the channel, or null for a response with no body
+     * @param expected bytes of body, which a response has to deliver whole to be the one it promised
+     * @param keepAlive whether the connection may carry another request after this
+     * @param observer of this request, or null
+     * @param status the head carried
+     * @param startedAt nanos the request was received at
+     * @param reportFailure whether a response which does not reach the peer whole is
+     *                      {@link HttpObserver#onResponseFailed}. False where the failure of this request has
+     *                      already been reported and the write being waited on is the error response itself,
+     *                      which is told once and not twice
+     */
+    private void complete(final ChannelFuture written,
+                          final ChunkedInput<?> body,
+                          final Progress progress,
+                          final long expected,
+                          final boolean keepAlive,
+                          final HttpObserver observer,
+                          final HttpResponseStatus status,
+                          final long startedAt,
+                          final boolean reportFailure) {
         written.addListener((ChannelFutureListener) completed -> {
             if (!completed.isSuccess() && body != null) {
                 // the write never reached ChunkedWriteHandler, so nothing else is going to close the body
@@ -823,6 +853,18 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
             // Nothing can take that back, so the connection has to go rather than leave the peer reading a
             // response which will not end, and the next one on it framed against the wrong offset
             final boolean whole = sent == expected;
+
+            if (observer != null && reportFailure) {
+                // the head has long been written by here, so the status stands and nothing else says the
+                // response was not the one promised: the peer is left with a body short of its Content-Length
+                // and the connection closed under it. This is the only place it is reported
+                if (!completed.isSuccess()) {
+                    observer.onResponseFailed(status, completed.cause());
+                } else if (!whole) {
+                    observer.onResponseFailed(status, new IOException(
+                            "The file ended short: " + sent + " of " + expected + " bytes were sent"));
+                }
+            }
 
             if (!keepAlive || !completed.isSuccess() || !whole) {
                 completed.channel().close();
@@ -847,7 +889,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      */
     private void respondNotModified(final ChannelHandlerContext ctx,
                                     final HttpRequest request,
-                                    final HttpApiObserver observer,
+                                    final HttpObserver observer,
                                     final long startedAt,
                                     final long lastModified,
                                     final CharSequence etag) {
@@ -880,7 +922,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
      */
     private void respondUnsatisfiable(final ChannelHandlerContext ctx,
                                       final HttpRequest request,
-                                      final HttpApiObserver observer,
+                                      final HttpObserver observer,
                                       final long startedAt,
                                       final long size) {
         final HttpResponseStatus status = HttpResponseStatus.REQUESTED_RANGE_NOT_SATISFIABLE;
@@ -902,7 +944,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
 
     private void respondError(final ChannelHandlerContext ctx,
                               final HttpRequest request,
-                              final HttpApiObserver observer,
+                              final HttpObserver observer,
                               final long startedAt,
                               final HttpException error) {
         if (observer != null) {
@@ -938,7 +980,7 @@ public class FileServerHandler extends ChannelInboundHandlerAdapter {
             throw failed;
         }
         complete(ctx.writeAndFlush(response), null, null, 0, keepAlive, observer, error.status(),
-                startedAt);
+                startedAt, false);
     }
 
     private static boolean keepAlive(final ChannelHandlerContext ctx,

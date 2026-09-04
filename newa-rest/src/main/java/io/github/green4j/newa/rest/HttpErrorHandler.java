@@ -41,7 +41,7 @@ package io.github.green4j.newa.rest;
  * returned is only the body and the headers describing it.
  * <p>
  * This renders, and only renders. Reporting a failure to a log or a metric is
- * {@link HttpApiObserver#onResponseFailed}, which fires for the same errors and is given the original cause.
+ * {@link HttpObserver#onResponseFailed}, which fires for the same errors and is given the original cause.
  * <p>
  * Called on the channel's event loop, so it must not block. Throwing from here fails the channel: the
  * response cannot be written, so the connection is closed and the cause goes to the

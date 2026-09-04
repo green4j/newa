@@ -33,7 +33,7 @@ import io.github.green4j.newa.json.ByteArrayJsonGenerator;
  * about, {@code message} what the error carries.
  * <p>
  * An {@link InternalServerErrorException} is answered with its status and nothing else - see
- * {@link TextErrorHandler} for why, and {@link HttpApiObserver#onResponseFailed} for where the cause goes
+ * {@link TextErrorHandler} for why, and {@link HttpObserver#onResponseFailed} for where the cause goes
  * instead. Every other {@link HttpException} carries a message written by hand, and that is rendered.
  * <p>
  * {@link #disclosingInternals()} turns the failure into a full dump - class, message, {@code stacktrace},

@@ -122,7 +122,7 @@ public class RestContext {
 
     /**
      * @return what this request is reported to, or null if it is not observed, or observed only as far as
-     *         {@link HttpApiObserver} goes
+     *         {@link HttpObserver} goes
      */
     public RestApiObserver observer() {
         return observer;

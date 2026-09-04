@@ -38,7 +38,7 @@ public class RestApiHandler
     private final HttpErrorHandler errorHandler;
     private final ChannelErrorHandler channelErrorHandler;
     private final ResponseChunks responseChunks;
-    private final HttpApiObserverFactory observers;
+    private final HttpObserverFactory observers;
     private final RestApiObserverFactory restObservers;
 
     private ChunkedResponseBody stalling;
@@ -67,7 +67,7 @@ public class RestApiHandler
                           final HttpErrorHandler errorHandler,
                           final ChannelErrorHandler channelErrorHandler,
                           final ResponseChunks responseChunks,
-                          final HttpApiObserverFactory observers) {
+                          final HttpObserverFactory observers) {
         this.api = restApi;
         this.errorHandler = errorHandler;
         this.channelErrorHandler = channelErrorHandler;
@@ -123,7 +123,7 @@ public class RestApiHandler
     public void channelRead0(final ChannelHandlerContext ctx,
                              final FullHttpRequest request) {
 
-        final HttpApiObserver observer = observers != null
+        final HttpObserver observer = observers != null
                 ? observers.newObserver()
                 : null;
 
@@ -159,7 +159,7 @@ public class RestApiHandler
             return;
         }
 
-        result.routed();
+        result.routed(restObserver);
 
         final RestContext context = new RestContext(
                 ctx,

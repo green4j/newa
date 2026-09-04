@@ -25,8 +25,8 @@
 package io.github.green4j.newa.rest.files;
 
 import io.github.green4j.newa.rest.FullHttpResponseContent;
-import io.github.green4j.newa.rest.HttpApiObserver;
-import io.github.green4j.newa.rest.HttpApiObserverFactory;
+import io.github.green4j.newa.rest.HttpObserver;
+import io.github.green4j.newa.rest.HttpObserverFactory;
 import io.github.green4j.newa.rest.HttpErrorHandler;
 import io.github.green4j.newa.rest.PathNotFoundException;
 import io.netty.channel.ChannelFutureListener;
@@ -67,7 +67,7 @@ import static io.netty.handler.codec.http.HttpHeaderValues.KEEP_ALIVE;
  */
 public class FilesOnlyHandler extends SimpleChannelInboundHandler<HttpRequest> {
     private final HttpErrorHandler errorHandler;
-    private final HttpApiObserverFactory observerFactory;
+    private final HttpObserverFactory observerFactory;
 
     /**
      * @param errorHandler rendering the {@code 404}
@@ -83,7 +83,7 @@ public class FilesOnlyHandler extends SimpleChannelInboundHandler<HttpRequest> {
      *                        answered
      */
     public FilesOnlyHandler(final HttpErrorHandler errorHandler,
-                            final HttpApiObserverFactory observerFactory) {
+                            final HttpObserverFactory observerFactory) {
         this.errorHandler = errorHandler;
         this.observerFactory = observerFactory;
     }
@@ -91,7 +91,7 @@ public class FilesOnlyHandler extends SimpleChannelInboundHandler<HttpRequest> {
     @Override
     protected void channelRead0(final ChannelHandlerContext ctx,
                                 final HttpRequest request) {
-        final HttpApiObserver observer = observerFactory != null ? observerFactory.newObserver() : null;
+        final HttpObserver observer = observerFactory != null ? observerFactory.newObserver() : null;
         final long startedAt = observer != null ? System.nanoTime() : 0;
 
         final PathNotFoundException error = FileServerHandler.notFound();

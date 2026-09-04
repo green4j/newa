@@ -67,6 +67,10 @@ class ObserverLifecycleTest {
 
     private final List<String> events = new ArrayList<>();
 
+    /** What the last request was told twice - the close of the handling bracket, then the request's own. */
+    private final long[] handled = new long[2];
+    private final long[] completed = new long[2];
+
     /** One per request, so what it records is this request's and nothing else's. */
     private final class Observed implements RestApiObserver {
         private String pathExpression;
@@ -85,6 +89,16 @@ class ObserverLifecycleTest {
         public void onHandlingStarted(final RestContext context) {
             pathExpression = context.pathExpression();
             events.add("handling " + pathExpression);
+        }
+
+        @Override
+        public void onHandlingFinished(final HttpResponseStatus status,
+                                       final long bytes,
+                                       final long durationNanos) {
+            events.add("handled " + name() + " " + status.code()
+                    + " " + (bytes > 0 ? "with-body" : "empty"));
+            handled[0] = bytes;
+            handled[1] = durationNanos;
         }
 
         @Override
@@ -122,6 +136,8 @@ class ObserverLifecycleTest {
                                        final long durationNanos) {
             events.add("completed " + name() + " " + status.code()
                     + " " + (bytes > 0 ? "with-body" : "empty"));
+            completed[0] = bytes;
+            completed[1] = durationNanos;
         }
     }
 
@@ -150,6 +166,11 @@ class ObserverLifecycleTest {
         ).withPathParameterDescriptions("count - How many");
         builder.getJson("/boom", (context, output) -> {
             throw new BadRequestException("not today");
+        });
+        builder.get("/declined", (context, result) ->
+                result.error(new HttpException(HttpResponseStatus.CONFLICT, "declined, not thrown")));
+        builder.get("/leaks", (context, result) -> {
+            throw new HttpException(HttpResponseStatus.CONFLICT, "thrown, not declared");
         });
         builder.get("/chunked", new ChunkedJsonRestHandler(context -> new ShortCursor()));
         return builder.build();
@@ -188,7 +209,7 @@ class ObserverLifecycleTest {
      *
      * @param observers the factory to build the handler with, null for no factory at all.
      */
-    private static void serveWithoutObserving(final HttpApiObserverFactory observers) {
+    private static void serveWithoutObserving(final HttpObserverFactory observers) {
         final EmbeddedChannel unobserved = new EmbeddedChannel(
                 new RestApiHandler(
                         buildTestApi(),
@@ -237,8 +258,23 @@ class ObserverLifecycleTest {
         get("/v1/ping");
 
         Assertions.assertEquals(
-                List.of("received /v1/ping", "handling /v1/ping", "completed /v1/ping 200 with-body"),
+                List.of("received /v1/ping", "handling /v1/ping", "handled /v1/ping 200 with-body",
+                        "completed /v1/ping 200 with-body"),
                 events);
+    }
+
+    /**
+     * The close of the handling bracket carries what the close of the request carries, which is what lets an
+     * observer of the handling and nothing else keep nothing between the two - not the status, and not a
+     * reading of its own clock.
+     */
+    @Test
+    public void testTheHandlingBracketClosesWithTheArgumentsOfTheRequest() {
+        get("/v1/ping");
+
+        Assertions.assertTrue(handled[0] > 0, "the response had a body: " + events);
+        Assertions.assertEquals(completed[0], handled[0], "the same bytes");
+        Assertions.assertEquals(completed[1], handled[1], "and the same duration, read once for both");
     }
 
     @Test
@@ -247,7 +283,28 @@ class ObserverLifecycleTest {
 
         Assertions.assertEquals(
                 List.of("received /v1/boom", "handling /v1/boom",
-                        "failed /v1/boom 400", "completed /v1/boom 400 with-body"),
+                        "failed /v1/boom 400",
+                        "handled /v1/boom 400 with-body", "completed /v1/boom 400 with-body"),
+                events);
+    }
+
+    /**
+     * However a handle ends in an error - throwing it, as {@code /boom} does, or declaring it, as these two
+     * do - the failure is reported inside the handling bracket, and the bracket still closes before the
+     * request does.
+     */
+    @Test
+    public void testAFailureIsReportedInsideTheHandlingBracket() {
+        get("/v1/declined");
+        get("/v1/leaks");
+
+        Assertions.assertEquals(
+                List.of("received /v1/declined", "handling /v1/declined",
+                        "failed /v1/declined 409",
+                        "handled /v1/declined 409 with-body", "completed /v1/declined 409 with-body",
+                        "received /v1/leaks", "handling /v1/leaks",
+                        "failed /v1/leaks 409",
+                        "handled /v1/leaks 409 with-body", "completed /v1/leaks 409 with-body"),
                 events);
     }
 
@@ -262,8 +319,10 @@ class ObserverLifecycleTest {
 
         final int closed = events.indexOf("cursor-closed COMPLETED");
         Assertions.assertTrue(closed > 0, "the cursor must report itself: " + events);
-        Assertions.assertEquals(closed + 1, events.size() - 1,
+        Assertions.assertEquals(closed + 2, events.size() - 1,
                 "the completion is the last thing reported: " + events);
+        Assertions.assertEquals("handled /v1/chunked 200 with-body", events.get(events.size() - 2),
+                "the cursor closes inside the handling bracket, which closes inside the request: " + events);
         Assertions.assertEquals("completed /v1/chunked 200 with-body", events.get(events.size() - 1),
                 "a chunked response completes like any other: " + events);
     }
@@ -277,9 +336,11 @@ class ObserverLifecycleTest {
                 List.of(
                         "received /v1/rows/17",
                         "handling /v1/rows/{count}",
+                        "handled /v1/rows/{count} 200 with-body",
                         "completed /v1/rows/{count} 200 with-body",
                         "received /v1/rows/999999",
                         "handling /v1/rows/{count}",
+                        "handled /v1/rows/{count} 200 with-body",
                         "completed /v1/rows/{count} 200 with-body"
                 ),
                 events,
@@ -371,7 +432,7 @@ class ObserverLifecycleTest {
                         new JsonErrorHandler(),
                         (ch, cause) -> { },
                         ResponseChunks.defaults(),
-                        (HttpApiObserverFactory) () -> new HttpApiObserver() {
+                        (HttpObserverFactory) () -> new HttpObserver() {
                             @Override
                             public void onRequestCompleted(final HttpResponseStatus status,
                                                            final long bytes,
@@ -407,7 +468,7 @@ class ObserverLifecycleTest {
                         new JsonErrorHandler(),
                         (ch, cause) -> { },
                         ResponseChunks.defaults(),
-                        (HttpApiObserverFactory) () -> new HttpApiObserver() {
+                        (HttpObserverFactory) () -> new HttpObserver() {
                             private String uri;
 
                             @Override

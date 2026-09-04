@@ -118,7 +118,7 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
 
     private HttpErrorHandler errorHandler = new JsonErrorHandler();
     private ChannelErrorHandler channelErrorHandler = new StdErrChannelErrorHandler();
-    private HttpApiObserverFactory observers;
+    private HttpObserverFactory observers;
     private CorsConfig cors;
     private int maxContentLength = DEFAULT_MAX_CONTENT_LENGTH;
     private int maxInitialLineLength = DEFAULT_MAX_INITIAL_LINE_LENGTH;
@@ -280,7 +280,7 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
      *                  only a {@link RestApiHandler} has to report.
      * @return this builder.
      */
-    public S withObservers(final HttpApiObserverFactory observers) {
+    public S withObservers(final HttpObserverFactory observers) {
         this.observers = observers;
         return self();
     }
@@ -403,7 +403,7 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     /**
      * @return what is asked for an observer per request, or null to observe nothing.
      */
-    protected final HttpApiObserverFactory observers() {
+    protected final HttpObserverFactory observers() {
         return observers;
     }
 

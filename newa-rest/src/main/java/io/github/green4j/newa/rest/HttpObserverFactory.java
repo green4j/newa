@@ -25,7 +25,7 @@
 package io.github.green4j.newa.rest;
 
 /**
- * Produces the {@link HttpApiObserver} which observes one request. Asked once per request, before anything
+ * Produces the {@link HttpObserver} which observes one request. Asked once per request, before anything
  * else about it is known.
  * <p>
  * How much that costs is yours to decide. Return a new observer per request and every stage of that request
@@ -37,9 +37,9 @@ package io.github.green4j.newa.rest;
  * Called from event loop threads, so it must not block, and must be safe to call from several at once.
  */
 @FunctionalInterface
-public interface HttpApiObserverFactory {
+public interface HttpObserverFactory {
     /**
      * @return an observer for the request about to be read, or null to observe it not at all
      */
-    HttpApiObserver newObserver();
+    HttpObserver newObserver();
 }

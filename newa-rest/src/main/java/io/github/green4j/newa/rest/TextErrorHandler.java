@@ -34,7 +34,7 @@ import io.github.green4j.newa.text.ByteArrayLineBuilder;
  * <p>
  * An {@link InternalServerErrorException} is answered with its status and nothing else. Its message is the
  * failure's {@code toString()} and its stack trace names the classes the server is built from; neither is the
- * client's business. The cause reaches a log through {@link HttpApiObserver#onResponseFailed} instead.
+ * client's business. The cause reaches a log through {@link HttpObserver#onResponseFailed} instead.
  * Every other {@link HttpException} carries a message written by hand, and that is rendered.
  * <p>
  * {@link #disclosingInternals()} turns the failure into a full dump - class, message, stack trace, every

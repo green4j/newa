@@ -74,6 +74,14 @@ public class StdOutRestApiObserver implements RestApiObserver {
     }
 
     @Override
+    public void onHandlingFinished(final HttpResponseStatus status,
+                                   final long bytes,
+                                   final long durationNanos) {
+        System.out.printf("   handled %s: %s, %d bytes in %d us%n",
+                pathExpression, status, bytes, durationNanos / 1000);
+    }
+
+    @Override
     public void onRequestNotRouted(final HttpException cause) {
         System.out.printf("   not routed: %s %s%n", method, uri);
     }

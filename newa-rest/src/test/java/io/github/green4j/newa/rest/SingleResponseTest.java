@@ -116,12 +116,12 @@ class SingleResponseTest {
      * One observer for every request of the channel: what a request ends with is what says whether a
      * dropped response was counted twice.
      */
-    private static final class Recorder implements HttpApiObserver, HttpApiObserverFactory {
+    private static final class Recorder implements HttpObserver, HttpObserverFactory {
         private final List<Throwable> failed = new ArrayList<>();
         private final List<HttpResponseStatus> completed = new ArrayList<>();
 
         @Override
-        public HttpApiObserver newObserver() {
+        public HttpObserver newObserver() {
             return this;
         }
 
