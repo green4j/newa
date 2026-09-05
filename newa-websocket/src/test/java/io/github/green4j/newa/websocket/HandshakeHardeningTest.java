@@ -141,7 +141,7 @@ class HandshakeHardeningTest {
 
     @Test
     public void ourOwnPageIsUpgradedWithNothingSaid() throws Exception {
-        server = WsServer.start(0, echoApi());
+        server = WsServer.start(echoApi(), 0);
 
         try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
             // the Host of this request is 127.0.0.1:<port>, so this is a page served by this very server
@@ -178,7 +178,7 @@ class HandshakeHardeningTest {
 
     @Test
     public void withoutCompressionNothingIsNegotiated() throws Exception {
-        server = WsServer.start(0, echoApi());
+        server = WsServer.start(echoApi(), 0);
 
         try (RawWebSocket client = new RawWebSocket(HOST, server.port())) {
             final String head = client.handshake(

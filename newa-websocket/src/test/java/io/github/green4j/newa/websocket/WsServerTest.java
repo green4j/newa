@@ -139,7 +139,7 @@ class WsServerTest {
 
     @Test
     public void oneLinerEchoes() throws Exception {
-        server = WsServer.start(0, echoApi("ws", 1));
+        server = WsServer.start(echoApi("ws", 1), 0);
 
         Assertions.assertEquals("echo-check", echoOnce("/ws/v1", "echo-check"));
     }
@@ -147,7 +147,7 @@ class WsServerTest {
     @Test
     public void thePathIsTheApiSown() throws Exception {
         // WsApiHandler takes the handshake path from the api, so this is the only place it is set
-        server = WsServer.start(0, echoApi("api", 2));
+        server = WsServer.start(echoApi("api", 2), 0);
 
         Assertions.assertEquals("hello", echoOnce("/api/v2", "hello"));
 
@@ -176,7 +176,7 @@ class WsServerTest {
         // travel in it - which is what reaches this limit first
         final String big = repeated('a', 10_000);
 
-        server = WsServer.start(0, echoApi("ws", 1));
+        server = WsServer.start(echoApi("ws", 1), 0);
         Assertions.assertThrows(
                 ExecutionException.class,
                 () -> echoOnce("/ws/v1", "too big a handshake", "X-Big", big)
@@ -258,7 +258,7 @@ class WsServerTest {
                 })
                 .build();
 
-        server = WsServer.start(0, api);
+        server = WsServer.start(api, 0);
 
         Assertions.assertEquals("observed", echoOnce("/ws/v1", "observed"));
 

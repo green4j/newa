@@ -61,13 +61,13 @@ class FragmentedFrameTest {
 
     private RawWebSocket connect() throws Exception {
         recorder = new Recorder();
-        server = WsServer.start(0, new WsApiBuilder(1)
+        server = WsServer.start(new WsApiBuilder(1)
                 .withPathPrefix("ws")
                 .withTextReceiver(recorder)
                 .withBinaryReceiver(recorder)
                 .withPingIntervalMs(0) // nothing but what the test sends is on this connection
                 .withReadTimeoutMs(0)
-                .build());
+                .build(), 0);
 
         final RawWebSocket client = new RawWebSocket(HOST, server.port());
         client.handshake(PATH);

@@ -28,7 +28,7 @@ builder.getJson("/hello/{name}", (context, output) ->
 
 RestApi api = builder.build();                       // or buildWithHelp(JsonHelp.factory())
 
-new Life().run(() -> RestServer.start(9009, api));   // serving GET /v1/hello/world
+new Life().run(() -> RestServer.start(api, 9009));   // serving GET /v1/hello/world
 ```
 
 `getJson` / `getTxt` / `postJson` / ... register handles which render a response and return. `get` / `post` /
@@ -36,7 +36,7 @@ new Life().run(() -> RestServer.start(9009, api));   // serving GET /v1/hello/wo
 
 ## Starting a server
 
-`RestServer.start(port, api)` is the whole server. Anything it needs told is a `with...` on the builder form,
+`RestServer.start(api, port)` is the whole server. Anything it needs told is a `with...` on the builder form,
 and everything below the pipeline stays on `NettyServerBuilder`:
 
 ```java
@@ -98,7 +98,7 @@ What runs it is `Life`. It opens the server, parks the calling thread until the 
 and registers a JVM shutdown hook for the length of the run:
 
 ```java
-new Life().run(() -> RestServer.start(9009, api));
+new Life().run(() -> RestServer.start(api, 9009));
 ```
 
 Note that the server is **opened by** `run`, not handed to it. That is what leaves no window: there is no
@@ -820,7 +820,7 @@ Client --> [IdleConnectionHandler] --> HttpServerCodec --> HttpObjectAggregator
 ```
 
 ```java
-FileServer.start(9012, files);                           // the whole file server
+FileServer.start(files, 9012);                           // the whole file server
 FileServer.of(files)                                     // and with an api sharing the port
         .withHandler(() -> new RestApiHandler(api, errors, channelErrors))
         .start(9012);

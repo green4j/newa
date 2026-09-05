@@ -139,7 +139,7 @@ class FramePayloadLimitTest {
 
     @Test
     public void theDefaultIsSixtyFourKilobytes() throws Exception {
-        server = WsServer.start(0, echoApi());
+        server = WsServer.start(echoApi(), 0);
 
         Assertions.assertEquals(65536, WsServer.DEFAULT_MAX_FRAME_PAYLOAD_LENGTH);
 

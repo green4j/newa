@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * keeps a {@code main} alive until the server should stop, and what adds the JVM shutdown hook, is
  * {@link io.github.green4j.newa.lang.Life}:
  * <pre>{@code
- * new Life().run(() -> RestServer.start(9009, api));
+ * new Life().run(() -> RestServer.start(api, 9009));
  * }</pre>
  * That separation is the point. Nothing here registers a shutdown hook of its own - a library which does
  * that behind your back is exactly what {@code Life} exists to keep out of the library - and an

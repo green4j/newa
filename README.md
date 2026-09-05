@@ -21,7 +21,7 @@ builder.getJson("/hello/{name}", (context, output) ->
 
 RestApi api = builder.build();                       // or buildWithHelp(JsonHelp.factory())
 
-new Life().run(() -> RestServer.start(9009, api));   // REST, GET /v1/hello/world
+new Life().run(() -> RestServer.start(api, 9009));   // REST, GET /v1/hello/world
 ```
 
 ```java
@@ -29,7 +29,7 @@ WsApi api = new WsApiBuilder(1)
         .withTextReceiver((session, message, last) -> session.sendText(message))
         .build();
 
-new Life().run(() -> WsServer.start(9010, api));     // WebSocket, echoing
+new Life().run(() -> WsServer.start(api, 9010));     // WebSocket, echoing
 ```
 
 `RestServer`, `FileServer` and `WsServer` assemble the documented pipeline out of the same public handlers,
@@ -47,8 +47,8 @@ closed together, and rolled back if a later one cannot be opened:
 
 ```java
 new Life().run(Life.all(
-        () -> RestServer.start(9009, restApi),
-        () -> WsServer.start(9010, wsApi)));
+        () -> RestServer.start(restApi, 9009),
+        () -> WsServer.start(wsApi, 9010)));
 ```
 
 A WebSocket server can also serve a REST api on its own port, with no second server at all - see [One port

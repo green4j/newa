@@ -82,7 +82,7 @@ class MethodRoutingTest {
 
     @Test
     public void aRegisteredHeadAnswersInsteadOfTheGet() throws Exception {
-        server = RestServer.start(0, withHeadAndOptions());
+        server = RestServer.start(withHeadAndOptions(), 0);
 
         final HttpResponse<byte[]> head = head(PATH);
 
@@ -95,7 +95,7 @@ class MethodRoutingTest {
 
     @Test
     public void aHeadWithoutOneOfItsOwnIsAnsweredByTheGet() throws Exception {
-        server = RestServer.start(0, getOnly());
+        server = RestServer.start(getOnly(), 0);
 
         final HttpResponse<byte[]> got = send(request(PATH).GET());
         final HttpResponse<byte[]> head = head(PATH);
@@ -109,21 +109,21 @@ class MethodRoutingTest {
 
     @Test
     public void aHeadOnAPathTheGetDoesNotServeIsNotFound() throws Exception {
-        server = RestServer.start(0, getOnly());
+        server = RestServer.start(getOnly(), 0);
 
         Assertions.assertEquals(404, head("/v1/nothing").statusCode());
     }
 
     @Test
     public void aHeadOnAnApiWhichServesNoGetIsRefused() throws Exception {
-        server = RestServer.start(0, postOnly());
+        server = RestServer.start(postOnly(), 0);
 
         Assertions.assertEquals(405, head(PATH).statusCode());
     }
 
     @Test
     public void aRegisteredOptionsIsRouted() throws Exception {
-        server = RestServer.start(0, withHeadAndOptions());
+        server = RestServer.start(withHeadAndOptions(), 0);
 
         final HttpResponse<byte[]> options = send(request(PATH).method("OPTIONS",
                 HttpRequest.BodyPublishers.noBody()));
@@ -134,7 +134,7 @@ class MethodRoutingTest {
 
     @Test
     public void anOptionsWithoutOneRegisteredIsStillRefused() throws Exception {
-        server = RestServer.start(0, getOnly());
+        server = RestServer.start(getOnly(), 0);
 
         Assertions.assertEquals(405,
                 send(request(PATH).method("OPTIONS", HttpRequest.BodyPublishers.noBody())).statusCode());
@@ -142,7 +142,7 @@ class MethodRoutingTest {
 
     @Test
     public void aMethodTheApiKnowsNothingAboutIsRefused() throws Exception {
-        server = RestServer.start(0, withHeadAndOptions());
+        server = RestServer.start(withHeadAndOptions(), 0);
 
         final String trace = new RawHttp(HOST, server.port()).head("TRACE", PATH);
 

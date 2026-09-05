@@ -37,7 +37,7 @@ import io.github.green4j.newa.server.NettyServerBuilder;
  * defaults to a worker per core, which on two servers is two per core, all of them competing. So both are
  * told what they get.
  * <p>
- * With one port to serve, none of this applies: {@code new Life().run(() -> RestServer.start(port, api))}
+ * With one port to serve, none of this applies: {@code new Life().run(() -> RestServer.start(api, port))}
  * is the whole of it - see {@code rest.hello.HelloRestServer}.
  */
 public class PairedRestServers {

@@ -108,8 +108,8 @@ public final class Life implements Ender {
      * Several resources as one, for a {@link Life} with more than one thing to run:
      * <pre>{@code
      * life.run(Life.all(
-     *         () -> RestServer.start(9009, adminApi),
-     *         () -> RestServer.start(9010, publicApi)));
+     *         () -> RestServer.start(adminApi, 9009),
+     *         () -> RestServer.start(publicApi, 9010)));
      * }</pre>
      * They are <b>opened in the order given</b>, and one which fails to open closes those already open
      * before the failure is passed on - which has to happen here, because until an opener returns a

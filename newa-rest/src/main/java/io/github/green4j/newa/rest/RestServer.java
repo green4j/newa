@@ -15,7 +15,7 @@ import io.netty.handler.codec.http.HttpContentCompressor;
 /**
  * A REST server in one line:
  * <pre>{@code
- * new Life().run(() -> RestServer.start(9009, api));
+ * new Life().run(() -> RestServer.start(api, 9009));
  * }</pre>
  * and the same thing with something turned on:
  * <pre>{@code
@@ -46,13 +46,13 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
     /**
      * The whole server in one call, with everything at its default.
      *
-     * @param port to listen on, or 0 to let the OS pick one.
      * @param api to route requests with.
+     * @param port to listen on, or 0 to let the OS pick one.
      * @return the running server.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
-    public static NettyServer start(final int port,
-                                    final RestRouter api) throws InterruptedException {
+    public static NettyServer start(final RestRouter api,
+                                    final int port) throws InterruptedException {
         return of(api).start(port);
     }
 

@@ -91,11 +91,11 @@ public class HelloRestServer {
             System.out.printf("  curl -s %s/v1/jvm/threads%n", LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -s %s%s   -> the api describing itself%n",
                     LOCAL_SERVER_ADDRESS, api.helpPath());
-            System.out.printf("  curl -sX POST %s/v1/life   -> stops this server%n",
+            System.out.printf("  curl -sX POST %s/v1/shutdown   -> stops this server%n",
                     LOCAL_SERVER_ADDRESS);
 
-            // End owns the lifecycle: it parks this thread until the end is asked for, adds the JVM life
-            // hook, and closes the server here rather than on the event loop the /life endpoint runs on
+            // the Life owns the lifecycle: it parks this thread until the end is asked for, adds the JVM
+            // shutdown hook, and closes the server here rather than on the event loop /shutdown runs on
 
             return server;
         });

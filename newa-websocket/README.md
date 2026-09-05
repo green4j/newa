@@ -25,7 +25,7 @@ WsApi api = new WsApiBuilder(1)          // version 1, so the handshake path is 
         .withObservers(AccessLog::new)         // optional, see Observing
         .build();
 
-new Life().run(() -> WsServer.start(9010, api));   // serving ws://127.0.0.1:9010/ws/v1
+new Life().run(() -> WsServer.start(api, 9010));   // serving ws://127.0.0.1:9010/ws/v1
 ```
 
 ```java
@@ -53,7 +53,7 @@ what every session subscribed to - see below. Everything else on the builder is 
 
 ## Starting a server
 
-`WsServer.start(port, api)` is the whole server. What belongs to the api - the path, the ping interval, the
+`WsServer.start(api, port)` is the whole server. What belongs to the api - the path, the ping interval, the
 back pressure policy, the receiver, the observers - stays on the api builder and is not repeated here; what
 is left is the pipeline and the bootstrap:
 

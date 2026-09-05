@@ -31,9 +31,11 @@ import java.util.function.Supplier;
 /**
  * A WebSocket server in one line:
  * <pre>{@code
- * new Life().run(() -> WsServer.start(9010, new WsApiBuilder(1)
+ * WsApi api = new WsApiBuilder(1)
  *         .withTextReceiver((session, message, last) -> session.sendText(message))
- *         .build()));
+ *         .build();
+ *
+ * new Life().run(() -> WsServer.start(api, 9010));
  * }</pre>
  * <p>
  * It assembles this pipeline, out of the same public handlers a pipeline written by hand is made of:
@@ -95,13 +97,13 @@ public final class WsServer {
     /**
      * The whole server in one call, with everything at its default.
      *
-     * @param port to listen on, or 0 to let the OS pick one.
      * @param api to serve, from an {@link AbstractWsApiBuilder}.
+     * @param port to listen on, or 0 to let the OS pick one.
      * @return the running server.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
-    public static NettyServer start(final int port,
-                                    final WsApi api) throws InterruptedException {
+    public static NettyServer start(final WsApi api,
+                                    final int port) throws InterruptedException {
         return of(api).start(port);
     }
 

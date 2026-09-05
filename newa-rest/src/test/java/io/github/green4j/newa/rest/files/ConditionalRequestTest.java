@@ -45,7 +45,7 @@ class ConditionalRequestTest {
     @BeforeEach
     public void setUp() throws Exception {
         Files.write(filesRoot.resolve("thing.txt"), BODY.getBytes(StandardCharsets.UTF_8));
-        server = FileServer.start(0, FileSet.builder().serve("/files", filesRoot).build());
+        server = FileServer.start(FileSet.builder().serve("/files", filesRoot).build(), 0);
     }
 
     @AfterEach

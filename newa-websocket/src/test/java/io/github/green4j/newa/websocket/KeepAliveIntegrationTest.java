@@ -77,7 +77,7 @@ class KeepAliveIntegrationTest {
                 })
                 .build();
 
-        server = WsServer.start(0, api);
+        server = WsServer.start(api, 0);
     }
 
     @AfterEach

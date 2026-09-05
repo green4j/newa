@@ -94,7 +94,7 @@ class RestServerTest {
 
     @Test
     public void oneLinerServesTheApi() throws Exception {
-        server = RestServer.start(0, buildApi());
+        server = RestServer.start(buildApi(), 0);
 
         final HttpResponse<byte[]> response = get("/v1/hello/world");
 
@@ -105,7 +105,7 @@ class RestServerTest {
     @Test
     public void everyConnectionGetsItsOwnHandler() throws Exception {
         // RestApiHandler is not @Sharable, so one instance reused across channels would fail on the second
-        server = RestServer.start(0, buildApi());
+        server = RestServer.start(buildApi(), 0);
 
         Assertions.assertEquals(200, get("/v1/hello/one").statusCode());
         Assertions.assertEquals(200, get("/v1/hello/two").statusCode());
@@ -114,7 +114,7 @@ class RestServerTest {
 
     @Test
     public void compressionIsOffByDefault() throws Exception {
-        server = RestServer.start(0, buildApi());
+        server = RestServer.start(buildApi(), 0);
 
         Assertions.assertTrue(get("/v1/hello/world").headers().firstValue("Content-Encoding").isEmpty());
     }
@@ -177,7 +177,7 @@ class RestServerTest {
     public void maxInitialLineLengthIsHonoured() throws Exception {
         final String longName = repeated('a', 5000);
 
-        server = RestServer.start(0, buildApi());
+        server = RestServer.start(buildApi(), 0);
         Assertions.assertEquals(
                 HttpResponseStatus.REQUEST_URI_TOO_LONG.code(),
                 get("/v1/hello/" + longName).statusCode()
@@ -192,7 +192,7 @@ class RestServerTest {
 
     @Test
     public void maxHeaderSizeIsHonoured() throws Exception {
-        server = RestServer.start(0, buildApi());
+        server = RestServer.start(buildApi(), 0);
         Assertions.assertEquals(
                 HttpResponseStatus.REQUEST_HEADER_FIELDS_TOO_LARGE.code(),
                 getWithABigHeader().statusCode()

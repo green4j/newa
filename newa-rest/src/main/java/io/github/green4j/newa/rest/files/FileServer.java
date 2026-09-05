@@ -18,7 +18,7 @@ import java.util.concurrent.Executor;
 /**
  * A file server in one line:
  * <pre>{@code
- * new Life().run(() -> FileServer.start(9012, files));
+ * new Life().run(() -> FileServer.start(files, 9012));
  * }</pre>
  * and the same thing with an api sharing the port:
  * <pre>{@code
@@ -49,13 +49,13 @@ public final class FileServer extends AbstractHttpServer<FileServer> {
     /**
      * The whole server in one call, with everything at its default.
      *
-     * @param port to listen on, or 0 to let the OS pick one.
      * @param files to serve.
+     * @param port to listen on, or 0 to let the OS pick one.
      * @return the running server.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
-    public static NettyServer start(final int port,
-                                    final FileSet files) throws InterruptedException {
+    public static NettyServer start(final FileSet files,
+                                    final int port) throws InterruptedException {
         return of(files).start(port);
     }
 

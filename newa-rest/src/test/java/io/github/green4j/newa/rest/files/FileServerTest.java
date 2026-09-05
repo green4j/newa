@@ -58,7 +58,7 @@ class FileServerTest {
 
     @Test
     public void oneLinerServesTheFiles() throws Exception {
-        server = FileServer.start(0, buildFiles());
+        server = FileServer.start(buildFiles(), 0);
 
         final HttpResponse<byte[]> response = get("/files/thing.txt");
 
@@ -68,7 +68,7 @@ class FileServerTest {
 
     @Test
     public void aPathNoFileOwnsIsAnsweredRatherThanHeld() throws Exception {
-        server = FileServer.start(0, buildFiles());
+        server = FileServer.start(buildFiles(), 0);
 
         final HttpResponse<byte[]> unowned = get("/nothing/here");
         final HttpResponse<byte[]> filtered = get("/files/internal/secret.txt");
@@ -89,7 +89,7 @@ class FileServerTest {
     public void andTheConnectionSurvivesIt() throws Exception {
         // the whole reason FilesOnlyHandler exists: without it the request reaches the end of the pipeline,
         // is discarded in silence, and the connection stays open for as long as the peer keeps it
-        server = FileServer.start(0, buildFiles());
+        server = FileServer.start(buildFiles(), 0);
 
         try (Socket socket = new Socket(HOST, server.port())) {
             socket.setSoTimeout(10_000);
