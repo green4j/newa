@@ -53,28 +53,56 @@ what every session subscribed to - see below. Everything else on the builder is 
 
 ## Starting a server
 
-`WsServer.start(api, port)` is the whole server. What belongs to the api - the path, the ping interval, the
-back pressure policy, the receiver, the observers - stays on the api builder and is not repeated here; what
-is left is the pipeline and the bootstrap:
+The whole server, with everything at its default, is one call:
 
 ```java
-NettyServer server = WsServer.of(api)
-        .withCompression()                       // permessage-deflate, off by default
+NettyServer server = WsServer.start(api, 9010);
+```
+
+Past that there are **two builders**, and they are about two different things. `WsServer` is what runs
+*above* the socket; `NettyServerBuilder` is the socket itself. What belongs to the api - the path, the ping
+interval, the back pressure policy, the receivers, the observers - is the api builder's and appears in
+neither.
+
+**One: the pipeline.**
+
+```java
+WsServer ws = WsServer.of(api)
+
+        // who may open a session, and what else runs in the pipeline
         .withOriginPolicy(OriginPolicy.allowing("https://app.example.com"))  // same-origin by default
+        .withCompression()                       // permessage-deflate, off by default
+        .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
+
+        // who hears about a channel which failed
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
+
+        // what a handshake and a frame may be
         .withMaxContentLength(65536)             // the handshake request body, not what a session sends
         .withMaxInitialLineLength(4096)          // its request line: the method, the whole uri, the version
         .withMaxHeaderSize(8192)                 // its header block - where a browser's cookies travel
         .withMaxFramePayloadLength(65536)        // and this is what a session sends, see the limits below
+
+        // when a connection is given up on
         .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
-        .withResponseDeadlineMs(30_000)          // on by default, see Deadlines
-        .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
-        .start(new NettyServerBuilder()
-                .port(9010)
-                .host("127.0.0.1")               // every interface by default
-                .workerThreads(8)                // a worker per core by default
-                .maxConnections(4096)            // unlimited by default
-                .writeBufferWaterMark(low, high));
+        .withResponseDeadlineMs(30_000);         // on by default, see Deadlines
+```
+
+**Two: the socket.**
+
+```java
+NettyServerBuilder bootstrap = new NettyServerBuilder()
+        .port(9010)
+        .host("127.0.0.1")                       // every interface by default
+        .workerThreads(8)                        // a worker per core by default
+        .maxConnections(4096)                    // unlimited by default
+        .writeBufferWaterMark(low, high);
+```
+
+**They meet at `start`**, which hands the pipeline to the bootstrap and binds it:
+
+```java
+NettyServer server = ws.start(bootstrap);
 ```
 
 `maxConnections` bounds the file descriptors this server holds, which a fan-out server is the likeliest of

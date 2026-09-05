@@ -321,11 +321,11 @@ public final class WsServer {
     }
 
     /**
-     * Starts on a bootstrap of your own - the way to reach the transport, the thread counts, the water
-     * marks a fan-out is paced by, or any channel option, without giving up the pipeline this class
-     * assembles.
+     * Where the two builders meet: this one is everything above the socket, the bootstrap is the socket -
+     * the transport, the thread counts, the water marks a fan-out is paced by, the channel options - and
+     * this hands the pipeline assembled here to it and binds.
      *
-     * @param bootstrap to start on; its child handler is set here.
+     * @param bootstrap to start on; its child handler is set here, so anything it already had is replaced.
      * @return the running server.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */

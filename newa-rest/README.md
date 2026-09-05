@@ -36,34 +36,64 @@ new Life().run(() -> RestServer.start(api, 9009));   // serving GET /v1/hello/wo
 
 ## Starting a server
 
-`RestServer.start(api, port)` is the whole server. Anything it needs told is a `with...` on the builder form,
-and everything below the pipeline stays on `NettyServerBuilder`:
+The whole server, with everything at its default, is one call:
 
 ```java
-NettyServer server = RestServer.of(api)
+NettyServer server = RestServer.start(api, 9009);
+```
+
+Past that there are **two builders**, and they are about two different things. `RestServer` is what runs
+*above* the socket; `NettyServerBuilder` is the socket itself.
+
+**One: the pipeline.** Every one of these is optional, and none of them is about the api - what belongs to
+the api is the `RestApiBuilder`'s.
+
+```java
+RestServer rest = RestServer.of(api)
+
+        // what else runs in the pipeline
+        .withHandler(() -> new AuthFilter())     // in front of the api handler, one per channel
         .withCompression()                       // off by default
         .withCors(corsConfig)                    // off by default, see Cross-origin requests
         .withResponseChunks(chunks)              // see Chunked responses
-        .withObservers(observers)                // see Observing
+
+        // what an answer is, and who hears about it
         .withErrorHandler(new JsonErrorHandler())
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
+        .withObservers(observers)                // see Observing
+
+        // what a request may be
         .withMaxContentLength(65536)             // the request body, not its headers and not a response
         .withMaxInitialLineLength(4096)          // the request line: the method, the whole uri, the version
         .withMaxHeaderSize(8192)                 // the header block, all of it together
+
+        // when a connection is given up on
         .withIdleTimeoutMs(60_000)               // on by default, see Idle connections
         .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
-        .withResponseDeadlineMs(30_000)          // on by default, see Deadlines
-        .withHandler(() -> new AuthFilter())     // in front of the api handler, one per channel
-        .withHandler(() -> new FileServerHandler(files, errors, channelErrors, observers))
-        .start(new NettyServerBuilder()
-                .port(9009)
-                .host("127.0.0.1")               // every interface by default
-                .workerThreads(8)                // a worker per core by default
-                .writeBufferWaterMark(32 * 1024, 64 * 1024)
-                .maxConnections(4096)            // unlimited by default, see below
-                .backlog(1024)                   // what the OS says by default
-                .transport(Transport.auto()));   // kqueue, epoll, or NIO
+        .withResponseDeadlineMs(30_000);         // on by default, see Deadlines
 ```
+
+**Two: the socket.** The transport, the threads, the port and every channel option:
+
+```java
+NettyServerBuilder bootstrap = new NettyServerBuilder()
+        .port(9009)
+        .host("127.0.0.1")                       // every interface by default
+        .workerThreads(8)                        // a worker per core by default
+        .writeBufferWaterMark(32 * 1024, 64 * 1024)
+        .maxConnections(4096)                    // unlimited by default, see below
+        .backlog(1024)                           // what the OS says by default
+        .transport(Transport.auto());            // kqueue, epoll, or NIO
+```
+
+**They meet at `start`**, which hands the pipeline to the bootstrap and binds it:
+
+```java
+NettyServer server = rest.start(bootstrap);
+```
+
+The other direction is open too: `pipeline()` hands the same initializer to a `ServerBootstrap` of Netty's
+own, which is what `rest.pipeline.PipelineRestServer` does.
 
 `maxConnections` is what bounds file descriptors, and it is off unless you say a number: the right one is
 what the process may open minus everything else it holds, which the deployment knows and this library does
