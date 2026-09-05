@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.example.ws.errors;
@@ -34,7 +17,6 @@ import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestApiHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
-import io.github.green4j.newa.websocket.ClientSession;
 import io.github.green4j.newa.websocket.Receiver;
 import io.github.green4j.newa.websocket.WsApi;
 import io.github.green4j.newa.websocket.WsApiBuilder;
@@ -89,30 +71,25 @@ public class ErrorsWsServer {
      * Everything you can name, name here. What escapes is what the application could not classify, and for
      * that the session is the only honest answer.
      */
-    private static final Receiver RECEIVER = new Receiver() {
-        @Override
-        public void text(final ClientSession session,
-                         final CharSequence message,
-                         final boolean last) {
-            final String command = message.toString();
+    private static final Receiver.Text RECEIVER = (session, message, last) -> {
+        final String command = message.toString();
 
-            if (command.startsWith(ECHO)) {
-                session.sendText(command.substring(ECHO.length()));
-                return;
-            }
-
-            if (BOOM.equals(command)) {
-                throw new IllegalStateException("Failed to read /etc/secret/db.conf");
-            }
-
-            session.sendText("ERR: expected " + ECHO + "<text> or " + BOOM + ", got " + command);
+        if (command.startsWith(ECHO)) {
+            session.sendText(command.substring(ECHO.length()));
+            return;
         }
+
+        if (BOOM.equals(command)) {
+            throw new IllegalStateException("Failed to read /etc/secret/db.conf");
+        }
+
+        session.sendText("ERR: expected " + ECHO + "<text> or " + BOOM + ", got " + command);
     }; // and nothing takes binary here, so a binary frame is answered with a 1003 and the session ends
 
     public static void main(final String[] args) throws Exception {
         final WsApi api = new WsApiBuilder(API_VERSION)
                 .withPathPrefix("ws")
-                .withReceiver(RECEIVER)
+                .withTextReceiver(RECEIVER)
                 .withObservers(StdOutWsApiObserver.factory())
                 .build();
 

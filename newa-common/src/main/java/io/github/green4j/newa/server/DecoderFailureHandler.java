@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.server;
@@ -42,41 +25,32 @@ import io.netty.util.ReferenceCountUtil;
 /**
  * Answers a request the decoder refused with what it was refused for, and closes the connection.
  * <p>
- * Netty does not answer one by itself, and what it does instead is easy to mistake for something else. A
- * request line past {@code maxInitialLineLength}, or a header block past {@code maxHeaderSize}, makes
+ * Netty answers none of them by itself, and what it does instead is easy to mistake for something else: a
+ * request line past {@code maxInitialLineLength} or a header block past {@code maxHeaderSize} makes
  * {@code HttpObjectDecoder} emit a <b>substitute</b> message - {@code GET /bad-request}, carrying the real
- * cause in its {@code decoderResult()} - and the aggregator hands that on like any other request. Without
- * this handler it reaches whatever answers, which finds no such path and says {@code 404}: the one status
- * that tells the caller nothing true about what happened.
+ * cause in its {@code decoderResult()} - which the aggregator hands on like any other request. Without this
+ * handler it reaches whatever answers, which finds no such path and says {@code 404}: the one status that
+ * tells the caller nothing true.
  * <p>
- * The connection is finished either way, which is the second half of the reason this exists. The decoder
- * goes to its {@code BAD_MESSAGE} state and discards everything that arrives from then on, so a connection
- * left open after a refusal is one nothing will ever be read from again - it would sit there holding a file
- * descriptor until the idle timeout took it. So the answer carries {@code Connection: close} and the socket
- * goes with it, which is what {@code HttpObjectAggregator} does with the {@code 413} it answers on its own.
+ * The connection goes with the answer. A decoder which refused is in its {@code BAD_MESSAGE} state and
+ * discards everything that arrives from then on, so a connection left open is one nothing will ever be read
+ * from again - it would hold a file descriptor until the idle timeout took it. The response therefore
+ * carries {@code Connection: close}, as the {@code 413} of {@code HttpObjectAggregator} does.
  * <p>
- * What is answered, from the cause the decoder recorded:
- * <ul>
- *     <li>{@code 414} for a request line past the limit;</li>
- *     <li>{@code 431} for a header block past it;</li>
- *     <li>{@code 400} for everything else a decoder can refuse - a malformed request line, a header that is
- *     not one, a chunk size that is not a number.</li>
- * </ul>
- * The response has no body. There is nothing to say that the status does not, and a peer whose request was
- * refused mid-header is rarely in a position to read one.
+ * What is answered, from the cause the decoder recorded: {@code 414} for a request line past the limit,
+ * {@code 431} for a header block past it, {@code 400} for everything else a decoder can refuse - a malformed
+ * request line, a header which is not one, a chunk size which is not a number. There is no body: nothing is
+ * to be said that the status does not, and a peer refused mid-header is rarely in a position to read one.
  * <p>
  * It goes behind the aggregator - a refusal is a message like any other, and in front of a decoder there is
- * nothing to see - and in front of everything which answers, so that no handler ever has to ask whether the
+ * nothing to see - and in front of everything which answers, so no handler downstream has to ask whether the
  * request it was given was a real one.
  */
 public class DecoderFailureHandler extends ChannelInboundHandlerAdapter {
-    /**
-     * @param ctx of this handler.
-     * @param msg the decoder produced, which is a refusal when it carries a failed {@code decoderResult()}.
-     */
     @Override
     public void channelRead(final ChannelHandlerContext ctx,
                             final Object msg) throws Exception {
+        // a refusal is a message which carries a failed decoderResult()
         if (!(msg instanceof HttpMessage)) {
             super.channelRead(ctx, msg);
             return;

@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -28,6 +11,15 @@ import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.QueryStringDecoder;
 
+/**
+ * The routes of one api, built and then read-only: {@link RestApiBuilder} makes it, {@link RestApiHandler}
+ * resolves every request against it. Routes are grouped by method and matched by {@link PathMatcher}, and a
+ * {@code HEAD} which has no route of its own is answered by the {@code GET} one.
+ * <p>
+ * Resolving allocates nothing per request: each method's matcher is copied once per thread, so two loops
+ * never share one, and what {@link #resolve(FullHttpRequest)} returns points into the copy belonging to the
+ * calling thread - valid until that thread resolves again.
+ */
 public final class RestApi implements RestRouter {
     public static final char SLASH_CHAR = '/';
     public static final String SLASH = "" + SLASH_CHAR;

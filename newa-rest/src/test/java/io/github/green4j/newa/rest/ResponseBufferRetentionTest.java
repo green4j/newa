@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -35,9 +18,9 @@ import io.netty.handler.codec.http.HttpVersion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
-import java.nio.charset.StandardCharsets;
 
 /**
  * The JSON generators and line builders the handlers render into are thread-local and reused between
@@ -47,6 +30,54 @@ import java.nio.charset.StandardCharsets;
  * time, so it is {@link RetainedBufferTest} which covers it, on a clock it can move.
  */
 class ResponseBufferRetentionTest {
+
+    /**
+     * The two thread-local buffers a handler renders into. They are held and reused by the same rule, so
+     * every case below is asked of both - what differs is only the endpoint and, for JSON, the two quotes
+     * a string is rendered inside.
+     */
+    private enum Kind {
+        JSON("/v1/json/small", "/v1/json/large", 2) {
+            @Override
+            Object buffer(final ResponseBufferRetentionTest test) {
+                return test.jsonProbe.current();
+            }
+
+            @Override
+            int capacity(final ResponseBufferRetentionTest test) {
+                return test.jsonProbe.current().capacity();
+            }
+        },
+        TXT("/v1/txt/small", "/v1/txt/large", 0) {
+            @Override
+            Object buffer(final ResponseBufferRetentionTest test) {
+                return test.txtProbe.current();
+            }
+
+            @Override
+            int capacity(final ResponseBufferRetentionTest test) {
+                return test.txtProbe.current().capacity();
+            }
+        };
+
+        private final String small;
+        private final String large;
+        /** How much the rendering adds to the content itself: the quotes around a JSON string. */
+        private final int overhead;
+
+        Kind(final String small,
+                final String large,
+                final int overhead) {
+            this.small = small;
+            this.large = large;
+            this.overhead = overhead;
+        }
+
+        abstract Object buffer(ResponseBufferRetentionTest test);
+
+        abstract int capacity(ResponseBufferRetentionTest test);
+    }
+
     private static final int LARGE_CONTENT_SIZE = 4 * ResponseBuffers.DEFAULT_BASE_SIZE;
 
     /** Reaches the same thread-local generator the JSON handlers use. */
@@ -122,114 +153,59 @@ class ResponseBufferRetentionTest {
         return response;
     }
 
-    @Test
-    public void testSmallJsonResponseKeepsThreadLocalGenerator() {
-        final ByteArrayJsonGenerator before = jsonProbe.current();
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    public void aSmallResponseKeepsTheThreadLocalBuffer(final Kind kind) {
+        final Object before = kind.buffer(this);
 
-        final FullHttpResponse response = get("/v1/json/small");
+        final FullHttpResponse response = get(kind.small);
         try {
             Assertions.assertEquals(200, response.status().code());
-            Assertions.assertEquals("\"small\"",
-                    response.content().toString(StandardCharsets.UTF_8));
         } finally {
             response.release();
         }
 
-        Assertions.assertSame(before, jsonProbe.current(),
-                "a small response must keep reusing the thread-local generator");
+        Assertions.assertSame(before, kind.buffer(this),
+                "a small response must keep reusing the thread-local buffer");
     }
 
-    @Test
-    public void testLargeJsonResponseKeepsItsGeneratorWhileLargeResponsesKeepComing() {
-        final FullHttpResponse first = get("/v1/json/large");
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    public void aLargeResponseKeepsItsBufferWhileLargeResponsesKeepComing(final Kind kind) {
+        final FullHttpResponse first = get(kind.large);
         try {
             Assertions.assertEquals(200, first.status().code());
-            // the quoted string, in full
-            Assertions.assertEquals(LARGE_CONTENT_SIZE + 2, first.content().readableBytes());
+            Assertions.assertEquals(LARGE_CONTENT_SIZE + kind.overhead, first.content().readableBytes());
         } finally {
             first.release();
         }
 
-        final ByteArrayJsonGenerator grown = jsonProbe.current();
-        Assertions.assertTrue(grown.capacity() > ResponseBuffers.baseSize());
+        final Object grown = kind.buffer(this);
+        Assertions.assertTrue(kind.capacity(this) > ResponseBuffers.baseSize());
 
         // while the load needs this size the buffer must never be taken below it: re-growing megabytes per
         // request would cost far more than holding them. Trimming the slack the doubling left over is fine
         for (int i = 0; i < 200; i++) {
-            get("/v1/json/large").release();
-            Assertions.assertSame(grown, jsonProbe.current(),
-                    "the generator must be reused, iteration " + i);
-            Assertions.assertTrue(grown.capacity() >= LARGE_CONTENT_SIZE,
+            get(kind.large).release();
+            Assertions.assertSame(grown, kind.buffer(this), "the buffer must be reused, iteration " + i);
+            Assertions.assertTrue(kind.capacity(this) >= LARGE_CONTENT_SIZE,
                     "the buffer was taken below what the load needs, iteration " + i);
         }
     }
 
-    @Test
-    public void testSmallJsonResponsesNeverShrinkTheGeneratorBelowTheBaseSize() {
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    public void smallResponsesNeverShrinkTheBufferBelowTheBaseSize(final Kind kind) {
         // whatever an earlier test on this thread left behind, small responses may only ever take it down
         // to the base size, and never below
-        final ByteArrayJsonGenerator generator = jsonProbe.current();
+        final Object buffer = kind.buffer(this);
 
         for (int i = 0; i < 500; i++) {
-            get("/v1/json/small").release();
+            get(kind.small).release();
         }
 
-        Assertions.assertSame(generator, jsonProbe.current(),
-                "the generator must never be replaced");
-        Assertions.assertTrue(generator.capacity() >= ResponseBuffers.baseSize(),
-                "the buffer dropped to " + generator.capacity() + " bytes");
-    }
-
-    @Test
-    public void testSmallTxtResponseKeepsThreadLocalLineBuilder() {
-        final ByteArrayLineBuilder before = txtProbe.current();
-
-        final FullHttpResponse response = get("/v1/txt/small");
-        try {
-            Assertions.assertEquals(200, response.status().code());
-            Assertions.assertEquals("small",
-                    response.content().toString(StandardCharsets.UTF_8));
-        } finally {
-            response.release();
-        }
-
-        Assertions.assertSame(before, txtProbe.current(),
-                "a small response must keep reusing the thread-local line builder");
-    }
-
-    @Test
-    public void testLargeTxtResponseKeepsItsLineBuilderWhileLargeResponsesKeepComing() {
-        final FullHttpResponse first = get("/v1/txt/large");
-        try {
-            Assertions.assertEquals(200, first.status().code());
-            Assertions.assertEquals(LARGE_CONTENT_SIZE, first.content().readableBytes());
-        } finally {
-            first.release();
-        }
-
-        final ByteArrayLineBuilder grown = txtProbe.current();
-        Assertions.assertTrue(grown.capacity() > ResponseBuffers.baseSize());
-
-        for (int i = 0; i < 200; i++) {
-            get("/v1/txt/large").release();
-            Assertions.assertSame(grown, txtProbe.current(),
-                    "the line builder must be reused, iteration " + i);
-            Assertions.assertTrue(grown.capacity() >= LARGE_CONTENT_SIZE,
-                    "the buffer was taken below what the load needs, iteration " + i);
-        }
-    }
-
-    @Test
-    public void testSmallTxtResponsesNeverShrinkTheLineBuilderBelowTheBaseSize() {
-        final ByteArrayLineBuilder lineBuilder = txtProbe.current();
-
-        for (int i = 0; i < 500; i++) {
-            get("/v1/txt/small").release();
-        }
-
-        Assertions.assertSame(lineBuilder, txtProbe.current(),
-                "the line builder must never be replaced");
-        Assertions.assertTrue(lineBuilder.capacity() >= ResponseBuffers.baseSize(),
-                "the buffer dropped to " + lineBuilder.capacity() + " bytes");
+        Assertions.assertSame(buffer, kind.buffer(this), "the buffer must never be replaced");
+        Assertions.assertTrue(kind.capacity(this) >= ResponseBuffers.baseSize(),
+                "the buffer dropped to " + kind.capacity(this) + " bytes");
     }
 }

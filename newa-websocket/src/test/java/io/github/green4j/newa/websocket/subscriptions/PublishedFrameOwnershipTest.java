@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket.subscriptions;
@@ -28,10 +11,15 @@ import io.github.green4j.newa.websocket.ClientSession;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.nio.charset.StandardCharsets;
 
@@ -42,9 +30,97 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 /**
  * A publication rendered once for every subscriber: who owns the buffer handed to
  * {@link EntitySubscriptions#publishTextAndRelease(ByteBuf)}, and that nothing of it is left behind.
+ * <p>
+ * A publication owns its buffer the same way whichever kind of frame it goes out as, so both are asked.
  */
 class PublishedFrameOwnershipTest {
     private static final int WRITABILITY_FLAG = 1;
+
+    /** The two kinds a publication can go out as, which own the buffer they are given identically. */
+    private enum Kind {
+        TEXT {
+            @Override
+            long publishAndRelease(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.publishTextAndRelease(frame);
+            }
+
+            @Override
+            long publish(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.publishText(frame);
+            }
+
+            @Override
+            int forEachSessionAndRelease(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.forEachSessionTextAndRelease(frame);
+            }
+
+            @Override
+            int forEachSession(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.forEachSessionText(frame);
+            }
+
+            @Override
+            Class<? extends WebSocketFrame> frameType() {
+                return TextWebSocketFrame.class;
+            }
+        },
+        BINARY {
+            @Override
+            long publishAndRelease(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.publishBinaryAndRelease(frame);
+            }
+
+            @Override
+            long publish(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.publishBinary(frame);
+            }
+
+            @Override
+            int forEachSessionAndRelease(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.forEachSessionBinaryAndRelease(frame);
+            }
+
+            @Override
+            int forEachSession(final EntitySubscriptions to, final ByteBuf frame) {
+                return to.forEachSessionBinary(frame);
+            }
+
+            @Override
+            Class<? extends WebSocketFrame> frameType() {
+                return BinaryWebSocketFrame.class;
+            }
+        };
+
+        abstract long publishAndRelease(EntitySubscriptions to, ByteBuf frame);
+
+        abstract long publish(EntitySubscriptions to, ByteBuf frame);
+
+        abstract int forEachSessionAndRelease(EntitySubscriptions to, ByteBuf frame);
+
+        abstract int forEachSession(EntitySubscriptions to, ByteBuf frame);
+
+        abstract Class<? extends WebSocketFrame> frameType();
+    }
+
+    /**
+     * @param session to take one frame off.
+     * @param kind    it must have gone out as.
+     * @return what it carries, or null if nothing was written.
+     */
+    private static String read(final ClientSession session,
+                               final Kind kind) {
+        final Object written = channelOf(session).readOutbound();
+        if (written == null) {
+            return null;
+        }
+        Assertions.assertInstanceOf(kind.frameType(), written, "not a " + kind + " frame");
+        final WebSocketFrame frame = (WebSocketFrame) written;
+        try {
+            return frame.content().toString(StandardCharsets.UTF_8);
+        } finally {
+            frame.release();
+        }
+    }
 
     private TestSessions sessions;
     private EntitySubscriptions subscriptions;
@@ -85,8 +161,9 @@ class PublishedFrameOwnershipTest {
         sessions.closeAll();
     }
 
-    @Test
-    void shouldGiveEverySubscribedSessionADuplicateOfTheFrameRenderedOnce() {
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void shouldGiveEverySubscribedSessionADuplicateOfTheFrameRenderedOnce(final Kind kind) {
         final ClientSession one = sessions.newSession();
         final ClientSession two = sessions.newSession();
         final ClientSession three = sessions.newSession();
@@ -96,15 +173,15 @@ class PublishedFrameOwnershipTest {
         subscriptions.add(three);
 
         final ByteBuf frame = text("E=1");
-        final long sequence = subscriptions.publishTextAndRelease(frame);
+        final long sequence = kind.publishAndRelease(subscriptions, frame);
 
         assertEquals(1, sequence, "a publication is numbered whichever way it is made");
         assertEquals(3, frame.refCnt(),
                 "one retained duplicate per session, and the buffer itself already released");
 
-        assertEquals("E=1", readText(one));
-        assertEquals("E=1", readText(two));
-        assertEquals("E=1", readText(three));
+        assertEquals("E=1", read(one, kind));
+        assertEquals("E=1", read(two, kind));
+        assertEquals("E=1", read(three, kind));
 
         assertEquals(0, frame.refCnt(), "every duplicate is accounted for");
     }
@@ -142,8 +219,9 @@ class PublishedFrameOwnershipTest {
         setWritable(channelOf(lagging), true);
     }
 
-    @Test
-    void shouldGiveEverySubscribedSessionADuplicateWithoutNumberingTheWalk() {
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void shouldGiveEverySubscribedSessionADuplicateWithoutNumberingTheWalk(final Kind kind) {
         final ClientSession one = sessions.newSession();
         final ClientSession two = sessions.newSession();
 
@@ -151,7 +229,7 @@ class PublishedFrameOwnershipTest {
         subscriptions.add(two);
 
         final ByteBuf frame = text("notice");
-        final int walked = subscriptions.forEachSessionTextAndRelease(frame);
+        final int walked = kind.forEachSessionAndRelease(subscriptions, frame);
 
         assertEquals(2, walked);
         assertEquals(2, frame.refCnt(),
@@ -159,8 +237,8 @@ class PublishedFrameOwnershipTest {
         assertEquals(0, subscriptions.publicationSequence(),
                 "an administrative broadcast is not a publication of the entity");
 
-        assertEquals("notice", readText(one));
-        assertEquals("notice", readText(two));
+        assertEquals("notice", read(one, kind));
+        assertEquals("notice", read(two, kind));
 
         assertEquals(0, frame.refCnt(), "every duplicate is accounted for");
     }
@@ -173,8 +251,9 @@ class PublishedFrameOwnershipTest {
         assertEquals(0, frame.refCnt(), "the buffer is released, not leaked");
     }
 
-    @Test
-    void shouldLeaveTheFrameToTheCallerWhenItIsNotHandedOver() {
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void shouldLeaveTheFrameToTheCallerWhenItIsNotHandedOver(final Kind kind) {
         final ClientSession one = sessions.newSession();
         final ClientSession two = sessions.newSession();
 
@@ -182,13 +261,13 @@ class PublishedFrameOwnershipTest {
         subscriptions.add(two);
 
         final ByteBuf frame = text("E=1");
-        subscriptions.publishText(frame);
-        subscriptions.forEachSessionText(frame);
+        kind.publish(subscriptions, frame);
+        kind.forEachSession(subscriptions, frame);
 
-        assertEquals("E=1", readText(one));
-        assertEquals("E=1", readText(one));
-        assertEquals("E=1", readText(two));
-        assertEquals("E=1", readText(two));
+        assertEquals("E=1", read(one, kind));
+        assertEquals("E=1", read(one, kind));
+        assertEquals("E=1", read(two, kind));
+        assertEquals("E=1", read(two, kind));
 
         assertEquals(1, frame.refCnt(), "the same buffer, sent twice, is still the caller's");
 

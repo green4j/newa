@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.lang;
@@ -43,6 +26,40 @@ class LifeTest {
      */
     private static final class Resource implements AutoCloseable {
         private final AtomicInteger closes = new AtomicInteger();
+
+        @Override
+        public void close() {
+            closes.incrementAndGet();
+        }
+    }
+
+    /**
+     * One which can die under whoever runs it, as a bound server can: it holds what it was registered with
+     * and ends when the test says it has.
+     */
+    private static final class Dying implements SelfEnding {
+        private final AtomicInteger closes = new AtomicInteger();
+        private final AtomicReference<Ender> ender = new AtomicReference<>();
+        private final String cause;
+        private final boolean endedAlready;
+
+        private Dying(final String cause,
+                      final boolean endedAlready) {
+            this.cause = cause;
+            this.endedAlready = endedAlready;
+        }
+
+        @Override
+        public void whenEnded(final Ender toTell) {
+            ender.set(toTell);
+            if (endedAlready) {
+                toTell.end(cause);   // as a listener added to a channel already closed is called at once
+            }
+        }
+
+        private void die() {
+            ender.get().end(cause);
+        }
 
         @Override
         public void close() {
@@ -343,6 +360,64 @@ class LifeTest {
                 }));
 
         Assertions.assertTrue(sawTheOther.get(), "the two closes did not overlap");
+    }
+
+    @Test
+    public void aResourceWhichEndsByItselfEndsTheLife() throws Exception {
+        // the thread in run() waits for end() and for nothing else, so a resource which died under it has
+        // to be the one to say so - or the process stays up owning something which is no longer running
+        final Life life = new Life();
+        final Dying resource = new Dying("Port 9009 closed", false);
+        final Recording observer = new Recording();
+
+        final Running running = runInBackground(life, resource, observer);
+        Assertions.assertFalse(running.returnedWithin(100L), "returned before anything ended");
+
+        resource.die();
+
+        Assertions.assertTrue(running.returnedWithin(TIMEOUT_MILLIS), "still running after the resource died");
+        Assertions.assertNull(running.failure.get());
+        Assertions.assertEquals(1, resource.closes.get());
+        Assertions.assertEquals(
+                List.of("running", "ending:Port 9009 closed", "ended"),
+                observer.stages);
+    }
+
+    @Test
+    public void anEndWhichHappenedBeforeAnybodyWatchedIsNotLost() throws Exception {
+        // a channel closed between binding and being asked about reports at once, from inside whenEnded,
+        // which lands the end before run() has parked. It is honoured there rather than waited for
+        final Life life = new Life();
+        final Dying resource = new Dying("Port 9009 closed", true);
+        final Recording observer = new Recording();
+
+        life.run(() -> resource, observer);
+
+        Assertions.assertEquals(1, resource.closes.get(), "the resource opened was not closed");
+        Assertions.assertEquals(List.of("ending:Port 9009 closed", "ended"), observer.stages);
+    }
+
+    @Test
+    public void anyOneOfAllEndingByItselfEndsThemAll() throws Exception {
+        // half of what was promised is not something to stay up serving
+        final Life life = new Life();
+        final Dying first = new Dying("Port 9009 closed", false);
+        final Resource second = new Resource();
+        final Dying third = new Dying("Port 9011 closed", false);
+        final Recording observer = new Recording();
+
+        final Running running = new Running(life, Life.all(() -> first, () -> second, () -> third), observer);
+        running.start();
+
+        third.die();
+
+        Assertions.assertTrue(running.returnedWithin(TIMEOUT_MILLIS), "still running after one of them died");
+        Assertions.assertEquals(1, first.closes.get());
+        Assertions.assertEquals(1, second.closes.get());
+        Assertions.assertEquals(1, third.closes.get());
+        Assertions.assertEquals(
+                List.of("running", "ending:Port 9011 closed", "ended"),
+                observer.stages);
     }
 
     @Test

@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -39,7 +22,8 @@ import io.netty.util.AsciiString;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -161,54 +145,43 @@ class StaticRestHandlerTest {
         return get(path).headers().firstValue("Content-Type").orElse(null);
     }
 
-    @Test
-    public void testTextIsRenderedAsAsciiByDefault() throws Exception {
-        Assertions.assertArrayEquals(
-                new byte[] {'h', '?', 'l', 'l', 'o'},
-                body("/txt-default"),
-                "a character ASCII cannot hold is replaced, not reported");
+    /**
+     * @param path to ask for.
+     * @param hex  the bytes the content is expected to arrive as. A character the charset cannot hold is
+     *             replaced with a question mark rather than reported, which is what 3f is here.
+     */
+    @ParameterizedTest
+    @CsvSource({
+        "/txt-default,   683f6c6c6f",   // text is ASCII unless something else is asked for
+        "/txt-ascii,     683f6c6c6f",
+        "/txt-utf8,      68c3a96c6c6f",
+        "/json-default,  68c3a96c6c6f", // RFC 8259 puts JSON on the wire as UTF-8
+        "/json-ascii,    683f6c6c6f",
+        "/raw,           68c3a96c6c6f"  // the bytes the caller gave, sent as they were given
+    })
+    public void theContentIsRenderedInTheCharsetItIsSentIn(final String path,
+                                                           final String hex) throws Exception {
+        final byte[] expected = new byte[hex.length() / 2];
+        for (int i = 0; i < expected.length; i++) {
+            expected[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+
+        Assertions.assertArrayEquals(expected, body(path), path);
     }
 
-    @Test
-    public void testTextIsRenderedAsAsciiWhenAsked() throws Exception {
-        Assertions.assertArrayEquals(
-                new byte[] {'h', '?', 'l', 'l', 'o'},
-                body("/txt-ascii"));
-    }
-
-    @Test
-    public void testTextIsRenderedAsUtf8WhenAsked() throws Exception {
-        Assertions.assertArrayEquals(
-                new byte[] {'h', (byte) 0xC3, (byte) 0xA9, 'l', 'l', 'o'},
-                body("/txt-utf8"));
-    }
-
-    @Test
-    public void testJsonIsRenderedAsUtf8ByDefault() throws Exception {
-        Assertions.assertArrayEquals(
-                new byte[] {'h', (byte) 0xC3, (byte) 0xA9, 'l', 'l', 'o'},
-                body("/json-default"),
-                "RFC 8259 puts JSON on the wire as UTF-8");
-    }
-
-    @Test
-    public void testJsonHonoursAnExplicitCharset() throws Exception {
-        Assertions.assertArrayEquals(
-                new byte[] {'h', '?', 'l', 'l', 'o'},
-                body("/json-ascii"));
-    }
-
-    @Test
-    public void testTheCharsetTheContentWasRenderedWithIsNamedInTheContentType() throws Exception {
-        Assertions.assertEquals("text/plain; charset=us-ascii", contentType("/txt-default"));
-        Assertions.assertEquals("text/plain; charset=utf-8", contentType("/txt-utf8"));
-        Assertions.assertEquals("application/json; charset=utf-8", contentType("/json-default"));
-        Assertions.assertEquals("application/json; charset=us-ascii", contentType("/json-ascii"));
-    }
-
-    @Test
-    public void testTheByteArrayConstructorSendsTheContentTypeAsGiven() throws Exception {
-        Assertions.assertEquals("text/html; charset=utf-8", contentType("/raw"),
-                "the caller owns the header when it owns the bytes");
+    @ParameterizedTest
+    @CsvSource({
+        "/txt-default,   text/plain; charset=us-ascii",
+        "/txt-ascii,     text/plain; charset=us-ascii",
+        "/txt-utf8,      text/plain; charset=utf-8",
+        "/json-default,  application/json; charset=utf-8",
+        "/json-ascii,    application/json; charset=us-ascii",
+        // and the caller owns the header when it owns the bytes
+        "/raw,           text/html; charset=utf-8"
+    })
+    public void theCharsetTheContentWasRenderedWithIsNamedInTheContentType(final String path,
+                                                                          final String expected)
+            throws Exception {
+        Assertions.assertEquals(expected, contentType(path), path);
     }
 }

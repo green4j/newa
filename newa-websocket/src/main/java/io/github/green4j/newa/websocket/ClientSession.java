@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
@@ -49,6 +32,25 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * One WebSocket connection, from the moment its handshake completed until its channel goes away. Everything
+ * an application does to a peer it does through this: {@code sendText}, {@code sendBinary}, {@code ping},
+ * {@code close}.
+ * <p>
+ * <b>Every send takes the buffer over.</b> A {@link ByteBuf} handed to one is released whatever becomes of
+ * it - written, skipped because the session cannot keep up, or dropped because the channel is gone - so a
+ * caller which wants to send the same bytes twice retains them itself. {@link #send(CharSequence)} is
+ * {@link #sendText(CharSequence)} under the name {@link Sender} asks for.
+ * <p>
+ * Everything which touches a session has to end up on its event loop: {@link #executor()} hops back onto it
+ * and {@link #scheduler()} repeats work on it, and neither may be blocked. {@link #channel()},
+ * {@link #isClosed()}, {@link #createTimeMs()}, {@link #lastReadTimeMs()} and {@link #lastWriteTimeMs()}
+ * answer from any thread.
+ * <p>
+ * {@link #close()} says nothing to the peer, which reads it as a {@code 1006} - indistinguishable from the
+ * network dropping. {@link #closeWith(WebSocketCloseStatus)} says which close it is, and that is what a
+ * client's reconnect is built on. Both are idempotent, and the first status given is the one sent.
+ */
 public class ClientSession implements Sender, Closeable {
     private static final Charset DEFAULT_CHARSET = CharsetUtil.UTF_8;
     private static final ByteBuf PING_TEXT = Unpooled.copiedBuffer("ping", DEFAULT_CHARSET);
@@ -231,7 +233,7 @@ public class ClientSession implements Sender, Closeable {
     }
 
     /**
-     * Hands a whole text message to the {@link Receiver} of this session.
+     * Hands a whole text message to the {@link Receiver.Text} of this session.
      *
      * @param frame the text.
      */
@@ -240,18 +242,19 @@ public class ClientSession implements Sender, Closeable {
     }
 
     /**
-     * Hands a text message, or one piece of it, to the {@link Receiver} of this session, and answers the
-     * peer itself when there is nobody to take it.
+     * Hands a text message, or one piece of it, to the {@link Receiver.Text} of this session, and answers
+     * the peer itself when there is nobody to take it.
      *
      * @param frame the text, valid for the call and no longer as far as the receiver is concerned.
      * @param last whether the message ends here.
      */
     public void receive(final CharSequence frame,
                         final boolean last) {
-        final Receiver receiver = context.receiver();
+        final Receiver.Text receiver = context.textReceiver();
         if (receiver == null) {
-            closeWith(WebSocketCloseStatus.INVALID_MESSAGE_TYPE); // an api which only ever sends takes
-            // nothing at all, and a client which sends anyway is told so
+            closeWith(WebSocketCloseStatus.INVALID_MESSAGE_TYPE); // nothing here takes text, and a client
+            // which sends it anyway is told which of the two it is rather than left with a frame which
+            // went nowhere
             return;
         }
         try {
@@ -264,15 +267,15 @@ public class ClientSession implements Sender, Closeable {
     }
 
     /**
-     * Hands a binary message, or one piece of it, to the {@link Receiver} of this session, on the same
-     * terms {@link #receive(CharSequence, boolean)} does.
+     * Hands a binary message, or one piece of it, to the {@link Receiver.Binary} of this session, on the
+     * same terms {@link #receive(CharSequence, boolean)} does.
      *
      * @param frame the bytes, which the receiver must retain to keep.
      * @param last whether the message ends here.
      */
     public void receive(final ByteBuf frame,
                         final boolean last) {
-        final Receiver receiver = context.receiver();
+        final Receiver.Binary receiver = context.binaryReceiver();
         if (receiver == null) {
             closeWith(WebSocketCloseStatus.INVALID_MESSAGE_TYPE);
             return;
@@ -287,7 +290,7 @@ public class ClientSession implements Sender, Closeable {
     /**
      * Reports a failure of the application handling a frame the way a failed write is reported - the
      * observer is told and the session is closed - and never throws itself. Called for anything thrown by
-     * the {@link Receiver}, and public because a receiver which handles a frame somewhere else owes the
+     * a {@link Receiver}, and public because a receiver which handles a frame somewhere else owes the
      * session the same treatment.
      * <p>
      * The session goes. A receiver which threw has said nothing about whether the state behind it is still

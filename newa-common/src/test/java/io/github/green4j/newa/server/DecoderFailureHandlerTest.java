@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.server;
@@ -36,10 +19,14 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 class DecoderFailureHandlerTest {
     private static final int MAX_INITIAL_LINE_LENGTH = 64;
@@ -101,48 +88,42 @@ class DecoderFailureHandlerTest {
         return result.toString();
     }
 
-    @Test
-    public void aRequestLinePastTheLimitIsAnswered414() {
+    /**
+     * What the decoder refuses, and the status each refusal is answered with.
+     *
+     * @return one case per refusal: what it is, the request which causes it, the status it is answered
+     *         with, and whether the answer announces the close.
+     */
+    private static Stream<Arguments> whatTheDecoderRefuses() {
+        return Stream.of(
+                Arguments.of("a request line past the limit",
+                        "GET /" + repeated('a', MAX_INITIAL_LINE_LENGTH) + " HTTP/1.1\r\nHost: h\r\n\r\n",
+                        "414", true),
+                Arguments.of("a header block past the limit",
+                        "GET / HTTP/1.1\r\nHost: h\r\nX-Big: "
+                                + repeated('a', MAX_HEADER_SIZE) + "\r\n\r\n",
+                        "431", true),
+                Arguments.of("a request line which is not one", "GET\r\n\r\n", "400", false));
+    }
+
+    @ParameterizedTest(name = "{0} is answered {2}")
+    @MethodSource("whatTheDecoderRefuses")
+    public void whatTheDecoderRefusesIsAnswered(final String what,
+                                                final String request,
+                                                final String status,
+                                                final boolean announcesTheClose) {
         final EmbeddedChannel channel = channelWithTheHandler();
 
-        send(channel, "GET /" + repeated('a', MAX_INITIAL_LINE_LENGTH) + " HTTP/1.1\r\nHost: h\r\n\r\n");
+        send(channel, request);
 
         final String answer = answerOf(channel);
-        Assertions.assertTrue(answer.startsWith("HTTP/1.1 414 "), answer);
-        Assertions.assertTrue(answer.contains("connection: close"), answer);
+        Assertions.assertTrue(answer.startsWith("HTTP/1.1 " + status + " "), answer);
+        if (announcesTheClose) {
+            Assertions.assertTrue(answer.contains("connection: close"), answer);
+        }
         // the decoder discards everything it reads from now on, so a connection left open is one nothing
         // would ever be read from again
-        Assertions.assertFalse(channel.isOpen());
-        Assertions.assertTrue(received.uris.isEmpty(), received.uris.toString());
-
-        channel.finishAndReleaseAll();
-    }
-
-    @Test
-    public void aHeaderBlockPastTheLimitIsAnswered431() {
-        final EmbeddedChannel channel = channelWithTheHandler();
-
-        send(channel, "GET / HTTP/1.1\r\nHost: h\r\nX-Big: "
-                + repeated('a', MAX_HEADER_SIZE) + "\r\n\r\n");
-
-        final String answer = answerOf(channel);
-        Assertions.assertTrue(answer.startsWith("HTTP/1.1 431 "), answer);
-        Assertions.assertTrue(answer.contains("connection: close"), answer);
-        Assertions.assertFalse(channel.isOpen());
-        Assertions.assertTrue(received.uris.isEmpty(), received.uris.toString());
-
-        channel.finishAndReleaseAll();
-    }
-
-    @Test
-    public void anythingElseTheDecoderRefusesIsAnswered400() {
-        final EmbeddedChannel channel = channelWithTheHandler();
-
-        send(channel, "GET\r\n\r\n"); // a request line which is not one
-
-        final String answer = answerOf(channel);
-        Assertions.assertTrue(answer.startsWith("HTTP/1.1 400 "), answer);
-        Assertions.assertFalse(channel.isOpen());
+        Assertions.assertFalse(channel.isOpen(), what);
         Assertions.assertTrue(received.uris.isEmpty(), received.uris.toString());
 
         channel.finishAndReleaseAll();

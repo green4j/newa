@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
@@ -29,8 +12,21 @@ import io.netty.buffer.ByteBuf;
 
 import java.nio.charset.Charset;
 
+/**
+ * A websocket api: the path its handshake is served on, what its sessions hand their frames to, the
+ * keep-alive it holds them with, and the fan-out over every session it has open. Built by
+ * {@link WsApiBuilder}, and what a {@link WsApiHandler} serves.
+ * <p>
+ * It is also where a write which could not be made is decided on - a session which cannot keep up is closed,
+ * or kept and marked lagging when the api was built with {@code withSkipOnBackPressure()}.
+ * <p>
+ * The receivers are built before the api, so one which wants to broadcast cannot capture it. Subclass this
+ * and override {@link #textReceiver()} or {@link #binaryReceiver()} when a receiver needs the api it belongs
+ * to.
+ */
 public class WsApi implements ClientSessionFactory, WritingResult {
-    private final Receiver receiver;
+    private final Receiver.Text textReceiver;
+    private final Receiver.Binary binaryReceiver;
     private final String websocketPath;
     private final int pingIntervalMs;
     private final int readTimeoutMs;
@@ -44,22 +40,26 @@ public class WsApi implements ClientSessionFactory, WritingResult {
      * both when that is what you want.
      *
      * @param observers asked for an observer per session, or null to observe nothing.
-     * @param receiver told about every data frame of every session, text or binary, or null for an api
-     *                 which only ever sends - one which answers an inbound frame with a 1003, since there
-     *                 is nothing here to take it. It is to a frame what a rest handle is to a request,
-     *                 which is why it belongs to the api rather than to the handler in front of it.
+     * @param textReceiver told about every text frame of every session, or null for an api which takes no
+     *                     text - one which answers a text frame with a 1003, since there is nothing here to
+     *                     take it. It is to a frame what a rest handle is to a request, which is why it
+     *                     belongs to the api rather than to the handler in front of it.
+     * @param binaryReceiver told about every binary frame of every session, on the same terms, or null.
+     *                       Both null is an api which only ever sends.
      * @param websocketPath the path the handshake is served on.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never.
      * @param skipOnBackPressure keeps a session which can not keep up instead of closing it.
      */
     public WsApi(final WsApiObserverFactory observers,
-                 final Receiver receiver,
+                 final Receiver.Text textReceiver,
+                 final Receiver.Binary binaryReceiver,
                  final String websocketPath,
                  final int pingIntervalMs,
                  final boolean skipOnBackPressure) {
         this(
                 observers,
-                receiver,
+                textReceiver,
+                binaryReceiver,
                 websocketPath,
                 pingIntervalMs,
                 AbstractWsApiBuilder.DEFAULT_READ_TIMEOUT_MS, // the safe default belongs to an api assembled by
@@ -70,10 +70,12 @@ public class WsApi implements ClientSessionFactory, WritingResult {
 
     /**
      * @param observers asked for an observer per session, or null to observe nothing.
-     * @param receiver told about every data frame of every session, text or binary, or null for an api
-     *                 which only ever sends - one which answers an inbound frame with a 1003, since there
-     *                 is nothing here to take it. It is to a frame what a rest handle is to a request,
-     *                 which is why it belongs to the api rather than to the handler in front of it.
+     * @param textReceiver told about every text frame of every session, or null for an api which takes no
+     *                     text - one which answers a text frame with a 1003, since there is nothing here to
+     *                     take it. It is to a frame what a rest handle is to a request, which is why it
+     *                     belongs to the api rather than to the handler in front of it.
+     * @param binaryReceiver told about every binary frame of every session, on the same terms, or null.
+     *                       Both null is an api which only ever sends.
      * @param websocketPath the path the handshake is served on.
      * @param pingIntervalMs how often an idle session is pinged, 0 for never. What gives a session which
      *                       only listens something to answer, so that the timeout below can tell it from
@@ -83,12 +85,14 @@ public class WsApi implements ClientSessionFactory, WritingResult {
      * @param skipOnBackPressure keeps a session which can not keep up instead of closing it.
      */
     public WsApi(final WsApiObserverFactory observers,
-                 final Receiver receiver,
+                 final Receiver.Text textReceiver,
+                 final Receiver.Binary binaryReceiver,
                  final String websocketPath,
                  final int pingIntervalMs,
                  final int readTimeoutMs,
                  final boolean skipOnBackPressure) {
-        this.receiver = receiver;
+        this.textReceiver = textReceiver;
+        this.binaryReceiver = binaryReceiver;
         this.websocketPath = websocketPath;
         this.pingIntervalMs = pingIntervalMs;
         this.readTimeoutMs = readTimeoutMs;
@@ -113,10 +117,18 @@ public class WsApi implements ClientSessionFactory, WritingResult {
     }
 
     /**
-     * @return what every session of this api hands its inbound data frames to, null if it has none.
+     * @return what every session of this api hands its inbound text frames to, null if it takes no text.
      */
-    public Receiver receiver() {
-        return receiver;
+    public Receiver.Text textReceiver() {
+        return textReceiver;
+    }
+
+    /**
+     * @return what every session of this api hands its inbound binary frames to, null if it takes no
+     *         binary.
+     */
+    public Receiver.Binary binaryReceiver() {
+        return binaryReceiver;
     }
 
     public String websocketPath() {

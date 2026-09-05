@@ -1,35 +1,23 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 class NamedValuesTest {
 
@@ -39,6 +27,12 @@ class NamedValuesTest {
             map.put(kvPairs[i], kvPairs[i + 1]);
         }
         return new MapNamedValues(map);
+    }
+
+    /** One way of reading a value out, so that a case can name the three forms every conversion has. */
+    @FunctionalInterface
+    private interface Reader {
+        Object read(NamedValues nv) throws BadRequestException;
     }
 
     @Test
@@ -52,166 +46,130 @@ class NamedValuesTest {
     public void testValueRequired() throws BadRequestException {
         final NamedValues nv = of("color", "blue");
         Assertions.assertEquals("blue", nv.valueRequired("color"));
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequired("missing"));
+        Assertions.assertThrows(BadRequestException.class, () -> nv.valueRequired("missing"));
     }
 
-    @Test
-    public void testByteConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "42");
-        Assertions.assertEquals((byte) 42,
-                nv.valueRequiredAsByte("val"));
-        Assertions.assertEquals((byte) 42,
-                nv.valueAsByte("val", (byte) 0));
-        Assertions.assertEquals((byte) 7,
-                nv.valueAsByte("missing", (byte) 7));
+    /**
+     * Every conversion, in all three of the forms it comes in: required, defaulted with the value there,
+     * and defaulted with nothing under the name.
+     *
+     * @return one case per type: what it is called, the text to convert, what that converts to, the three
+     *         ways of asking for it, and what the last of them falls back to.
+     */
+    private static Stream<Arguments> everyConversion() {
+        return Stream.of(
+                Arguments.of("byte", "42", (byte) 42,
+                        (Reader) nv -> nv.valueRequiredAsByte("val"),
+                        (Reader) nv -> nv.valueAsByte("val", (byte) 0),
+                        (Reader) nv -> nv.valueAsByte("missing", (byte) 7), (byte) 7),
+                Arguments.of("short", "1000", (short) 1000,
+                        (Reader) nv -> nv.valueRequiredAsShort("val"),
+                        (Reader) nv -> nv.valueAsShort("val", (short) 0),
+                        (Reader) nv -> nv.valueAsShort("missing", (short) 5), (short) 5),
+                Arguments.of("int", "123456", 123456,
+                        (Reader) nv -> nv.valueRequiredAsInt("val"),
+                        (Reader) nv -> nv.valueAsInt("val", 0),
+                        (Reader) nv -> nv.valueAsInt("missing", 99), 99),
+                Arguments.of("long", "9999999999", 9999999999L,
+                        (Reader) nv -> nv.valueRequiredAsLong("val"),
+                        (Reader) nv -> nv.valueAsLong("val", 0L),
+                        (Reader) nv -> nv.valueAsLong("missing", 1L), 1L),
+                Arguments.of("float", "3.14", 3.14f,
+                        (Reader) nv -> nv.valueRequiredAsFloat("val"),
+                        (Reader) nv -> nv.valueAsFloat("val", 0f),
+                        (Reader) nv -> nv.valueAsFloat("missing", 1.0f), 1.0f),
+                Arguments.of("double", "2.718281828", 2.718281828,
+                        (Reader) nv -> nv.valueRequiredAsDouble("val"),
+                        (Reader) nv -> nv.valueAsDouble("val", 0.0),
+                        (Reader) nv -> nv.valueAsDouble("missing", 0.5), 0.5),
+                Arguments.of("BigDecimal", "123.456789", new BigDecimal("123.456789"),
+                        (Reader) nv -> nv.valueRequiredAsBigDecimal("val"),
+                        (Reader) nv -> nv.valueAsBigDecimal("val", BigDecimal.ZERO),
+                        (Reader) nv -> nv.valueAsBigDecimal("missing", BigDecimal.ZERO), BigDecimal.ZERO));
     }
 
-    @Test
-    public void testByteInvalid() {
-        final NamedValues nv = of("val", "abc");
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsByte("val"));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everyConversion")
+    public void convertsTheValue(final String type,
+                                 final String raw,
+                                 final Object expected,
+                                 final Reader required,
+                                 final Reader defaulted,
+                                 final Reader missing,
+                                 final Object fallback) throws BadRequestException {
+        final NamedValues nv = of("val", raw);
+
+        Assertions.assertEquals(expected, required.read(nv), type);
+        Assertions.assertEquals(expected, defaulted.read(nv), type);
+        Assertions.assertEquals(fallback, missing.read(nv), type + " under a name which is not there");
     }
 
-    @Test
-    public void testByteRequiredMissing() {
+    /**
+     * What is not a number of that type at all.
+     *
+     * @return one case per type: what it is called, the text which is not one, and how it is asked for.
+     */
+    private static Stream<Arguments> everyConversionOfSomethingElse() {
+        return Stream.of(
+                Arguments.of("byte", "abc", (Reader) nv -> nv.valueRequiredAsByte("val")),
+                Arguments.of("int", "not_a_number", (Reader) nv -> nv.valueRequiredAsInt("val")),
+                Arguments.of("int, asked for with a default", "not_a_number",
+                        (Reader) nv -> nv.valueAsInt("val", 0)),
+                Arguments.of("double", "xyz", (Reader) nv -> nv.valueRequiredAsDouble("val")),
+                Arguments.of("BigDecimal", "not_decimal",
+                        (Reader) nv -> nv.valueRequiredAsBigDecimal("val")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everyConversionOfSomethingElse")
+    public void whatIsNotAValueOfThatTypeIsABadRequest(final String type,
+                                                       final String raw,
+                                                       final Reader reader) {
+        final NamedValues nv = of("val", raw);
+
+        Assertions.assertThrows(BadRequestException.class, () -> reader.read(nv), type);
+    }
+
+    /**
+     * @return one case per required conversion, each asked of a map which has nothing under the name.
+     */
+    private static Stream<Arguments> everyRequiredConversion() {
+        return Stream.of(
+                Arguments.of("byte", (Reader) nv -> nv.valueRequiredAsByte("val")),
+                Arguments.of("boolean", (Reader) nv -> nv.valueRequiredAsBoolean("missing")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everyRequiredConversion")
+    public void aRequiredValueWhichIsNotThereIsABadRequest(final String type,
+                                                           final Reader reader) {
         final NamedValues nv = of();
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsByte("val"));
+
+        Assertions.assertThrows(BadRequestException.class, () -> reader.read(nv), type);
     }
 
-    @Test
-    public void testShortConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "1000");
-        Assertions.assertEquals((short) 1000,
-                nv.valueRequiredAsShort("val"));
-        Assertions.assertEquals((short) 1000,
-                nv.valueAsShort("val", (short) 0));
-        Assertions.assertEquals((short) 5,
-                nv.valueAsShort("missing", (short) 5));
-    }
-
-    @Test
-    public void testIntConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "123456");
-        Assertions.assertEquals(123456, nv.valueRequiredAsInt("val"));
-        Assertions.assertEquals(123456, nv.valueAsInt("val", 0));
-        Assertions.assertEquals(99, nv.valueAsInt("missing", 99));
-    }
-
-    @Test
-    public void testIntInvalid() {
-        final NamedValues nv = of("val", "not_a_number");
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsInt("val"));
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueAsInt("val", 0));
-    }
-
-    @Test
-    public void testLongConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "9999999999");
-        Assertions.assertEquals(9999999999L,
-                nv.valueRequiredAsLong("val"));
-        Assertions.assertEquals(9999999999L,
-                nv.valueAsLong("val", 0L));
-        Assertions.assertEquals(1L,
-                nv.valueAsLong("missing", 1L));
-    }
-
-    @Test
-    public void testFloatConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "3.14");
-        Assertions.assertEquals(3.14f,
-                nv.valueRequiredAsFloat("val"), 0.001f);
-        Assertions.assertEquals(3.14f,
-                nv.valueAsFloat("val", 0f), 0.001f);
-        Assertions.assertEquals(1.0f,
-                nv.valueAsFloat("missing", 1.0f), 0.001f);
-    }
-
-    @Test
-    public void testDoubleConversion() throws BadRequestException {
-        final NamedValues nv = of("val", "2.718281828");
-        Assertions.assertEquals(2.718281828,
-                nv.valueRequiredAsDouble("val"), 0.0000001);
-        Assertions.assertEquals(2.718281828,
-                nv.valueAsDouble("val", 0.0), 0.0000001);
-        Assertions.assertEquals(0.5,
-                nv.valueAsDouble("missing", 0.5), 0.0000001);
-    }
-
-    @Test
-    public void testDoubleInvalid() {
-        final NamedValues nv = of("val", "xyz");
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsDouble("val"));
-    }
-
-    @Test
-    public void testBigDecimalConversion()
+    /**
+     * The value table itself belongs to {@link ValueParsingTest}; what is asked here is only that
+     * NamedValues reads a boolean the same way.
+     *
+     * @param trueValue one of the words which mean true.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"true", "yes", "1"})
+    public void readsABooleanTheSameWayValueParsingDoes(final String trueValue)
             throws BadRequestException {
-        final NamedValues nv = of("val", "123.456789");
-        Assertions.assertEquals(new BigDecimal("123.456789"),
-                nv.valueRequiredAsBigDecimal("val"));
-        final BigDecimal fallback = BigDecimal.ZERO;
-        Assertions.assertEquals(new BigDecimal("123.456789"),
-                nv.valueAsBigDecimal("val", fallback));
-        Assertions.assertEquals(fallback,
-                nv.valueAsBigDecimal("missing", fallback));
-    }
+        final NamedValues nv = of("flag", trueValue);
 
-    @Test
-    public void testBigDecimalInvalid() {
-        final NamedValues nv = of("val", "not_decimal");
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsBigDecimal("val"));
-    }
-
-    @Test
-    public void testBooleanTrueValues()
-            throws BadRequestException {
-        for (final String trueVal
-                : new String[]{
-                    "true", "TRUE", "True",
-                    "yes", "YES", "y", "Y", "1"}) {
-            final NamedValues nv = of("flag", trueVal);
-            Assertions.assertTrue(
-                    nv.valueRequiredAsBoolean("flag"),
-                    "Expected true for: " + trueVal);
-            Assertions.assertTrue(
-                    nv.valueAsBoolean("flag", false),
-                    "Expected true for: " + trueVal);
-        }
-    }
-
-    @Test
-    public void testBooleanFalseValues()
-            throws BadRequestException {
-        for (final String falseVal
-                : new String[]{"false", "no", "0", "abc", ""}) {
-            final NamedValues nv = of("flag", falseVal);
-            Assertions.assertFalse(
-                    nv.valueRequiredAsBoolean("flag"),
-                    "Expected false for: " + falseVal);
-        }
+        Assertions.assertTrue(nv.valueRequiredAsBoolean("flag"), trueValue);
+        Assertions.assertTrue(nv.valueAsBoolean("flag", false), trueValue);
+        Assertions.assertFalse(of("flag", "no").valueRequiredAsBoolean("flag"));
     }
 
     @Test
     public void testBooleanDefault() {
         final NamedValues nv = of();
-        Assertions.assertTrue(
-                nv.valueAsBoolean("missing", true));
-        Assertions.assertFalse(
-                nv.valueAsBoolean("missing", false));
-    }
-
-    @Test
-    public void testBooleanRequiredMissing() {
-        final NamedValues nv = of();
-        Assertions.assertThrows(BadRequestException.class,
-                () -> nv.valueRequiredAsBoolean("missing"));
+        Assertions.assertTrue(nv.valueAsBoolean("missing", true));
+        Assertions.assertFalse(nv.valueAsBoolean("missing", false));
     }
 
     private static final class MapNamedValues implements NamedValues {

@@ -1,33 +1,27 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.collections;
 
 import java.util.Arrays;
 
+/**
+ * The index table under the maps of this package: one slot per entry, hash buckets chained by slot index
+ * rather than by node, and the slots nobody holds kept on a free list. Nothing is allocated to put an entry
+ * in, and the table doubles when the free list runs out.
+ * <p>
+ * Not a {@link java.util.Map} and not thread-safe. {@link CharSequenceToObjectMapConcurrent} is the one
+ * here which is.
+ */
 public abstract class MapBase {
     protected static final int NULL = Integer.MIN_VALUE;
+    /**
+     * The smallest table built. A capacity below this is raised to it rather than refused.
+     */
     public static final int MIN_CAPACITY = 16;
 
     protected int count = 0;
@@ -54,6 +48,9 @@ public abstract class MapBase {
         return count;
     }
 
+    /**
+     * @return slots the table holds, filled or free - what doubles when the map runs out of them
+     */
     public final int capacity() {
         return next.length;
     }

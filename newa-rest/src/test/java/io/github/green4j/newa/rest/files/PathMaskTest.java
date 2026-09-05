@@ -1,31 +1,16 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest.files;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -33,70 +18,48 @@ import java.nio.file.Paths;
 class PathMaskTest {
     private static final Path ANY = Paths.get("/tmp/newa-test-any");
 
-    @Test
-    public void testLiteral() {
-        final PathMask mask = new PathMask("img/logo.png");
-        Assertions.assertTrue(mask.matches("img/logo.png"));
-        Assertions.assertFalse(mask.matches("img/logo.jpg"));
-        Assertions.assertFalse(mask.matches("logo.png"));
-        Assertions.assertFalse(mask.matches("a/img/logo.png"));
-    }
-
-    @Test
-    public void testStarStaysWithinOneSegment() {
-        final PathMask mask = new PathMask("img/*.png");
-        Assertions.assertTrue(mask.matches("img/logo.png"));
-        Assertions.assertTrue(mask.matches("img/.png"));
-        Assertions.assertFalse(mask.matches("img/icons/logo.png"));
-    }
-
-    @Test
-    public void testQuestionMarkIsOneCharacter() {
-        final PathMask mask = new PathMask("v?/a.txt");
-        Assertions.assertTrue(mask.matches("v1/a.txt"));
-        Assertions.assertFalse(mask.matches("v12/a.txt"));
-        Assertions.assertFalse(mask.matches("v/a.txt"));
-    }
-
-    @Test
-    public void testDoubleStarSpansSegments() {
-        final PathMask mask = new PathMask("**/*.png");
-        Assertions.assertTrue(mask.matches("logo.png"), "no segments at all is what it starts with");
-        Assertions.assertTrue(mask.matches("img/logo.png"));
-        Assertions.assertTrue(mask.matches("a/b/c/logo.png"));
-        Assertions.assertFalse(mask.matches("a/b/c/logo.gif"));
-    }
-
-    @Test
-    public void testDoubleStarAsTheTail() {
-        final PathMask mask = new PathMask("internal/**");
-        Assertions.assertTrue(mask.matches("internal/a.txt"));
-        Assertions.assertTrue(mask.matches("internal/a/b/c.txt"));
-        Assertions.assertTrue(mask.matches("internal"), "a trailing one may match nothing");
-        Assertions.assertFalse(mask.matches("public/a.txt"));
-    }
-
-    @Test
-    public void testDoubleStarInTheMiddle() {
-        final PathMask mask = new PathMask("a/**/z.txt");
-        Assertions.assertTrue(mask.matches("a/z.txt"));
-        Assertions.assertTrue(mask.matches("a/b/z.txt"));
-        Assertions.assertTrue(mask.matches("a/b/c/z.txt"));
-        Assertions.assertFalse(mask.matches("a/b/c/y.txt"));
-        Assertions.assertFalse(mask.matches("b/z.txt"));
-    }
-
-    @Test
-    public void testSeveralStarsInOneSegment() {
-        final PathMask mask = new PathMask("*-*.log");
-        Assertions.assertTrue(mask.matches("app-2026.log"));
-        Assertions.assertTrue(mask.matches("a-b-c.log"));
-        Assertions.assertFalse(mask.matches("app.log"));
-    }
-
-    @Test
-    public void testEverything() {
-        Assertions.assertTrue(new PathMask("**").matches("a/b/c.txt"));
+    @ParameterizedTest(name = "{0} {2} {1}")
+    @CsvSource({
+        // a literal names one path and nothing around it
+        "img/logo.png,   img/logo.png,       true",
+        "img/logo.png,   img/logo.jpg,       false",
+        "img/logo.png,   logo.png,           false",
+        "img/logo.png,   a/img/logo.png,     false",
+        // a star stays within one segment
+        "img/*.png,      img/logo.png,       true",
+        "img/*.png,      img/.png,           true",
+        "img/*.png,      img/icons/logo.png, false",
+        // a question mark is exactly one character
+        "v?/a.txt,       v1/a.txt,           true",
+        "v?/a.txt,       v12/a.txt,          false",
+        "v?/a.txt,       v/a.txt,            false",
+        // a double star spans segments, starting with none at all
+        "'**/*.png',     logo.png,           true",
+        "'**/*.png',     img/logo.png,       true",
+        "'**/*.png',     a/b/c/logo.png,     true",
+        "'**/*.png',     a/b/c/logo.gif,     false",
+        // as the tail it may match nothing
+        "internal/**,    internal/a.txt,     true",
+        "internal/**,    internal/a/b/c.txt, true",
+        "internal/**,    internal,           true",
+        "internal/**,    public/a.txt,       false",
+        // and in the middle it may span none, one or several
+        "a/**/z.txt,     a/z.txt,            true",
+        "a/**/z.txt,     a/b/z.txt,          true",
+        "a/**/z.txt,     a/b/c/z.txt,        true",
+        "a/**/z.txt,     a/b/c/y.txt,        false",
+        "a/**/z.txt,     b/z.txt,            false",
+        // several stars in one segment
+        "*-*.log,        app-2026.log,       true",
+        "*-*.log,        a-b-c.log,          true",
+        "*-*.log,        app.log,            false",
+        // and the mask which is everything
+        "'**',           a/b/c.txt,          true"
+    })
+    public void matches(final String mask,
+                        final String path,
+                        final boolean expected) {
+        Assertions.assertEquals(expected, new PathMask(mask).matches(path), mask + " vs " + path);
     }
 
     @Test

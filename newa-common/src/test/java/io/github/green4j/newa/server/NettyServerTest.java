@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.server;
@@ -40,6 +23,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * newa-common has no HTTP codec, so this drives the smallest thing a server can be: a handler which writes
@@ -114,6 +98,39 @@ class NettyServerTest {
         server.close(); // the second one must do nothing rather than wait or throw
 
         Assertions.assertThrows(ConnectException.class, () -> roundTrip(port, 1));
+    }
+
+    @Test
+    public void aChannelClosedUnderTheServerReportsTheEnd() throws Exception {
+        final CountDownLatch ended = new CountDownLatch(1);
+        final AtomicReference<String> cause = new AtomicReference<>();
+
+        try (NettyServer server = echoServer().start()) {
+            server.whenEnded(reason -> {
+                cause.set(reason);
+                ended.countDown();
+            });
+
+            Assertions.assertEquals(1, ended.getCount(), "reported an end before anything ended");
+
+            server.channel().close(); // as losing the bound port under it would look
+
+            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "the end went unheard");
+            Assertions.assertEquals("Port " + server.port() + " closed", cause.get());
+        }
+    }
+
+    @Test
+    public void anEndWhichAlreadyHappenedIsStillReported() throws Exception {
+        final CountDownLatch ended = new CountDownLatch(1);
+
+        try (NettyServer server = echoServer().start()) {
+            server.channel().close().sync(); // closed before anybody asked to hear about it
+
+            server.whenEnded(reason -> ended.countDown());
+
+            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "the end went unheard");
+        }
     }
 
     @Test

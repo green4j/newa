@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -37,6 +20,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Everything one routed request is: the channel it arrived on, the request itself, the parameters it matched
+ * and the headers its response will carry. One per request, handed to the handle which answers it.
+ * <p>
+ * It is read on the event loop of the channel, and so is everything which finishes the response -
+ * {@link #executor()} is the hop back onto that loop for a handle which answers later.
+ * <p>
+ * Query parameters, form parameters and headers are parsed the first time they are asked for. Two things do
+ * not outlive the handler: the body of {@link #request()}, whose buffer goes back to the pool, and
+ * {@link #pathParameters()}, a flyweight the next request on this thread writes over. Everything else,
+ * {@link #pathExpression()} included, stays valid.
+ */
 public class RestContext {
     private final ChannelHandlerContext handlerContext;
     private final FullHttpRequest request;
@@ -75,15 +70,15 @@ public class RestContext {
     }
 
     /**
-     * Where a handler puts the headers its response should carry - the one way to do it, and the same one
-     * whether the response is built here or by one of the pre-built handlers, which never hand out the
-     * result they are building:
+     * Where a handler puts the headers its response should carry - the one way to do it, whether the
+     * response is built here or by one of the pre-built handlers, which never hand out the result they are
+     * building:
      * <pre>{@code
      * context.responseHeaders().set(CONTENT_DISPOSITION, ContentDisposition.attachment("rows.json.gz"));
      * }</pre>
-     * The framework writes its own headers after these, so nothing set here can break the framing of the
-     * response. Nothing here reaches an error response either: these belong to the response the handler was
-     * building, and a handler which failed never sent it.
+     * The framework writes its own headers after these, so nothing set here can break the framing. Nothing
+     * set here reaches an error response either: these belong to the response the handler was building, and
+     * a handler which failed never sent it.
      *
      * @return the headers of the response being built
      */
@@ -146,12 +141,10 @@ public class RestContext {
     }
 
     /**
-     * The one thing here which would go wrong quietly: these are a matcher flyweight, and the next request on
-     * this thread writes its own parameters into it. So reading them after the handler has returned is
-     * refused rather than answered with somebody else's values.
-     *
      * @return the path parameters of this request
-     * @throws IllegalStateException if the handler has already returned
+     * @throws IllegalStateException if the handler has already returned - the flyweight these live in
+     *                               belongs to the next request by then, and answering with somebody else's
+     *                               values is what this refusal prevents
      */
     public NamedValues pathParameters() {
         if (handled) {

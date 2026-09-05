@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.collections;
@@ -33,47 +16,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * What belongs to the concurrent map alone. The CharSequence-keyed contract both maps share is asked of
+ * this one too, in {@link CharSequenceToObjectMapTest}.
+ */
 class CharSequenceToObjectMapConcurrentTest {
-
-    @Test
-    public void testPutAndGet() {
-        final CharSequenceToObjectMapConcurrent<String> map = new CharSequenceToObjectMapConcurrent<>();
-
-        map.put("AA", "a");
-        map.put(new StringBuilder("BB"), "b");
-
-        Assertions.assertEquals("a", map.get("AA"));
-        Assertions.assertEquals("a", map.get(new StringBuilder("AA")));
-        Assertions.assertEquals("b", map.get("BB"));
-        Assertions.assertNull(map.get("CC"));
-        Assertions.assertEquals(2, map.size());
-    }
-
-    @Test
-    public void testGetWithSubsequence() {
-        final CharSequenceToObjectMapConcurrent<String> map = new CharSequenceToObjectMapConcurrent<>();
-        map.put("AA", "a");
-
-        final CharSequence line = "prefix:AA:suffix";
-
-        Assertions.assertEquals("a", map.get(line, 7, 9));
-        Assertions.assertNull(map.get(line, 0, 6));
-    }
-
-    @Test
-    public void testContainsKeyAndRemove() {
-        final CharSequenceToObjectMapConcurrent<String> map = new CharSequenceToObjectMapConcurrent<>();
-        map.put("AA", "a");
-
-        Assertions.assertTrue(map.containsKey("AA"));
-        Assertions.assertTrue(map.containsKey(new StringBuilder("AA")));
-        Assertions.assertFalse(map.containsKey("BB"));
-
-        Assertions.assertEquals("a", map.remove(new StringBuilder("AA")));
-        Assertions.assertNull(map.remove("AA"));
-        Assertions.assertFalse(map.containsKey("AA"));
-        Assertions.assertTrue(map.isEmpty());
-    }
 
     @Test
     public void testPutIfAbsent() {

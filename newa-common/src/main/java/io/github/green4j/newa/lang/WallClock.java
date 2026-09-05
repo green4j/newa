@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.lang;
@@ -28,7 +11,13 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Returns monotonically increasing current time in milliseconds.
+ * The current time in milliseconds, read from a field instead of from the system clock: a daemon thread
+ * samples {@link System#currentTimeMillis()} once a millisecond, so a caller pays one volatile read and the
+ * answer may be that much behind.
+ * <p>
+ * It never moves backwards. A system clock stepped back - NTP correcting a drift - leaves this one where it
+ * was until the system catches up, and the step is counted instead, so a duration measured across one is
+ * never negative.
  */
 public final class WallClock extends Thread {
     private static final int UPDATE_TIME_PERIOD_NANOS = 1_000_000;
@@ -43,10 +32,16 @@ public final class WallClock extends Thread {
         return INSTANCE.currentTimeMillis;
     }
 
+    /**
+     * @return how many times the system clock has been seen to step back since this JVM started
+     */
     public static long backwardJumpCount() {
         return INSTANCE.backwardJumpCount.get();
     }
 
+    /**
+     * @return the largest single backward step of the system clock seen so far, in milliseconds
+     */
     public static long maxBackwardJumpMs() {
         return INSTANCE.maxBackwardJumpMillis;
     }

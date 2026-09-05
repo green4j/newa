@@ -80,6 +80,30 @@ the api handler answers every request it sees, with a 404 when nothing routed, s
 ever run. That is where a filter goes, and where a `FileServerHandler` goes - it lands in front of the api
 and behind the compressor, which is the placement that keeps `sendfile(2)`.
 
+`Transport.auto()` uses kqueue on macOS and epoll on Linux when the matching Netty artifact is on the
+classpath, and falls back to NIO in silence when it is not - nothing reports that you meant to run on epoll
+and did not, so print `Transport.auto().name()` at startup if it matters. `Transport.nio()` asks for the
+portable one on purpose, which is also what a GraalVM native image wants.
+
+To keep this pipeline but bootstrap it yourself, hand `RestServer.pipeline()` to a `ServerBootstrap` of your
+own. To change the pipeline, write it out - `rest.pipeline.PipelineRestServer` in `newa-example` is that,
+and says which four things made it worth doing.
+
+`NettyServer` is what you get back, and it is an `AutoCloseable` and nothing more: `port()` (the one thing
+worth having after binding to port 0), `channel()`, `workerGroup()` for periodic work on the loops the
+connections already live on, `close()`, and `whenEnded(Ender)` - see [Ending when the server dies by
+itself](#ending-when-the-server-dies-by-itself).
+
+What runs it is `Life`. It opens the server, parks the calling thread until the end is asked for, closes it,
+and registers a JVM shutdown hook for the length of the run:
+
+```java
+new Life().run(() -> RestServer.start(9009, api));
+```
+
+Note that the server is **opened by** `run`, not handed to it. That is what leaves no window: there is no
+instant at which the server is accepting requests and nothing yet owns it.
+
 ### Idle connections
 
 A connection on which nothing has been read and nothing has been written for a minute is closed. This is on
@@ -175,20 +199,6 @@ A websocket handshake is not covered by any of this and does not need to be - th
 and no header to add to its response. It gets an `OriginPolicy` instead, which answers yes or no - and that
 one, unlike this, is on by default; see `newa-websocket`.
 
-`NettyServer` is what you get back, and it is an `AutoCloseable` and nothing more: `port()` (the one thing
-worth having after binding to port 0), `channel()`, `workerGroup()` for periodic work on the loops the
-connections already live on, and `close()`.
-
-What runs it is `Life`. It opens the server, parks the calling thread until the end is asked for, closes it,
-and registers a JVM shutdown hook for the length of the run:
-
-```java
-new Life().run(() -> RestServer.start(9009, api));
-```
-
-Note that the server is **opened by** `run`, not handed to it. That is what leaves no window: there is no
-instant at which the server is accepting requests and nothing yet owns it.
-
 ### Ending it from a request
 
 A `Life` is an `Ender` from the moment it is constructed, and that is the whole point: a `/shutdown` endpoint
@@ -211,14 +221,28 @@ holding up, and costs the full timeout every time.
 It is also safe before the server is open, and idempotent: asked for first, nothing is started at all; asked
 for while the server is being opened, it is honoured the instant opening returns.
 
-`Transport.auto()` uses kqueue on macOS and epoll on Linux when the matching Netty artifact is on the
-classpath, and falls back to NIO in silence when it is not - nothing reports that you meant to run on epoll
-and did not, so print `Transport.auto().name()` at startup if it matters. `Transport.nio()` asks for the
-portable one on purpose, which is also what a GraalVM native image wants.
+### Ending when the server dies by itself
 
-To keep this pipeline but bootstrap it yourself, hand `RestServer.pipeline()` to a `ServerBootstrap` of your
-own. To change the pipeline, write it out - `rest.pipeline.PipelineRestServer` in `newa-example` is that,
-and says which four things made it worth doing.
+A server whose listening channel closed under it - rather than because it was closed - looks like nothing
+from the outside: the port is gone, and whoever waits for the end goes on waiting. So the server is what
+says it:
+
+```java
+server.whenEnded(ender);   // ender.end("Port 9009 closed"), once, when the channel closes
+```
+
+`Ender` is the same one-method interface a `/shutdown` endpoint is handed, so this is a lambda when what
+ends the process is something of your own - a `CountDownLatch`, a container's callback, a test.
+
+Under a `Life` there is nothing to write at all. `NettyServer` is `SelfEnding`, and `run` registers itself
+with whatever it opens which is, so the close of the channel is the end of the `Life` - which is what keeps
+a process from staying up owning a server that is no longer serving. Anything of your own joins that by
+implementing `SelfEnding` rather than `AutoCloseable`.
+
+Two things hold however it is used. The end is reported however it came about, `close()` included, and a
+channel which closed before anybody asked to hear about it is reported just the same - both are why an
+`Ender` is idempotent, and why the first cause given is the one reported. And it is reported on the
+channel's event loop, which is the reason an `Ender` does no I/O.
 
 ### More than one server in one Life
 
@@ -244,17 +268,17 @@ When the order of closing does matter, write an opener which closes them in the 
 compose, so `Life.all(a, Life.all(b, c))` is an opener too, and the `run(opener, observer)` form is
 unchanged: `onRunning` is the moment both are up.
 
-None of this is about REST. An `Opener` returns an `AutoCloseable`, which is all `Life` ever knows, so a
-`WsServer` mixes into the same call as readily as a second `RestServer` - a REST api on one port and a
-WebSocket on another is the usual pair. A WebSocket server can also carry a REST api on its own port
-instead, with no second server to run at all: see [One port for
+None of this is about REST. An `Opener` returns an `AutoCloseable` - `SelfEnding` or not, which is all a
+`Life` ever knows of it - so a `WsServer` mixes into the same call as readily as a second `RestServer`, and
+a REST api on one port beside a WebSocket on another is the usual pair. A WebSocket server can also carry a
+REST api on its own port instead, with no second server to run at all: see [One port for
 both](../newa-websocket/README.md#starting-a-server).
 
-Two things stay yours, because neither is a `Life`'s business:
+**Any one of them ending by itself ends them all**, because each is `SelfEnding` and all of them are
+registered with the `Life`: half of what was promised is not something to stay up serving.
 
-- **A server which dies alone has to say so.** A `Life` waits for `end(...)` and nothing else, so
-  `server.channel().closeFuture().addListener(closed -> life.end("Port closed"))` is what keeps the process
-  from staying up serving half of what it promises.
+One thing stays yours, because it is not a `Life`'s business:
+
 - **Threads do not divide themselves.** Every `start()` makes event loop groups of its own and there is
   nothing to share them with, while `workerThreads` defaults to a worker per core - two per core on two
   servers left at the default. Say what each one gets, and count them all when budgeting render buffers.
@@ -396,7 +420,8 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
   ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
   ```
 
-- **Then size the process for it**:
+- **Then size the process for it.** The limit has to cover heap plus direct memory plus metaspace, code
+  cache and thread stacks:
 
   ```
   -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
@@ -419,16 +444,9 @@ copying. Keeping it *low* is yours:
 - **Page.** A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
   client has to hold it too.
 - **Cap** the size in the handler and answer `413`/`507` rather than degrading quietly.
-- **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx` does not bound them and the cgroup limit does; a container sized from the heap alone is killed for its RSS
-  instead of failing with `OutOfMemoryError`. The limit has to cover heap plus direct memory plus metaspace,
-  code cache and thread stacks:
-
-  ```
-  -XX:MaxRAMPercentage=50
-  -XX:MaxDirectMemorySize=512m
-  -Dio.netty.maxDirectMemory=536870912
-  -XX:+ExitOnOutOfMemoryError
-  ```
+- **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx`
+  does not bound them and the cgroup limit does, so a container sized from the heap alone is killed for its
+  RSS instead of failing with `OutOfMemoryError` - the flags are in [Memory budget](#memory-budget) above.
 
 When none of that is enough, do not build the response at all.
 
@@ -586,16 +604,14 @@ ones.
 document - so pacing is the only correct answer to a peer which cannot keep up, and the only question left is
 how long to keep pacing before giving up. That question is the whole of `withResponseDeadlineMs`.
 
-**`newa-websocket` answers it differently on purpose**, which is worth knowing if you use both. There the
-whole question is settled at one point and on the *first* frame which cannot go out: the session is closed,
-or - with `withSkipOnBackPressure()`, the same decision made the other way - that frame is dropped and the
-gap refilled from a snapshot once the channel drains. Either way nothing is paced and nothing waits, where a
-response here is paced and then given thirty seconds of grace.
-
-Neither module is the more careful one. A fan-out frame is perishable and the next one is already better, so
-waiting buys nothing and holding it costs memory per subscriber; a response here has no successor, and giving
-up on it throws away work already done. Dropping is on offer there and not here for the same reason: it is
-only ever safe where something can rebuild what was dropped.
+**`newa-websocket` answers it differently on purpose**, which is worth knowing if you use both. Nothing is
+paced there: the question is settled on the *first* frame which cannot go out, by closing the session or -
+with `withSkipOnBackPressure()` - by dropping that frame and refilling the gap from a snapshot once the
+channel drains. Neither module is the more careful one. A fan-out frame is perishable and the next one is
+already better, so waiting buys nothing and holding it costs memory per subscriber; a response here has no
+successor, and giving up on it throws away work already done. Dropping is on offer there and not here for
+the same reason: it is only ever safe where something can rebuild what was dropped. See [Slow
+consumers](../newa-websocket/README.md#slow-consumers).
 
 ## Errors
 
@@ -722,9 +738,9 @@ new RestApiHandler(api, errorHandler, channelErrorHandler, chunks, AccessLog::ne
 requests never means adding two events up. `bytes` is the body as the source produced it, without the framing
 the transfer encoding adds.
 
-`onRequestNotRouted` and `onResponseFailed` are on this interface too - see `## Errors` for which failure
-reaches which. `RestApiObserver extends HttpObserver` adds the stages after routing - pass a
-`RestApiObserverFactory` to get them:
+`onRequestNotRouted` and `onResponseFailed` are on this interface too - see [Errors](#errors) for which
+failure reaches which. `RestApiObserver extends HttpObserver` adds the stages after routing: pass a
+`RestApiObserverFactory` where a `HttpObserverFactory` is taken and they arrive with the rest.
 
 One rule orders all of it: **`onRequestCompleted` is outermost, brackets nest and never cross, and a failure
 is reported before the close of its own level.**
@@ -932,7 +948,7 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
 
 And in `io.github.green4j.newa.example.files`:
 
-- **`files.SimpleFileServer`** - files from the page cache, filtered, with ranges and an index, started with
+- **`SimpleFileServer`** - files from the page cache, filtered, with ranges and an index, started with
   `FileServer`, and a REST API handed to `withHandler` answering everything the files do not own.
 
 All but `pipeline.PipelineRestServer` are started with `RestServer` or `FileServer`; that one is the reason

@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
@@ -39,6 +22,17 @@ import io.netty.util.CharsetUtil;
 
 import java.util.List;
 
+/**
+ * Completes the handshake of a {@link WsApi} and turns every frame after it into a call on the session -
+ * text and binary to the receivers, ping, pong and close answered underneath by Netty.
+ * <p>
+ * A request whose uri is not this api's handshake path is passed on untouched, which is what lets a REST
+ * handler behind this one serve the same port. One per channel; it holds the session it opened.
+ * <p>
+ * A fragmented message is handed over piece by piece, with {@code last} saying which piece ends it, and
+ * nothing here holds the pieces: the frame limit bounds one frame and not what several of them add up to.
+ * A frame of a type this api took no receiver for is answered {@code 1003} and the session ends.
+ */
 public class WsApiHandler extends WebSocketServerProtocolHandler {
     private final WsApi wsApi;
     private final long pingIntervalMs;
@@ -113,7 +107,8 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
             session = wsApi.newSession(
                     new ClientSessionContext(
                             wsApi,
-                            wsApi.receiver(),
+                            wsApi.textReceiver(),
+                            wsApi.binaryReceiver(),
                             ctx.channel(),
                             pingIntervalMs,
                             readTimeoutMs

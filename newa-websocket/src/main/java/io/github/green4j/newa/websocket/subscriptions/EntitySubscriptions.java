@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket.subscriptions;
@@ -34,39 +17,34 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * A set of the client sessions subscribed to one entity.
- *
- * <p>Reading it - {@link #publish(Consumer)}, {@link #contains(ClientSession)} - takes no lock at all and
- * never makes a writer wait, so a fan-out to a slow peer can not stall a subscription, an unsubscription or
- * an event loop. Subscribing and unsubscribing take a short lock of this entity, and neither copies the set:
- * a popular entity thousands of clients arrive at costs what they are, not their square.
- *
- * <p>A state change must go through {@link #publish(Consumer)}, or {@link #publishTextAndRelease(ByteBuf)}
- * when the frame is rendered once for all of the subscribers, which numbers it so that
- * a subscriber can tell a hole from a duplicate. {@link #forEachSession(Consumer)} and
- * {@link #forEachSessionTextAndRelease(ByteBuf)} are for
- * everything else - inspection, administrative broadcasts - and carry the same barrier,
- * so they can not lose a session which subscribes while they run.
- *
- * <p><b>Publishing.</b> A publisher must mutate the state of the entity first and then hand
- * the fan-out to {@link #publish(Consumer)}. The order matters: {@code publish} bumps
- * the publication sequence before it reads the set of the subscribers, and that write is
- * what makes the state mutation visible to a session which subscribes concurrently.
- * Publications of one entity are expected to be serialized by the application - two
- * concurrent publishers of the same entity have no defined order between them, and nothing
- * here can invent one.
- *
- * <p><b>Subscribing.</b> {@link #add(ClientSession)} must be called on the event loop
- * of the session being added, which is also what makes two of them for one session impossible. {@link #onClientSessionSubscribed(ClientSession, long)} is then
- * invoked inline, before {@code add} returns, so a snapshot sent from the handler is written
- * to the pipeline immediately. A concurrent publisher which has already seen the session
- * writes from another thread, hence its frame is queued on the same event loop behind
- * the currently running task and can not overtake the snapshot.
- *
- * <p>The resulting guarantee for a subscriber is <b>no gaps and no reordering</b>: every
- * publication is either included in the snapshot or delivered after it. A publication may be
- * seen twice - once in the snapshot and once as an update - so the updates are expected
- * to be idempotent.
+ * The client sessions subscribed to one entity, and the fan-out to them.
+ * <p>
+ * Reading it - {@link #publish(Consumer)}, {@link #contains(ClientSession)} - takes no lock and never makes
+ * a writer wait, so a fan-out to a slow peer cannot stall a subscription, an unsubscription or an event
+ * loop. Subscribing and unsubscribing take a short lock of this entity and copy nothing: a popular entity
+ * thousands of clients arrive at costs what they are, not their square.
+ * <p>
+ * <b>Publishing.</b> Mutate the state of the entity first, then hand the fan-out to
+ * {@link #publish(Consumer)} - or to {@link #publishTextAndRelease(ByteBuf)} when the frame is rendered once
+ * for all the subscribers. That order is what the promise below rests on: {@code publish} numbers the
+ * publication before it reads the subscribers, and that write is what makes the state mutation visible to a
+ * session subscribing at the same moment. Publications of one entity have to be serialized by the
+ * application - two concurrent publishers of one entity have no order between them, and nothing here can
+ * invent one.
+ * <p>
+ * <b>Subscribing.</b> {@link #add(ClientSession)} is called on the event loop of the session being added,
+ * which is also what makes two subscriptions of one session impossible.
+ * {@link #onClientSessionSubscribed(ClientSession, long)} then runs inline, before {@code add} returns, so a
+ * snapshot sent from it reaches the pipeline immediately; a concurrent publisher which has already seen the
+ * session writes from another thread and is queued behind that task rather than overtaking it.
+ * <p>
+ * <b>What a subscriber is promised is no gaps and no reordering</b>: every publication is either included in
+ * the snapshot or delivered after it. One may be seen twice - in the snapshot and again as an update - so
+ * updates have to be idempotent, and {@code publicationSequence} is what tells them apart.
+ * <p>
+ * {@link #forEachSession(Consumer)} and its named twins are for what is not a state change - inspection, an
+ * administrative frame - and number nothing, but carry the same barrier, so they cannot lose a session which
+ * subscribes while they run.
  */
 public class EntitySubscriptions implements Closeable {
     protected final String entityId;

@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -33,6 +16,18 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+/**
+ * Matches a request path against the routes of one method in a single walk of the path, allocating nothing:
+ * segments are compared in place, and a <code>{name}</code> segment is captured by position rather than
+ * copied out.
+ * <p>
+ * Built once through {@link #builder()} and then <b>copied per thread</b> - {@code new PathMatcher<>(other)}
+ * shares the compiled states and gives the copy a capture of its own, because matching writes into it.
+ * {@link #match(CharSequence)} answers with that capture: the same {@link Result} object every time, valid
+ * until the next match on this matcher.
+ *
+ * @param <T> what a route carries - a handle, for an api.
+ */
 public final class PathMatcher<T> {
     private static final int INITIAL_STATE = 0;
     private static final int STATIC_STATE = 1;
@@ -185,6 +180,10 @@ public final class PathMatcher<T> {
         }
     }
 
+    /**
+     * The route which matched and the parameters it captured, read as {@link NamedValues}. It belongs to the
+     * matcher and is overwritten by the next {@link #match(CharSequence)} on this thread.
+     */
     public final class Result implements NamedValues {
         private Result() {
         }

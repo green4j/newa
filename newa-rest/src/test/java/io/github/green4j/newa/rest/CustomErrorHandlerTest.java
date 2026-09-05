@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -40,12 +23,16 @@ import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 /**
  * A page of one's own for every error there is. {@link HttpErrorHandler} is one method, so a whole set of them is
@@ -137,42 +124,47 @@ class CustomErrorHandlerTest {
                 StandardCharsets.US_ASCII), answer.body);
     }
 
-    @Test
-    public void testAPathNothingServes() {
-        assertIsThePage(fromApi(HttpMethod.GET, "/v1/nowhere", (context, result) -> result.ok()), 404);
-    }
-
-    @Test
-    public void testAMethodNothingAllows() {
-        assertIsThePage(fromApi(HttpMethod.POST, "/v1/thing", (context, result) -> result.ok()), 405);
-    }
-
-    @Test
-    public void testAMalformedRequest() {
-        assertIsThePage(fromApi(HttpMethod.GET, "/v1/thing", (context, result) -> {
-            throw new BadRequestException("Missing parameter: name");
-        }), 400);
-    }
-
-    @Test
-    public void testAFailureOfTheHandler() {
-        assertIsThePage(fromApi(HttpMethod.GET, "/v1/thing", (context, result) -> {
-            throw new IllegalStateException("Boom");
-        }), 500);
-    }
-
     /**
-     * An exception of the user's own reaches the same lambda, carrying a status this library never named.
+     * Every error the api can answer with, each of which must reach the one lambda and come back as its
+     * page rather than as whatever this library would have said.
+     *
+     * @return one case per error: what it is, the request to make, the handler behind it, and the status.
      */
-    @Test
-    public void testAnExceptionOfTheUsersOwn() {
-        assertIsThePage(fromApi(HttpMethod.GET, "/v1/thing", (context, result) -> {
-            throw new OutOfStockException("A-17");
-        }), 409);
+    private static Stream<Arguments> everyErrorTheApiAnswers() {
+        return Stream.of(
+                Arguments.of("a path nothing serves", HttpMethod.GET, "/v1/nowhere",
+                        (RestHandle) (context, result) -> result.ok(), 404),
+                Arguments.of("a method nothing allows", HttpMethod.POST, "/v1/thing",
+                        (RestHandle) (context, result) -> result.ok(), 405),
+                Arguments.of("a malformed request", HttpMethod.GET, "/v1/thing",
+                        (RestHandle) (context, result) -> {
+                            throw new BadRequestException("Missing parameter: name");
+                        }, 400),
+                Arguments.of("a failure of the handler", HttpMethod.GET, "/v1/thing",
+                        (RestHandle) (context, result) -> {
+                            throw new IllegalStateException("Boom");
+                        }, 500),
+                // an exception of the user's own reaches the same lambda, carrying a status this library
+                // never named
+                Arguments.of("an exception of the user's own", HttpMethod.GET, "/v1/thing",
+                        (RestHandle) (context, result) -> {
+                            throw new OutOfStockException("A-17");
+                        }, 409));
+    }
+
+    @ParameterizedTest(name = "{0} is answered with the page for {4}")
+    @MethodSource("everyErrorTheApiAnswers")
+    public void everyErrorIsAnsweredWithThePageForIt(final String what,
+                                                     final HttpMethod method,
+                                                     final String uri,
+                                                     final RestHandle handler,
+                                                     final int status) {
+        assertIsThePage(fromApi(method, uri, handler), status);
     }
 
     @Test
     public void testAFileWhichIsNotThere() {
+        // the same lambda in front of the files, which answer their own errors
         assertIsThePage(answer(new FileServerHandler(
                 FileSet.builder().serve("/files", root).build(),
                 PAGES,

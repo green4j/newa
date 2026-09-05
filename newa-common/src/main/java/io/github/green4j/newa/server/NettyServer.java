@@ -1,29 +1,14 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.server;
 
+import io.github.green4j.newa.lang.Ender;
+import io.github.green4j.newa.lang.SelfEnding;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 
@@ -34,8 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * A bound server and the two event loop groups under it, from {@link NettyServerBuilder#start()}.
  * <p>
- * It is an {@link AutoCloseable} and nothing more: what keeps a {@code main} alive until the server should
- * stop, and what adds the JVM shutdown hook, is {@link io.github.green4j.newa.lang.Life}:
+ * It is an {@link AutoCloseable} which reports the end of its own listening channel, and nothing more: what
+ * keeps a {@code main} alive until the server should stop, and what adds the JVM shutdown hook, is
+ * {@link io.github.green4j.newa.lang.Life}:
  * <pre>{@code
  * new Life().run(() -> RestServer.start(9009, api));
  * }</pre>
@@ -44,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link io.github.green4j.newa.lang.Ender} which can end a server has to exist before the server does,
  * which no method on this class ever could.
  */
-public final class NettyServer implements AutoCloseable {
+public final class NettyServer implements SelfEnding {
     /**
      * The bound on every wait here. Load-bearing only for a caller which closes from an event loop of this
      * server: that wait can never be satisfied, so it has to end by itself.
@@ -102,6 +88,25 @@ public final class NettyServer implements AutoCloseable {
      */
     public EventLoopGroup workerGroup() {
         return workerGroup;
+    }
+
+    /**
+     * Tells the ender when this server's listening channel closes, which is the only end a server has: a
+     * bound port lost under it looks like nothing at all from the outside, and a {@code main} waiting for
+     * the end would go on waiting. {@link io.github.green4j.newa.lang.Life#run} registers itself here, so
+     * under a {@link io.github.green4j.newa.lang.Life} there is nothing to write; a server run some other
+     * way calls this with whatever ends that process.
+     *
+     * <p>It fires for {@link #close()} too, and that costs nothing: an {@link Ender} is idempotent, and the
+     * cause of the end is whatever was given first.
+     *
+     * @param ender to tell. Told on the channel's event loop - so an {@link Ender} which closed this server
+     *              there would be asking a loop to wait for its own shutdown, which is why {@link Ender}
+     *              does no I/O.
+     */
+    @Override
+    public void whenEnded(final Ender ender) {
+        channel.closeFuture().addListener(closed -> ender.end("Port " + port + " closed"));
     }
 
     /**

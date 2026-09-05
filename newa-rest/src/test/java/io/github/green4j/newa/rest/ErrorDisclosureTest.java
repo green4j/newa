@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -35,9 +18,14 @@ import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.FileNotFoundException;
 import java.nio.charset.StandardCharsets;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * What an error response says. A failure of the server tells the client its status and no more: the message
@@ -125,94 +113,96 @@ class ErrorDisclosureTest {
         Assertions.assertFalse(answer.body.contains(A_FRAME), answer.body);
     }
 
-    @Test
-    public void testJsonSaysNothingOfAFailure() {
-        assertSaysNothingOfTheFailure(failing(new JsonErrorHandler()));
+    /**
+     * @return both renderers, each named, so that every rule below is asked of both of them.
+     */
+    private static Stream<Arguments> bothRenderers() {
+        return Stream.of(
+                Arguments.of("json", (Supplier<HttpErrorHandler>) JsonErrorHandler::new),
+                Arguments.of("text", (Supplier<HttpErrorHandler>) TextErrorHandler::new));
     }
 
-    @Test
-    public void testTextSaysNothingOfAFailure() {
-        assertSaysNothingOfTheFailure(failing(new TextErrorHandler()));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("bothRenderers")
+    public void saysNothingOfAFailure(final String renderer,
+                                      final Supplier<HttpErrorHandler> errors) {
+        final Answer answer = failing(errors.get());
+
+        Assertions.assertEquals(500, answer.status, renderer);
+        Assertions.assertFalse(answer.body.contains("IllegalStateException"), answer.body);
+        Assertions.assertFalse(answer.body.contains("FileNotFoundException"), answer.body);
+        Assertions.assertFalse(answer.body.contains(SECRET_TAIL), answer.body);
+        Assertions.assertFalse(answer.body.contains(A_FRAME), answer.body);
     }
 
-    @Test
-    public void testJsonDisclosingInternalsSaysAllOfIt() {
-        final Answer answer = failing(JsonErrorHandler.disclosingInternals());
+    /**
+     * @return both renderers in the form which is asked to say everything, for a server being debugged.
+     */
+    private static Stream<Arguments> bothRenderersDisclosingInternals() {
+        return Stream.of(
+                Arguments.of("json", (Supplier<HttpErrorHandler>) JsonErrorHandler::disclosingInternals),
+                Arguments.of("text", (Supplier<HttpErrorHandler>) TextErrorHandler::disclosingInternals));
+    }
 
-        Assertions.assertEquals(500, answer.status);
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("bothRenderersDisclosingInternals")
+    public void disclosingInternalsSaysAllOfIt(final String renderer,
+                                               final Supplier<HttpErrorHandler> errors) {
+        final Answer answer = failing(errors.get());
+
+        Assertions.assertEquals(500, answer.status, renderer);
         Assertions.assertTrue(answer.body.contains("IllegalStateException"), answer.body);
         Assertions.assertTrue(answer.body.contains("FileNotFoundException"), answer.body); // the cause chain
         Assertions.assertTrue(answer.body.contains(SECRET_TAIL), answer.body);
         Assertions.assertTrue(answer.body.contains(A_FRAME), answer.body);
     }
 
-    @Test
-    public void testTextDisclosingInternalsSaysAllOfIt() {
-        final Answer answer = failing(TextErrorHandler.disclosingInternals());
-
-        Assertions.assertEquals(500, answer.status);
-        Assertions.assertTrue(answer.body.contains("IllegalStateException"), answer.body);
-        Assertions.assertTrue(answer.body.contains("FileNotFoundException"), answer.body);
-        Assertions.assertTrue(answer.body.contains(SECRET_TAIL), answer.body);
-        Assertions.assertTrue(answer.body.contains(A_FRAME), answer.body);
-    }
-
-    @Test
-    public void testAPathNothingServesIsNamed() {
-        for (final HttpErrorHandler errors : new HttpErrorHandler[]{
-                new JsonErrorHandler(), new TextErrorHandler()}) {
-            final Answer answer = answer(errors, HttpMethod.GET, "/v1/nowhere",
-                    (context, result) -> result.ok());
-
-            Assertions.assertEquals(404, answer.status);
-            Assertions.assertTrue(answer.body.contains("nowhere"), answer.body);
-        }
-    }
-
-    @Test
-    public void testAMethodNothingAllowsIsNamed() {
-        for (final HttpErrorHandler errors : new HttpErrorHandler[]{
-                new JsonErrorHandler(), new TextErrorHandler()}) {
-            final Answer answer = answer(errors, HttpMethod.POST, "/v1/thing",
-                    (context, result) -> result.ok());
-
-            Assertions.assertEquals(405, answer.status);
-            Assertions.assertTrue(answer.body.contains("POST"), answer.body);
-        }
-    }
-
-    @Test
-    public void testTheMessageOfABadRequestIsRendered() {
-        for (final HttpErrorHandler errors : new HttpErrorHandler[]{
-                new JsonErrorHandler(), new TextErrorHandler()}) {
-            final Answer answer = answer(errors, HttpMethod.GET, "/v1/thing",
-                    (context, result) -> {
-                        throw new BadRequestException("Missing parameter: name");
-                    });
-
-            Assertions.assertEquals(400, answer.status);
-            Assertions.assertTrue(answer.body.contains("Missing parameter: name"), answer.body);
-        }
-    }
-
     /**
-     * A deliberate refusal is not a failure: the message says what the limit was, and whoever asked is meant
-     * to read it. This is what admission control answers a chunked response with.
+     * Everything which is not a failure of the server carries a message written by hand, and that message
+     * is what the client is there to read. Each rule is asked of both renderers.
+     *
+     * @return one case per rule and renderer: what it is, the renderer, the request to make, the handler
+     *         behind it, the status it answers with, and what the body has to name.
      */
-    @Test
-    public void testTheMessageOfADeliberateRefusalIsRendered() {
-        for (final HttpErrorHandler errors : new HttpErrorHandler[]{
-                new JsonErrorHandler(), new TextErrorHandler()}) {
-            final Answer answer = answer(errors, HttpMethod.GET, "/v1/thing",
-                    (context, result) -> {
-                        throw new HttpException(
-                                HttpResponseStatus.SERVICE_UNAVAILABLE,
-                                "Server is at its limit");
-                    });
+    private static Stream<Arguments> everythingWhichIsNotAFailure() {
+        final RestHandle ok = (context, result) -> result.ok();
+        final RestHandle badRequest = (context, result) -> {
+            throw new BadRequestException("Missing parameter: name");
+        };
+        // a deliberate refusal is not a failure: the message says what the limit was, and whoever asked is
+        // meant to read it. This is what admission control answers a chunked response with
+        final RestHandle refusal = (context, result) -> {
+            throw new HttpException(HttpResponseStatus.SERVICE_UNAVAILABLE, "Server is at its limit");
+        };
 
-            Assertions.assertEquals(503, answer.status);
-            Assertions.assertTrue(answer.body.contains("Server is at its limit"), answer.body);
-        }
+        return bothRenderers().flatMap(renderer -> {
+            final Object name = renderer.get()[0];
+            final Object errors = renderer.get()[1];
+            return Stream.of(
+                    Arguments.of("a path nothing serves is named, " + name, errors,
+                            HttpMethod.GET, "/v1/nowhere", ok, 404, "nowhere"),
+                    Arguments.of("a method nothing allows is named, " + name, errors,
+                            HttpMethod.POST, "/v1/thing", ok, 405, "POST"),
+                    Arguments.of("the message of a bad request is rendered, " + name, errors,
+                            HttpMethod.GET, "/v1/thing", badRequest, 400, "Missing parameter: name"),
+                    Arguments.of("the message of a deliberate refusal is rendered, " + name, errors,
+                            HttpMethod.GET, "/v1/thing", refusal, 503, "Server is at its limit"));
+        });
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everythingWhichIsNotAFailure")
+    public void theMessageIsRendered(final String what,
+                                     final Supplier<HttpErrorHandler> errors,
+                                     final HttpMethod method,
+                                     final String uri,
+                                     final RestHandle handler,
+                                     final int status,
+                                     final String named) {
+        final Answer answer = answer(errors.get(), method, uri, handler);
+
+        Assertions.assertEquals(status, answer.status, what);
+        Assertions.assertTrue(answer.body.contains(named), answer.body);
     }
 
     /**

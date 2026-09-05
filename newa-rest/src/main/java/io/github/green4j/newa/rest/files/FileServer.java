@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest.files;
@@ -35,7 +18,7 @@ import java.util.concurrent.Executor;
 /**
  * A file server in one line:
  * <pre>{@code
- * FileServer.start(9012, files).awaitClose();
+ * new Life().run(() -> FileServer.start(9012, files));
  * }</pre>
  * and the same thing with an api sharing the port:
  * <pre>{@code
@@ -44,12 +27,12 @@ import java.util.concurrent.Executor;
  *         .start(9012);
  * }</pre>
  * <p>
- * It assembles exactly the pipeline this module documents, out of the same public handlers a pipeline
- * written by hand is made of:
+ * It assembles this pipeline, out of the same public handlers a pipeline written by hand is made of:
  * <pre>
  * Client --&gt; [IdleConnectionHandler] --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt;
- *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; [CorsHandler] --&gt;
- *            [HttpContentCompressor] --&gt; FileServerHandler --&gt; [your handlers] --&gt; FilesOnlyHandler
+ *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt;
+ *            [CorsHandler] --&gt; [HttpContentCompressor] --&gt; FileServerHandler --&gt; [your handlers] --&gt;
+ *            FilesOnlyHandler
  * </pre>
  * Nothing is hidden and nothing is one-way: {@link #pipeline()} hands the same initializer to a
  * {@link io.netty.bootstrap.ServerBootstrap} of your own, and everything below the pipeline - the transport,

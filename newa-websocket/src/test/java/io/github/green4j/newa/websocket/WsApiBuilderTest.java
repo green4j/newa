@@ -1,42 +1,25 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class WsApiBuilderTest {
 
     @Test
     public void testKeepAliveIsOnByDefault() {
-        final WsApi api = new WsApiBuilder(1)
-                .build();
-        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_PING_INTERVAL_MS,
-                api.pingIntervalMs());
-        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_READ_TIMEOUT_MS,
-                api.readTimeoutMs());
+        final WsApi api = new WsApiBuilder(1).build();
+
+        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_PING_INTERVAL_MS, api.pingIntervalMs());
+        Assertions.assertEquals(AbstractWsApiBuilder.DEFAULT_READ_TIMEOUT_MS, api.readTimeoutMs());
     }
 
     @Test
@@ -45,60 +28,33 @@ class WsApiBuilderTest {
                 .withPingIntervalMs(0)
                 .withReadTimeoutMs(0)
                 .build();
+
         Assertions.assertEquals(0, api.pingIntervalMs());
         Assertions.assertEquals(0, api.readTimeoutMs());
     }
 
-    @Test
-    public void testDefaultPathPrefix() {
-        final WsApi api = new WsApiBuilder(1)
-                .build();
-        Assertions.assertEquals("/websocket/v1",
-                api.websocketPath());
-    }
+    /**
+     * @param version  of the api, which is the last segment whatever the prefix is.
+     * @param prefix    asked for, where NONE is none asked for at all and DEFAULT is never asking.
+     * @param expected  the path the api answers on.
+     */
+    @ParameterizedTest(name = "version {0}, prefix [{1}] -> {2}")
+    @CsvSource(nullValues = "NONE", value = {
+        "1, DEFAULT, /websocket/v1", // nothing asked for is the documented default
+        "1, ws,      /ws/v1",
+        "1, /ws,     /ws/v1",        // a leading slash is not doubled
+        "1, NONE,    /v1",           // and no prefix at all leaves the version alone
+        "1, '',      /v1",
+        "3, ws,      /ws/v3"
+    })
+    public void websocketPath(final int version,
+                              final String prefix,
+                              final String expected) {
+        final WsApiBuilder builder = new WsApiBuilder(version);
+        if (!"DEFAULT".equals(prefix)) {
+            builder.withPathPrefix(prefix);
+        }
 
-    @Test
-    public void testCustomPathPrefix() {
-        final WsApi api = new WsApiBuilder(1)
-                .withPathPrefix("ws")
-                .build();
-        Assertions.assertEquals("/ws/v1",
-                api.websocketPath());
-    }
-
-    @Test
-    public void testPathPrefixWithLeadingSlash() {
-        final WsApi api = new WsApiBuilder(1)
-                .withPathPrefix("/ws")
-                .build();
-        Assertions.assertEquals("/ws/v1",
-                api.websocketPath());
-    }
-
-    @Test
-    public void testDifferentVersion() {
-        final WsApi api = new WsApiBuilder(3)
-                .withPathPrefix("ws")
-                .build();
-        Assertions.assertEquals("/ws/v3",
-                api.websocketPath());
-    }
-
-    @Test
-    public void testNullPathPrefix() {
-        final WsApi api = new WsApiBuilder(1)
-                .withPathPrefix(null)
-                .build();
-        Assertions.assertEquals("/v1",
-                api.websocketPath());
-    }
-
-    @Test
-    public void testEmptyPathPrefix() {
-        final WsApi api = new WsApiBuilder(1)
-                .withPathPrefix("")
-                .build();
-        Assertions.assertEquals("/v1",
-                api.websocketPath());
+        Assertions.assertEquals(expected, builder.build().websocketPath(), String.valueOf(prefix));
     }
 }

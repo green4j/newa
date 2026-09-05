@@ -1,31 +1,21 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.lang;
 
 import java.util.Collection;
 
+/**
+ * Closing on a path which is already going wrong, where a resource which will not close is not worth a
+ * second failure. A null is nothing to close, and a failure to close is dropped rather than thrown.
+ *
+ * <p>An {@link InterruptedException} is the one which is not dropped: the interrupt is re-asserted on the
+ * closing thread, so a close which was interrupted does not leave the thread looking as though it never was.
+ */
 public abstract class CloseHelper {
     public static void closeQuiet(final AutoCloseable resource) {
         if (resource == null) {
@@ -43,13 +33,8 @@ public abstract class CloseHelper {
         if (resources == null) {
             return;
         }
-        for (final AutoCloseable r : resources) {
-            if (null != r) {
-                try {
-                    r.close();
-                } catch (final Exception ignore) {
-                }
-            }
+        for (final AutoCloseable resource : resources) {
+            closeQuiet(resource);
         }
     }
 
@@ -57,13 +42,8 @@ public abstract class CloseHelper {
         if (resources == null) {
             return;
         }
-        for (final AutoCloseable r : resources) {
-            if (null != r) {
-                try {
-                    r.close();
-                } catch (final Exception ignore) {
-                }
-            }
+        for (int i = 0; i < resources.length; i++) {
+            closeQuiet(resources[i]);
         }
     }
 

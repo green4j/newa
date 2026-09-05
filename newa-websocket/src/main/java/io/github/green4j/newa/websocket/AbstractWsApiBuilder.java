@@ -1,29 +1,26 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
 
+/**
+ * Everything an api takes, whichever kind is being built: the handshake path, the receivers, the keep-alive
+ * pair, the observers, and what to do with a session which cannot keep up.
+ * <pre>{@code
+ * WsApi api = new WsApiBuilder(1)                     // version 1, so the path is /websocket/v1
+ *         .withPathPrefix("ws")                       // ... or /ws/v1
+ *         .withTextReceiver((session, message, last) -> session.sendText(message))
+ *         .build();
+ * }</pre>
+ * The defaults hold a session which says nothing: it is pinged every 30 s and closed after 90 s of silence,
+ * which is three missed pings. Either takes 0 to turn it off.
+ *
+ * @param <B> the builder itself, so a chain keeps its type.
+ */
 public abstract class AbstractWsApiBuilder<B extends AbstractWsApiBuilder<B>> {
     /**
      * How often an idle session is pinged unless {@link #withPingIntervalMs(int)} says otherwise.
@@ -39,7 +36,8 @@ public abstract class AbstractWsApiBuilder<B extends AbstractWsApiBuilder<B>> {
     protected final int version;
 
     protected WsApiObserverFactory observers;
-    protected Receiver receiver;
+    protected Receiver.Text textReceiver;
+    protected Receiver.Binary binaryReceiver;
     protected String pathPrefix = "websocket";
     protected int pingIntervalMs = DEFAULT_PING_INTERVAL_MS;
     protected int readTimeoutMs = DEFAULT_READ_TIMEOUT_MS;
@@ -83,22 +81,36 @@ public abstract class AbstractWsApiBuilder<B extends AbstractWsApiBuilder<B>> {
     }
 
     /**
-     * Sets what every session of this api hands its inbound data frames to. Without one nothing is
-     * received and an inbound frame is answered with a {@code 1003}, which is all a broadcasting api
-     * needs.
+     * Sets what every session of this api hands its inbound text frames to. Without one nothing takes text
+     * and a text frame is answered with a {@code 1003}, which is all a broadcasting api needs.
      *
      * <p>It lives here, next to the rest of what the application plugs in, for the same reason the handles
      * of a rest api live on the rest api builder: it is what handles what comes in. Note the consequence -
      * the receiver is built before the api, so a receiver which wants to call
      * {@link WsApi#broadcastText(CharSequence)} cannot simply capture it. Subclass {@link WsApi} and
-     * implement {@link Receiver} on the subclass when a receiver needs the api it belongs to.
+     * override {@link WsApi#textReceiver()} when a receiver needs the api it belongs to.
      *
-     * @param receiver told about every data frame, text or binary, null to receive nothing.
+     * @param textReceiver told about every text frame, null to take none.
      * @return this builder.
      */
     @SuppressWarnings("unchecked")
-    public B withReceiver(final Receiver receiver) {
-        this.receiver = receiver;
+    public B withTextReceiver(final Receiver.Text textReceiver) {
+        this.textReceiver = textReceiver;
+        return (B) this;
+    }
+
+    /**
+     * Sets what every session of this api hands its inbound binary frames to, on the same terms
+     * {@link #withTextReceiver(Receiver.Text)} sets the other half: without one a binary frame is answered
+     * with a {@code 1003}, and {@link WsApi#binaryReceiver()} is what a subclass overrides when a receiver
+     * needs the api it belongs to.
+     *
+     * @param binaryReceiver told about every binary frame, null to take none.
+     * @return this builder.
+     */
+    @SuppressWarnings("unchecked")
+    public B withBinaryReceiver(final Receiver.Binary binaryReceiver) {
+        this.binaryReceiver = binaryReceiver;
         return (B) this;
     }
 

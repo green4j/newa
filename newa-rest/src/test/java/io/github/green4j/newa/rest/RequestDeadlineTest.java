@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -42,6 +25,11 @@ import java.nio.charset.StandardCharsets;
  * The bound an idle timeout cannot be. Every test here runs with the idle timeout switched off, so that
  * whatever closes a connection can only be the deadline - and a peer which dribbles a request out is never
  * idle in the first place.
+ * <p>
+ * What the handler itself does - a connection which asks nothing, a keep-alive connection between requests,
+ * a deadline which no amount of arriving bytes extends - is pinned deterministically on a virtual clock in
+ * {@code RequestDeadlineHandlerTest} over in newa-common. What is left here is what only a real server can
+ * show: that the handler is in the pipeline RestServer builds, and that the two settings reach it.
  */
 class RequestDeadlineTest {
     private static final String HOST = "127.0.0.1";
@@ -88,14 +76,6 @@ class RequestDeadlineTest {
         Assertions.assertEquals(RestServer.DEFAULT_IDLE_TIMEOUT_MS / 2, RestServer.DEFAULT_DEADLINE_MS);
     }
 
-    @Test
-    public void aConnectionWhichAsksNothingIsClosed() throws Exception {
-        startWith(DEADLINE_MS);
-
-        try (Socket socket = connect()) {
-            Assertions.assertTrue(awaitClose(socket), "the connection was left open");
-        }
-    }
 
     @Test
     public void aRequestDribbledOutIsClosed() throws Exception {
@@ -106,37 +86,7 @@ class RequestDeadlineTest {
         }
     }
 
-    @Test
-    public void everyRequestOfAKeepAliveConnectionIsCovered() throws Exception {
-        // the second request is judged exactly like the first: nothing takes the handler out once a
-        // connection has proved itself
-        startWith(DEADLINE_MS);
 
-        try (Socket socket = connect()) {
-            ask(socket);
-            Assertions.assertTrue(readOneResponse(socket).startsWith("HTTP/1.1 200 OK"));
-
-            Assertions.assertTrue(dribble(socket), "the second request was allowed to dribble in");
-        }
-    }
-
-    @Test
-    public void aQuietKeepAliveConnectionIsNotTouched() throws Exception {
-        // between requests nothing is arriving, so nothing is on a deadline: that connection belongs to the
-        // idle timeout, which is switched off here on purpose
-        startWith(DEADLINE_MS);
-
-        try (Socket socket = connect()) {
-            ask(socket);
-            Assertions.assertTrue(readOneResponse(socket).startsWith("HTTP/1.1 200 OK"));
-
-            Thread.sleep(PAST_IT_MS);
-
-            ask(socket);
-            Assertions.assertTrue(readOneResponse(socket).startsWith("HTTP/1.1 200 OK"),
-                    "a connection which had asked nothing since was closed");
-        }
-    }
 
     @Test
     public void zeroLetsARequestArriveAsSlowlyAsItLikes() throws Exception {
@@ -157,10 +107,6 @@ class RequestDeadlineTest {
         }
     }
 
-    private static void ask(final Socket socket) throws IOException {
-        socket.getOutputStream().write(REQUEST.getBytes(StandardCharsets.US_ASCII));
-        socket.getOutputStream().flush();
-    }
 
     /**
      * Sends a request a byte at a time, a quarter of the deadline apart, until it is sent four times over or

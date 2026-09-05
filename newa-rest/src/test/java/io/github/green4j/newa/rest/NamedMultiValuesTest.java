@@ -1,50 +1,47 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
+/**
+ * Reading one of several values under a name. The conversions themselves are the ones
+ * {@link NamedValuesTest} covers; what is asked here is that the index reaches the right value and that
+ * an index past the end is the same as a name which is not there.
+ */
 class NamedMultiValuesTest {
 
-    private static NamedMultiValues of(
-            final String name, final String... values) {
-        final Map<String, List<String>> map =
-                new LinkedHashMap<>();
+    private static NamedMultiValues of(final String name,
+                                       final String... values) {
+        final Map<String, List<String>> map = new LinkedHashMap<>();
         final List<String> list = new ArrayList<>();
-        for (final String v : values) {
-            list.add(v);
+        for (int i = 0; i < values.length; i++) {
+            list.add(values[i]);
         }
         map.put(name, list);
         return new MapNamedMultiValues(map);
+    }
+
+    /** One way of reading a value out, so that a case can name the forms every conversion has. */
+    @FunctionalInterface
+    private interface Reader {
+        Object read(NamedMultiValues mv) throws BadRequestException;
     }
 
     @Test
@@ -55,80 +52,68 @@ class NamedMultiValuesTest {
     }
 
     @Test
-    public void testValueByIndex() {
+    public void theValueAtAnIndexIsTheOneThere() throws BadRequestException {
         final NamedMultiValues mv = of("ids", "a", "b", "c");
+
         Assertions.assertEquals("a", mv.value("ids", 0));
         Assertions.assertEquals("b", mv.value("ids", 1));
         Assertions.assertEquals("c", mv.value("ids", 2));
-        Assertions.assertNull(mv.value("ids", 3));
+        Assertions.assertNull(mv.value("ids", 3), "an index past the end names nothing");
         Assertions.assertNull(mv.value("missing", 0));
+
+        Assertions.assertEquals("a", mv.valueRequired("ids", 0));
+        Assertions.assertThrows(BadRequestException.class, () -> mv.valueRequired("ids", 3));
+        Assertions.assertThrows(BadRequestException.class, () -> mv.valueRequired("missing", 0));
+
+        Assertions.assertEquals("a", mv.value("ids", 0, "fallback"));
+        Assertions.assertEquals("fallback", mv.value("ids", 5, "fallback"));
+        Assertions.assertEquals("fallback", mv.value("missing", 0, "fallback"));
+    }
+
+    /**
+     * @return one case per type: what it is called, the values under the name, what the value at index 0
+     *         converts to, how it is asked for, how an index past the end is asked for, and what that
+     *         falls back to.
+     */
+    private static Stream<Arguments> everyConversionByIndex() {
+        return Stream.of(
+                Arguments.of("int", new String[]{"10", "20"}, 10,
+                        (Reader) mv -> mv.valueRequiredAsInt("vals", 0),
+                        (Reader) mv -> mv.valueAsInt("vals", 5, 99), 99),
+                Arguments.of("int at the second index", new String[]{"10", "20"}, 20,
+                        (Reader) mv -> mv.valueRequiredAsInt("vals", 1),
+                        (Reader) mv -> mv.valueAsInt("vals", 5, 99), 99),
+                Arguments.of("boolean", new String[]{"yes", "false"}, true,
+                        (Reader) mv -> mv.valueRequiredAsBoolean("vals", 0),
+                        (Reader) mv -> mv.valueAsBoolean("vals", 5, false), false),
+                Arguments.of("boolean at the second index", new String[]{"yes", "false"}, false,
+                        (Reader) mv -> mv.valueRequiredAsBoolean("vals", 1),
+                        (Reader) mv -> mv.valueAsBoolean("vals", 5, false), false),
+                Arguments.of("BigDecimal", new String[]{"9.99"}, new BigDecimal("9.99"),
+                        (Reader) mv -> mv.valueRequiredAsBigDecimal("vals", 0),
+                        (Reader) mv -> mv.valueAsBigDecimal("vals", 1, BigDecimal.ZERO),
+                        BigDecimal.ZERO));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everyConversionByIndex")
+    public void convertsTheValueAtAnIndex(final String type,
+                                          final String[] values,
+                                          final Object expected,
+                                          final Reader at,
+                                          final Reader pastTheEnd,
+                                          final Object fallback) throws BadRequestException {
+        final NamedMultiValues mv = of("vals", values);
+
+        Assertions.assertEquals(expected, at.read(mv), type);
+        Assertions.assertEquals(fallback, pastTheEnd.read(mv), type + " past the end of the values");
     }
 
     @Test
-    public void testValueRequired() throws BadRequestException {
-        final NamedMultiValues mv = of("ids", "x");
-        Assertions.assertEquals("x",
-                mv.valueRequired("ids", 0));
-        Assertions.assertThrows(BadRequestException.class,
-                () -> mv.valueRequired("ids", 1));
-        Assertions.assertThrows(BadRequestException.class,
-                () -> mv.valueRequired("missing", 0));
-    }
+    public void whatIsNotAValueOfThatTypeIsABadRequest() {
+        final NamedMultiValues mv = of("vals", "abc");
 
-    @Test
-    public void testIntConversionByIndex()
-            throws BadRequestException {
-        final NamedMultiValues mv = of("nums", "10", "20");
-        Assertions.assertEquals(10,
-                mv.valueRequiredAsInt("nums", 0));
-        Assertions.assertEquals(20,
-                mv.valueRequiredAsInt("nums", 1));
-        Assertions.assertEquals(99,
-                mv.valueAsInt("nums", 5, 99));
-        Assertions.assertEquals(99,
-                mv.valueAsInt("missing", 0, 99));
-    }
-
-    @Test
-    public void testIntInvalidByIndex() {
-        final NamedMultiValues mv = of("nums", "abc");
-        Assertions.assertThrows(BadRequestException.class,
-                () -> mv.valueRequiredAsInt("nums", 0));
-    }
-
-    @Test
-    public void testBooleanByIndex() throws BadRequestException {
-        final NamedMultiValues mv =
-                of("flags", "yes", "false", "1");
-        Assertions.assertTrue(
-                mv.valueRequiredAsBoolean("flags", 0));
-        Assertions.assertFalse(
-                mv.valueRequiredAsBoolean("flags", 1));
-        Assertions.assertTrue(
-                mv.valueRequiredAsBoolean("flags", 2));
-        Assertions.assertFalse(
-                mv.valueAsBoolean("flags", 5, false));
-    }
-
-    @Test
-    public void testBigDecimalByIndex()
-            throws BadRequestException {
-        final NamedMultiValues mv = of("prices", "9.99");
-        Assertions.assertEquals(new BigDecimal("9.99"),
-                mv.valueRequiredAsBigDecimal("prices", 0));
-        Assertions.assertEquals(BigDecimal.ZERO,
-                mv.valueAsBigDecimal("prices", 1, BigDecimal.ZERO));
-    }
-
-    @Test
-    public void testValueWithDefault() {
-        final NamedMultiValues mv = of("k", "v");
-        Assertions.assertEquals("v",
-                mv.value("k", 0, "fallback"));
-        Assertions.assertEquals("fallback",
-                mv.value("k", 5, "fallback"));
-        Assertions.assertEquals("fallback",
-                mv.value("missing", 0, "fallback"));
+        Assertions.assertThrows(BadRequestException.class, () -> mv.valueRequiredAsInt("vals", 0));
     }
 
     private static final class MapNamedMultiValues

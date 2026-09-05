@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -39,45 +22,39 @@ import io.netty.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Closes a connection whose peer has stopped taking what has been written to it, or is taking it slower than
- * a server is willing to wait.
+ * Closes a connection whose peer has stopped taking what was written to it, or is taking it slower than this
+ * server is willing to wait.
  * <p>
- * This is the other half of {@link RequestDeadlineHandler}, and it exists for the same reason: an idle
- * timeout asks whether anything moved. A peer taking a byte every ten seconds moves the outbound buffer every
- * ten seconds, so {@link IdleConnectionHandler} - which watches that buffer make progress - sees a connection
- * hard at work and holds it, along with whatever the response holds: a rendered buffer, a cursor, an open
- * file. Under load that is a resource leak a client can start on purpose.
+ * The other half of {@link RequestDeadlineHandler}, and there for the same reason: a peer taking a byte
+ * every ten seconds moves the outbound buffer every ten seconds, so {@link IdleConnectionHandler} sees a
+ * connection hard at work and holds it, along with whatever the response holds - a rendered buffer, a
+ * cursor, an open file. Under load that is a leak a client can start on purpose.
  * <p>
- * <b>The clock only exists while something is owed to the peer.</b> It is started by a write and stopped the
- * moment every write has completed, so a server which has nothing to send is never on one. That is what makes
- * this safe in front of a long-lived stream: a chunked response ticking once a minute, a suspended cursor, a
- * websocket session waiting for something to broadcast - all of them owe nothing between messages, and
- * nothing is timing them.
+ * <b>The clock exists only while something is owed to the peer.</b> A write starts it and the last write to
+ * complete stops it, so a server with nothing to send is never on one: a chunked response ticking once a
+ * minute, a suspended cursor, a websocket session with nothing to broadcast owe nothing between messages.
  * <p>
- * <b>What is owed is judged per write, at a rate.</b> A write is given one window for every
- * {@link #DEFAULT_UNIT} of it, counted from the moment it became the oldest one outstanding, and that is the
- * whole policy:
+ * <b>What is owed is judged per write, at a rate</b> - one window for every {@link #DEFAULT_UNIT} of a
+ * write, counted from the moment it became the oldest one outstanding:
  * <ul>
- *     <li>a chunk, a frame or a small response is one window - which is exactly what a chunked response has
- *     always been given here, so nothing about a chunked response changes;</li>
- *     <li>a large response written as one message gets the window its size deserves, because there is no way
- *     to watch a {@link ByteBuf} being drained from outside the channel - an honest slow peer finishes, a
- *     peer taking a byte at a time does not;</li>
- *     <li>a {@link FileRegion} is the one message which reports its own progress, so instead of being judged
- *     whole it renews its window every time another unit of it has reached the peer. A trickle is caught
- *     within one window however large the file is, and a peer reading a gigabyte honestly is never touched.</li>
+ *     <li>a chunk, a frame or a small response is one window;</li>
+ *     <li>a large response written as one message gets the window its size deserves - a {@link ByteBuf}
+ *     cannot be watched draining from outside the channel, so an honest slow peer finishes and a peer taking
+ *     a byte at a time does not;</li>
+ *     <li>a {@link FileRegion} reports its own progress, so it renews its window every unit which reaches
+ *     the peer instead of being judged whole. A trickle is caught within one window however large the file
+ *     is.</li>
  * </ul>
- * The unit and the window together are a floor on throughput - 64K per 30 seconds, about 2.2 KB/s - and it is
- * the same floor for every form of response, which is the point: before this, the floor depended on whether
- * the bytes happened to be counted in chunks or in bytes.
+ * The unit and the window together are a floor on throughput - 64K per 30 seconds, about 2.2 KB/s - and the
+ * same floor for every form of response.
  * <p>
  * It belongs directly behind the aggregator, in the same slot as {@link RequestDeadlineHandler} and in front
- * of everything which answers: what it has to see is every message on its way out, before the codec turns it
- * into bytes. It measures the payload rather than the encoded frame - a response head, a chunk's terminator,
- * a websocket frame's mask are not counted - which is a rounding error against a 64K unit.
+ * of everything which answers: it has to see every message on its way out, before the codec turns it into
+ * bytes. It measures the payload rather than the encoded frame - a response head, a chunk terminator, a
+ * frame mask are not counted - which is a rounding error against a 64K unit.
  * <p>
- * Before closing, a {@link #RESPONSE_STALLED} event is fired down the pipeline, so that a handler which knows
- * what it was writing can say the response was given up on rather than let it look like an ordinary
+ * A {@link #RESPONSE_STALLED} event is fired down the pipeline before the close, so a handler which knows
+ * what it was writing can report that the response was given up on rather than let it look like an ordinary
  * disconnect. Nothing is written back: the peer is not reading, which is the whole finding.
  */
 public class ResponseDeadlineHandler extends ChannelDuplexHandler implements ChannelFutureListener {
@@ -156,13 +133,6 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
         this.unit = unit;
     }
 
-    /**
-     * Takes the write into account and starts the clock if it was not running.
-     *
-     * @param ctx of this handler.
-     * @param msg on its way to the peer.
-     * @param promise of that write, which is what says it arrived.
-     */
     @Override
     public void write(final ChannelHandlerContext ctx,
                       final Object msg,
@@ -183,14 +153,9 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
         ctx.write(msg, promise);
     }
 
-    /**
-     * The oldest outstanding write has completed - writes on one channel complete in the order they were
-     * made, so this is always the one at the head.
-     *
-     * @param future of that write.
-     */
     @Override
     public void operationComplete(final ChannelFuture future) {
+        // writes on one channel complete in the order they were made, so what completed is always the head
         dequeue();
         if (pending == 0) {
             cancel(); // nothing is owed: a peer which has taken everything is not on any clock
@@ -199,18 +164,12 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
         restart(); // the next write becomes the one being judged, with a window of its own
     }
 
-    /**
-     * @param ctx of this handler.
-     */
     @Override
     public void channelInactive(final ChannelHandlerContext ctx) {
         cancel();
         ctx.fireChannelInactive();
     }
 
-    /**
-     * @param ctx of this handler.
-     */
     @Override
     public void handlerRemoved(final ChannelHandlerContext ctx) {
         cancel();

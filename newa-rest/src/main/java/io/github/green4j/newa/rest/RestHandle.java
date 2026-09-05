@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -32,6 +15,17 @@ import io.netty.util.AsciiString;
 
 import java.nio.ByteBuffer;
 
+/**
+ * What answers one request, in the full form: given the {@link RestContext} and a {@link Result}, and free
+ * to answer later - the result may be kept beyond {@code handle}, as long as every call which touches it is
+ * back on {@link RestContext#executor()}, the event loop of the channel.
+ * <p>
+ * A handle which renders its answer and returns is written as a {@link JsonRestHandle} or a
+ * {@link TxtRestHandle} instead; this is the one for an answer which is not ready when the request is.
+ * <p>
+ * What is thrown becomes the response: an {@link HttpException} carries its own status and message, and
+ * anything else is a {@code 500} whose cause goes to the observer rather than to the client.
+ */
 public interface RestHandle {
     /**
      * One request is answered once. Whichever method here sends the response ends this result, and every
@@ -43,6 +37,11 @@ public interface RestHandle {
      * calling this twice - most easily from two callbacks of an async response - is to be found.
      */
     interface Result {
+        /**
+         * A body written in pieces, for a response whose length was declared up front. The pieces fill the
+         * response buffer - nothing is sent until {@link #done()}, which is what makes this different from a
+         * chunked response.
+         */
         interface Content {
             Content append(byte[] array, int offset, int length);
 

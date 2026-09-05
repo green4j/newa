@@ -1,31 +1,25 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
 
 import java.math.BigDecimal;
 
+/**
+ * Named strings read without building a map: the path parameters, the headers, a form. A name is looked up
+ * either by its {@link String} or by the index {@link #nameToIndex(String)} answers, which is what a handler
+ * reading the same name on every request uses.
+ * <p>
+ * The typed readers - {@code valueAsInt}, {@code valueAsLong}, {@code valueAsBoolean} and the rest - come in
+ * two forms: one with a default for a value which may be absent, and {@code valueRequired...} which throws
+ * {@link BadRequestException}, and so answers the client {@code 400}, when it is not there. A value which is
+ * there but cannot be parsed is a {@link BadRequestException} either way; a boolean reads
+ * {@code true/yes/y/1}, case-insensitively.
+ */
 public interface NamedValues {
     int numberOfNames();
 

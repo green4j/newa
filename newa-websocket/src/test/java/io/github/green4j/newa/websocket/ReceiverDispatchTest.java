@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -39,9 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Which of the two methods of a {@link Receiver} a frame reaches, and what a frame nobody took is answered
- * with. A receiver takes what it overrides, so the type it did not override is not silently dropped - the
- * peer is told a 1003 rather than left waiting for an answer to a frame which went nowhere.
+ * Which of the two receivers of a session a frame reaches, and what a frame nobody took is answered with.
+ * A session takes the types it was given a receiver for, so the type it was given none for is not silently
+ * dropped - the peer is told a 1003 rather than left waiting for an answer to a frame which went nowhere.
  */
 class ReceiverDispatchTest {
     private static final class Observed implements WsApiObserver {
@@ -80,18 +63,21 @@ class ReceiverDispatchTest {
 
     private final List<EmbeddedChannel> channels = new ArrayList<>();
 
-    private ClientSession newSession(final Receiver receiver) {
-        return newSession(receiver, null);
+    private ClientSession newSession(final Receiver.Text textReceiver,
+                                     final Receiver.Binary binaryReceiver) {
+        return newSession(textReceiver, binaryReceiver, null);
     }
 
-    private ClientSession newSession(final Receiver receiver,
+    private ClientSession newSession(final Receiver.Text textReceiver,
+                                     final Receiver.Binary binaryReceiver,
                                      final WsApiObserver observer) {
         final EmbeddedChannel channel = new EmbeddedChannel();
         channels.add(channel);
         return new ClientSessions(null, observer == null ? null : () -> observer).newSession(
                 new ClientSessionContext(
                         new NoWritingResult(),
-                        receiver,
+                        textReceiver,
+                        binaryReceiver,
                         channel,
                         0 // no pinger
                 )
@@ -128,14 +114,9 @@ class ReceiverDispatchTest {
     void aBinaryMessageReachesTheOneWhichTakesBinary() {
         final List<String> taken = new ArrayList<>();
 
-        final ClientSession session = newSession(new Receiver() {
-            @Override
-            public void binary(final ClientSession s,
-                               final ByteBuf payload,
-                               final boolean last) {
-                taken.add(payload.toString(CharsetUtil.UTF_8) + ":" + last);
-            }
-        });
+        final ClientSession session = newSession(
+                null,
+                (s, payload, last) -> taken.add(payload.toString(CharsetUtil.UTF_8) + ":" + last));
 
         final ByteBuf first = Unpooled.copiedBuffer("ab", CharsetUtil.UTF_8);
         final ByteBuf second = Unpooled.copiedBuffer("cd", CharsetUtil.UTF_8);
@@ -155,8 +136,9 @@ class ReceiverDispatchTest {
     void aTextMessageReachesTheOneWhichTakesText() {
         final List<String> taken = new ArrayList<>();
 
-        final ClientSession session = newSession(Receivers.ofText(
-                (s, message) -> taken.add(message.toString())));
+        final ClientSession session = newSession(
+                (s, message, last) -> taken.add(message.toString()),
+                null);
 
         session.receive("hello");
 
@@ -165,8 +147,8 @@ class ReceiverDispatchTest {
     }
 
     @Test
-    void aBinaryMessageIsRefusedByAReceiverWhichOnlyTakesText() {
-        final ClientSession session = newSession(Receivers.echo());
+    void aBinaryMessageIsRefusedByASessionWhichOnlyTakesText() {
+        final ClientSession session = newSession(Receivers.echo(), null);
 
         final ByteBuf payload = Unpooled.copiedBuffer("bytes", CharsetUtil.UTF_8);
         try {
@@ -180,13 +162,8 @@ class ReceiverDispatchTest {
     }
 
     @Test
-    void aTextMessageIsRefusedByAReceiverWhichOnlyTakesBinary() {
-        final ClientSession session = newSession(new Receiver() {
-            @Override
-            public void binary(final ClientSession s,
-                               final ByteBuf payload,
-                               final boolean last) {
-            }
+    void aTextMessageIsRefusedByASessionWhichOnlyTakesBinary() {
+        final ClientSession session = newSession(null, (s, payload, last) -> {
         });
 
         session.receive("hello");
@@ -197,13 +174,13 @@ class ReceiverDispatchTest {
 
     @Test
     void anApiWhichOnlyEverSendsRefusesBothOfThem() {
-        final ClientSession text = newSession(null);
+        final ClientSession text = newSession(null, null);
         text.receive("hello");
 
         Assertions.assertEquals(WebSocketCloseStatus.INVALID_MESSAGE_TYPE.code(), closeStatusOf(text));
         Assertions.assertTrue(text.isClosed());
 
-        final ClientSession binary = newSession(null);
+        final ClientSession binary = newSession(null, null);
         final ByteBuf payload = Unpooled.copiedBuffer("bytes", CharsetUtil.UTF_8);
         try {
             binary.receive(payload, true);
@@ -223,13 +200,8 @@ class ReceiverDispatchTest {
     void aReceiverWhichThrowsOnBinaryEndsItsSessionWithA1011() {
         final Observed observer = new Observed();
 
-        final ClientSession session = newSession(new Receiver() {
-            @Override
-            public void binary(final ClientSession s,
-                               final ByteBuf payload,
-                               final boolean last) {
-                throw new IllegalStateException("Boom");
-            }
+        final ClientSession session = newSession(null, (s, payload, last) -> {
+            throw new IllegalStateException("Boom");
         }, observer);
 
         final ByteBuf payload = Unpooled.copiedBuffer("bytes", CharsetUtil.UTF_8);

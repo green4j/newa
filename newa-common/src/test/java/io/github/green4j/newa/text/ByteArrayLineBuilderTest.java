@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.text;
@@ -27,66 +10,72 @@ package io.github.green4j.newa.text;
 import io.github.green4j.jelly.AsciiByteArrayWriter;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ByteArrayLineBuilderTest {
 
     private static ByteArrayLineBuilder builder() {
-        return new ByteArrayLineBuilder(
-                new AsciiByteArrayWriter(256));
+        return new ByteArrayLineBuilder(new AsciiByteArrayWriter(256));
     }
 
-    @Test
-    public void testAppendAndToString() {
+    /**
+     * @param appended  the text to append.
+     * @param asOneChar whether to reach the char overload rather than the CharSequence one.
+     */
+    @ParameterizedTest
+    @CsvSource({"hello, false", "Z, true"})
+    public void appendsWhatItIsGiven(final String appended,
+                                     final boolean asOneChar) {
         final ByteArrayLineBuilder b = builder();
-        b.append("hello");
-        Assertions.assertEquals("hello", b.toString());
+        if (asOneChar) {
+            b.append(appended.charAt(0));
+        } else {
+            b.append(appended);
+        }
+        Assertions.assertEquals(appended, b.toString());
     }
 
-    @Test
-    public void testAppendln() {
+    @ParameterizedTest
+    @CsvSource({"line1, false", "x, true"})
+    public void appendlnEndsTheLine(final String appended,
+                                    final boolean asOneChar) {
         final ByteArrayLineBuilder b = builder();
-        b.appendln("line1");
-        Assertions.assertEquals(
-                "line1" + ByteArrayLineBuilder.NL,
-                b.toString());
+        if (asOneChar) {
+            b.appendln(appended.charAt(0));
+        } else {
+            b.appendln(appended);
+        }
+        Assertions.assertEquals(appended + ByteArrayLineBuilder.NL, b.toString());
     }
 
-    @Test
-    public void testAppendlnChar() {
+    /**
+     * @param level  to indent by.
+     * @param size   of one level, or -1 to ask for the default one.
+     * @param spaces the indent is expected to be.
+     */
+    @ParameterizedTest
+    @CsvSource({
+        "2,  -1, 8",  // the default size, out of the cache of prepared indents
+        "12, -1, 48", // past the end of that cache, which has to build one instead
+        "2,  2,  4"   // and a size of the caller's own
+    })
+    public void tabIndentsBySoManySpaces(final int level,
+                                         final int size,
+                                         final int spaces) {
         final ByteArrayLineBuilder b = builder();
-        b.appendln('x');
-        Assertions.assertEquals(
-                "x" + ByteArrayLineBuilder.NL,
-                b.toString());
-    }
+        if (size < 0) {
+            b.tab(level);
+        } else {
+            b.tab(level, size);
+        }
+        b.append('x');
 
-    @Test
-    public void testTabCachedLevel() {
-        final ByteArrayLineBuilder b = builder();
-        b.tab(2);
-        b.append("text");
-        Assertions.assertEquals(
-                "        text", b.toString());
-    }
-
-    @Test
-    public void testTabLargeLevel() {
-        final ByteArrayLineBuilder b = builder();
-        b.tab(12);
-        b.append("x");
-        final String result = b.toString();
-        final int expectedSpaces = 12 * 4;
-        Assertions.assertEquals(expectedSpaces + 1,
-                result.length());
-        Assertions.assertTrue(result.endsWith("x"));
-    }
-
-    @Test
-    public void testTabCustomSize() {
-        final ByteArrayLineBuilder b = builder();
-        b.tab(2, 2);
-        b.append("x");
-        Assertions.assertEquals("    x", b.toString());
+        final StringBuilder expected = new StringBuilder();
+        for (int i = 0; i < spaces; i++) {
+            expected.append(' ');
+        }
+        Assertions.assertEquals(expected.append('x').toString(), b.toString());
     }
 
     @Test
@@ -96,12 +85,5 @@ class ByteArrayLineBuilderTest {
         Assertions.assertFalse(b.toString().isEmpty());
         b.clear();
         Assertions.assertEquals("", b.toString());
-    }
-
-    @Test
-    public void testAppendChar() {
-        final ByteArrayLineBuilder b = builder();
-        b.append('Z');
-        Assertions.assertEquals("Z", b.toString());
     }
 }

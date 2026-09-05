@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -42,6 +25,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -196,22 +181,24 @@ class LargeResponseIntegrationTest {
         return Integer.parseInt(get("/v1/probe/txt-buffer"));
     }
 
-    @Test
-    public void testLargeJsonResponseArrivesIntact() throws Exception {
-        final String body = get("/v1/large/json?size=" + LARGE_CONTENT_SIZE);
+    /**
+     * @param path   of the endpoint which renders the content.
+     * @param quoted whether the content arrives inside the two quotes of a JSON string.
+     */
+    @ParameterizedTest
+    @CsvSource({"/v1/large/json, true", "/v1/large/txt, false"})
+    public void aLargeResponseArrivesIntact(final String path,
+                                            final boolean quoted) throws Exception {
+        final String body = get(path + "?size=" + LARGE_CONTENT_SIZE);
 
-        Assertions.assertEquals(LARGE_CONTENT_SIZE + 2, body.length());
-        Assertions.assertEquals('"', body.charAt(0));
-        Assertions.assertEquals('"', body.charAt(body.length() - 1));
-        Assertions.assertEquals(contentOf(LARGE_CONTENT_SIZE),
-                body.substring(1, body.length() - 1));
-    }
-
-    @Test
-    public void testLargeTxtResponseArrivesIntact() throws Exception {
-        final String body = get("/v1/large/txt?size=" + LARGE_CONTENT_SIZE);
-
-        Assertions.assertEquals(contentOf(LARGE_CONTENT_SIZE), body);
+        if (quoted) {
+            Assertions.assertEquals(LARGE_CONTENT_SIZE + 2, body.length());
+            Assertions.assertEquals('"', body.charAt(0));
+            Assertions.assertEquals('"', body.charAt(body.length() - 1));
+            Assertions.assertEquals(contentOf(LARGE_CONTENT_SIZE), body.substring(1, body.length() - 1));
+        } else {
+            Assertions.assertEquals(contentOf(LARGE_CONTENT_SIZE), body);
+        }
     }
 
     @Test

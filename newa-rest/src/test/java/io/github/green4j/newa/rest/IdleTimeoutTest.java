@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -42,6 +25,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/**
+ * The connection timer at a real server. What the handler itself does - closing a connection which says
+ * nothing, and leaving alone one which is read from or written to - is pinned deterministically on a
+ * virtual clock in {@code IdleConnectionHandlerTest} over in newa-common. What is here is what only a real
+ * server can show: where the default sits, that a keep-alive connection is reclaimed once its client walks
+ * away, that a transfer still moving is not idle, and that zero means no timer at all.
+ */
 class IdleTimeoutTest {
     private static final String HOST = "127.0.0.1";
 
@@ -128,16 +118,6 @@ class IdleTimeoutTest {
                 "a deadline would be pre-empted by the connection timer standing above it");
     }
 
-    @Test
-    public void aConnectionWhichAsksNothingIsClosed() throws Exception {
-        server = RestServer.of(buildApi())
-                .withIdleTimeoutMs(IDLE_MS)
-                .start(0);
-
-        try (Socket socket = connect()) {
-            Assertions.assertTrue(awaitClose(socket), "the connection was left open");
-        }
-    }
 
     @Test
     public void aKeepAliveConnectionIsClosedOnceItGoesQuiet() throws Exception {
@@ -154,26 +134,6 @@ class IdleTimeoutTest {
         }
     }
 
-    @Test
-    public void aConnectionInUseIsNotClosed() throws Exception {
-        server = RestServer.of(buildApi())
-                .withIdleTimeoutMs(IDLE_MS)
-                .start(0);
-
-        try (Socket socket = connect()) {
-            // each answer read out is the connection proving it is still there: a round longer than the
-            // timeout would have been the last one if the timer were counting from the connect rather than
-            // from the last thing said
-            for (int i = 0; i < 6; i++) {
-                Thread.sleep(IDLE_MS * 3 / 4);
-                ask(socket);
-
-                Assertions.assertTrue(
-                        readOneResponse(socket).startsWith("HTTP/1.1 200 OK"),
-                        "closed on round " + i);
-            }
-        }
-    }
 
     @Test
     public void zeroHoldsAConnectionWhichSaysNothing() throws Exception {

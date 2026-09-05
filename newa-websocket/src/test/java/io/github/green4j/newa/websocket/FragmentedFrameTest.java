@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 
@@ -39,7 +22,7 @@ import java.util.List;
 
 /**
  * What a message which arrives in several frames looks like to a {@link Receiver}: one call per frame, with
- * {@code last} saying which of them ends the message, and the frames of one message going to the method of
+ * {@code last} saying which of them ends the message, and the frames of one message going to the receiver of
  * the frame which began it - a continuation of a binary message is binary however the text before it was
  * handled.
  * <p>
@@ -51,7 +34,7 @@ class FragmentedFrameTest {
     private static final String HOST = "127.0.0.1";
     private static final String PATH = "/ws/v1";
 
-    private static final class Recorder implements Receiver {
+    private static final class Recorder implements Receiver.Text, Receiver.Binary {
         private final List<String> pieces = Collections.synchronizedList(new ArrayList<>());
         private volatile ByteBuf kept;
 
@@ -80,7 +63,8 @@ class FragmentedFrameTest {
         recorder = new Recorder();
         server = WsServer.start(0, new WsApiBuilder(1)
                 .withPathPrefix("ws")
-                .withReceiver(recorder)
+                .withTextReceiver(recorder)
+                .withBinaryReceiver(recorder)
                 .withPingIntervalMs(0) // nothing but what the test sends is on this connection
                 .withReadTimeoutMs(0)
                 .build());

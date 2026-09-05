@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.websocket;
@@ -30,6 +13,18 @@ import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 
 import java.nio.charset.Charset;
 
+/**
+ * The open sessions of one api, and the fan-out over them. A session is added when its handshake completes
+ * and removed when its channel goes; neither costs a copy of the list, so a storm of clients arriving or
+ * reconnecting costs what it is rather than its square.
+ * <p>
+ * A broadcast walks a snapshot by index without taking a lock, and walks it to the end: half a fan-out is
+ * not a state anything can recover from, since the sessions already reached have the frame. A session which
+ * fails costs that session - reported and closed the way a failed write is - and the walk goes on.
+ * <p>
+ * The {@code AndRelease} forms take the buffer over and release it once every session has been given a
+ * retained duplicate; the others leave it to the caller, for a frame which is sent again or kept.
+ */
 public class ClientSessions implements ClientSessionFactory {
     private final ClientSessionsListener listener;
     private final WsApiObserverFactory observers;

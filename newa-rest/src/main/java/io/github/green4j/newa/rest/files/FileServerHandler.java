@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest.files;
@@ -98,45 +81,42 @@ import static io.netty.handler.codec.http.HttpHeaderValues.CLOSE;
 import static io.netty.handler.codec.http.HttpHeaderValues.KEEP_ALIVE;
 
 /**
- * Answers the requests a {@link FileSet} owns with the files behind them, and lets every other request past
- * untouched. It goes in front of whatever answers the rest - a {@code RestApiHandler}, usually:
+ * Answers the requests a {@link FileSet} owns with the files behind them and lets every other request past
+ * untouched, so it goes in front of whatever answers the rest - a {@code RestApiHandler}, usually:
  * <pre>
  * Client --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt; FileServerHandler --&gt; RestApiHandler
  * </pre>
- * One per channel, built in the {@code ChannelInitializer} like the handlers around it. The {@link FileSet}
- * is built once and shared; what a request writes into belongs to the handler, so nothing here is
+ * One per channel, built in the {@code ChannelInitializer} like the handlers around it: the {@link FileSet}
+ * is built once and shared, and what a request writes into belongs to the handler, so nothing here is
  * synchronised and nothing is {@code @Sharable}.
  * <p>
- * Where the pipeline allows it the file goes from the page cache to the socket without being read into the
- * process at all - {@code sendfile(2)}, which Netty offers as {@link FileRegion}. Where it does not - TLS and
- * a content encoder both have to see the bytes, and not every channel can write a region - the file is pumped
- * through NIO instead, a chunk at a time and no faster than the peer takes it. Which of the two it is follows
- * from the pipeline and the transport, neither of which changes under a live channel, so it is worked out
- * once per channel and then simply done.
+ * Where the pipeline allows it the file goes from the page cache to the socket without entering the process
+ * at all - {@code sendfile(2)}, which Netty offers as {@link FileRegion}. Where it does not - TLS and a
+ * content encoder both have to see the bytes, and not every channel can write a region - the file is pumped
+ * through NIO instead, a chunk at a time and no faster than the peer takes it. Neither the pipeline nor the
+ * transport changes under a live channel, so which of the two it is is worked out once per channel.
  * <p>
- * That second path reads the file on the event loop, where a page which is not in the cache stalls every
- * other connection the loop carries. Give this an {@link Executor} and the read moves off it - see
- * {@link ReadAheadFile}, which is where the whole of that decision is. It is worth an executor where files
- * are large or cold enough to be waited for; where they are the assets of a page and sit in the page cache,
- * a read is a memcpy and the hop would cost more than it saves, which is why there is no executor by
+ * The pumped path reads on the event loop, where a page which is not in the cache stalls every other
+ * connection that loop carries. An {@link Executor} moves the read off it - see {@link ReadAheadFile} - and
+ * is worth it for files large or cold enough to be waited for. For the assets of a page, which sit in the
+ * page cache, a read is a memcpy and the hop costs more than it saves, which is why there is none by
  * default.
  * <p>
  * Serves {@code GET} and {@code HEAD}, answers {@code 405} to anything else on a path it owns, and answers a
  * file it may not serve exactly as it answers one which is not there.
  * <p>
- * Every file is answered with a {@code Last-Modified} and an {@link EntityTag}, and the conditional headers
- * asked against them are honoured: {@code If-None-Match} - which is looked at first, and which makes an
- * {@code If-Modified-Since} beside it irrelevant - answers {@code 304}, and a single-range {@code Range}
- * answers {@code 206} unless an {@code If-Range} says the peer is holding a different file, in which case it
- * gets this one whole. Every response carries {@code x-content-type-options: nosniff}: the content type of a
- * file is what this server was told to call it, and a browser guessing otherwise turns an upload into
- * whatever the guess was.
+ * Every response carries {@code Last-Modified}, an {@link EntityTag} and {@code x-content-type-options:
+ * nosniff} - the type of a file is what this server was told to call it, and a browser guessing otherwise is
+ * how something uploaded as a picture comes to be run as a script. The conditional headers are honoured:
+ * {@code If-None-Match} is asked first and answers {@code 304}, which makes an {@code If-Modified-Since}
+ * beside it irrelevant, and a single-range {@code Range} answers {@code 206} unless an {@code If-Range} says
+ * the peer is holding a different file, in which case it gets this one whole.
  * <p>
  * A channel which fails ends here: the cause goes to the {@link ChannelErrorHandler} this was given and the
- * connection is closed, which is what releases a response still on its way out - a queued {@link FileRegion},
- * or a body a {@link ChunkedWriteHandler} is still pumping, and the open file in either of them. The event is
- * not passed on, so a handler behind this one is never told about it twice - give both of them the same
- * {@link ChannelErrorHandler} and one failure is reported once, wherever it was caught.
+ * connection is closed, which is what releases a response still on its way out - a queued {@link FileRegion}
+ * or a body {@link ChunkedWriteHandler} is still pumping, and the open file in either. The event is not
+ * passed on, so give this and the handler behind it the same {@link ChannelErrorHandler} and one failure is
+ * reported once, wherever it was caught.
  */
 public class FileServerHandler extends ChannelInboundHandlerAdapter {
     /**

@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest;
@@ -143,28 +126,15 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     }
 
     /**
-     * Sets how long a connection may read and write nothing before it is closed. What it takes back is a
-     * file descriptor: a connection which opened and never asked anything, a keep-alive connection whose
-     * client walked away, and a peer which died without a FIN - the last being the one no amount of correct
-     * client code prevents.
+     * Sets how long a connection may read and write nothing before {@link IdleConnectionHandler} closes it.
+     * What it takes back is a file descriptor from a connection nobody is using - one which opened and never
+     * asked anything, one whose client walked away, a peer which died without a FIN. Both directions count,
+     * so a response still being written keeps its own connection alive however long it takes, and a response
+     * which suspends for longer than this while writing nothing is the case to raise it for.
      *
-     * <p>Both directions count, which is what makes it safe in front of a long response: a chunked response
-     * still being written keeps its own connection alive however long it takes, and only a connection where
-     * <b>neither</b> side has said anything is closed. A transfer counts while it is moving rather than
-     * when it lands, so one large file to one slow peer - a single write which completes at the end - is
-     * not cut off in the middle of itself. A response which suspends for longer than this while writing
-     * nothing is the case to raise it for.
-     *
-     * <p><b>It judges neither of the two slow peers</b>, and cannot: all it knows is that bytes moved. A
-     * client dribbling a header block a byte at a time is reading and writing all the while, and a peer
-     * taking a response a byte every ten seconds moves the outbound buffer every ten seconds - both look
-     * busy from here. They are bounded by the pair which counts what actually arrived,
-     * {@link #withRequestDeadlineMs(int)} and {@link #withResponseDeadlineMs(int)}, both half this default
-     * and both therefore what decides. Keep this above them: set below, it takes their decisions over and
-     * takes them on a worse measurement.
-     *
-     * <p>What is left for this one is the connection nobody is using at all - which is the common case, and
-     * the one nothing else here would ever close.
+     * <p><b>It judges neither of the two slow peers</b>, and cannot: all it knows is that bytes moved. Those
+     * are {@link #withRequestDeadlineMs(int)} and {@link #withResponseDeadlineMs(int)}, both half this
+     * default and both therefore what decides. Keep this above them.
      *
      * @param idleTimeoutMs of silence in both directions, {@link #DEFAULT_IDLE_TIMEOUT_MS} by default, 0 to
      *                      hold a connection which says nothing for as long as the peer likes.
@@ -176,15 +146,10 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     }
 
     /**
-     * Sets how long a request has to arrive once it has begun arriving - the bound an idle timeout cannot be.
-     * A client sending a header block a byte at a time is never idle, so what has to be bounded is the time
-     * the request itself may take, and nothing the peer sends extends it once it is running. nginx calls this
-     * {@code client_header_timeout}, Tomcat {@code connectionTimeout}, Node {@code headersTimeout}.
-     *
-     * <p>Every request of a keep-alive connection is judged, not only the first, and so is a connection which
-     * opens and asks nothing. Between requests nothing is running: a quiet keep-alive connection belongs to
-     * {@link #withIdleTimeoutMs(int)}, and a response being written to
-     * {@link #withResponseDeadlineMs(int)}.
+     * Sets how long a request has to arrive once it has begun arriving - the bound an idle timeout cannot be,
+     * since a client sending a header block a byte at a time is never idle. Nothing the peer sends extends
+     * it, every request of a keep-alive connection is judged rather than only the first, and between
+     * requests nothing is running. See {@link RequestDeadlineHandler}.
      *
      * <p>It covers the request whole, body and all, which is what {@link #withMaxContentLength(int)} makes
      * honest: a server which raises that to take uploads raises this with it.
@@ -200,17 +165,13 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
 
     /**
      * Sets how long one unit of a response - 64K, the size everything here is written in - has to reach the
-     * peer. This is what judges a slow reader, and it judges on what actually arrived rather than on whether
-     * anything moved at all, which is why it, and not the idle timeout, is what decides.
+     * peer. This is what judges a slow reader, on what actually arrived rather than on whether anything
+     * moved, which is why it and not the idle timeout is what decides.
      *
-     * <p><b>Nothing is timed while nothing is owed.</b> The clock starts on a write and stops once every
+     * <p><b>Nothing is timed while nothing is owed</b>: the clock starts on a write and stops once every
      * write has landed, so a response which is merely slow to produce - a chunked one ticking once a minute,
-     * a suspended cursor - is never on it. What is timed is a peer which has been given something and is not
-     * taking it.
-     *
-     * <p>Each write is given one window for every unit of it, so a large response is not judged by the clock
-     * of a small one, and a file renews its window every time another unit of it has reached the peer - which
-     * is how a trickle is caught inside a transfer of any size.
+     * a suspended cursor - is never on it. Each write is given one window per unit of it, and a file renews
+     * its window every unit which reaches the peer. See {@link ResponseDeadlineHandler}.
      *
      * @param responseDeadlineMs a unit of a response has to reach the peer within,
      *                           {@link #DEFAULT_DEADLINE_MS} by default, 0 to wait for a peer as long as it

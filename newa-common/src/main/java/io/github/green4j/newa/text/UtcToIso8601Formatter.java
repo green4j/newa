@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.text;
@@ -29,10 +12,13 @@ import java.util.GregorianCalendar;
 import java.util.TimeZone;
 
 /**
- * <p>The class formats UTC timestamp to ISO 8601 with optional microseconds.
- * <p>Some examples: "2021-04-23T18:25:43.511Z", "2021-04-23T18:25:43.511456Z"
- * <p>The formatter caches previously formatted timestamp to avoid expensive year-month-day related computations.
- * So, a monotonically increasing/decreasing timestamp is the best case for this formatter.
+ * Formats a UTC timestamp as ISO 8601, with optional microseconds:
+ * {@code 2021-04-23T18:25:43.511Z}, {@code 2021-04-23T18:25:43.511456Z}.
+ * <p>
+ * The date of the last timestamp is kept, so only the time of day is recomputed while the day does not
+ * change - timestamps which move in one direction are the cheap case. That cache is also the whole of the
+ * threading rule: <b>one formatter per thread</b>, and the {@link CharSequence} it returns is the buffer it
+ * builds in, valid until the next call. Copy what outlives that.
  */
 public class UtcToIso8601Formatter {
     private static final long HOURS_IN_DAY = 24;
@@ -53,11 +39,9 @@ public class UtcToIso8601Formatter {
     }
 
     /**
-     * Formats time in millis with optional microseconds.
-     *
-     * @param timeMillis  time in millis
-     * @param microsToAdd microseconds to be added at the end of the formatted value. -1 - no micros
-     * @return formatted timestamp
+     * @param timeMillis  to format, in milliseconds since the epoch
+     * @param microsToAdd microseconds to append after the milliseconds, -1 for none
+     * @return the formatted timestamp, valid until the next call on this formatter
      */
     public CharSequence format(final long timeMillis,
                                final int microsToAdd) {

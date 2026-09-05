@@ -1,31 +1,24 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.collections;
 
 import java.util.HashMap;
 
+/**
+ * A {@link HashMap} looked up by any {@link CharSequence} without building a {@link String} to do it: the
+ * key of a lookup is a flyweight over the sequence handed in, so a lookup allocates nothing. A key which is
+ * stored is a {@code String} of its own.
+ *
+ * <p>That flyweight belongs to the map, so <b>one map per thread</b>: two threads looking up at once would
+ * be looking up each other's keys. {@link CharSequenceToObjectMapConcurrent} is the one to share.
+ *
+ * @param <T> the type of the values.
+ */
 public class CharSequenceToObjectMap<T> extends HashMap<String, T> {
     private static final long serialVersionUID = -5687516993124229947L;
 

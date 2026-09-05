@@ -1,31 +1,17 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest.files;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 
@@ -41,27 +27,31 @@ class FilePathsTest {
         return length < 0 ? null : new String(buffer, 0, length, StandardCharsets.UTF_8);
     }
 
-    @Test
-    public void testSlashesAroundTheTailAreDropped() {
-        Assertions.assertEquals("img/logo.png", decode("/img/logo.png"));
-        Assertions.assertEquals("img", decode("/img/"));
-        Assertions.assertEquals("", decode("/"));
-        Assertions.assertEquals("", decode(""));
+    @ParameterizedTest
+    @CsvSource({
+        // the slashes around the tail are not part of the name
+        "/img/logo.png,  img/logo.png",
+        "/img/,          img",
+        "/,              ''",
+        "'',             ''",
+        // and a percent escape is the byte it names
+        "/a%20file.txt,  a file.txt",
+        "/a+b.txt,       a+b.txt" // a plus is a plus in a path, not a space
+    })
+    public void decodesTheTail(final String tail,
+                               final String expected) {
+        Assertions.assertEquals(expected, decode(tail), tail);
     }
 
     @Test
-    public void testPercentEscapesAreDecoded() {
-        Assertions.assertEquals("a file.txt", decode("/a%20file.txt"));
-        Assertions.assertEquals("a+b.txt", decode("/a+b.txt"), "a plus is a plus in a path, not a space");
-        Assertions.assertEquals(CYRILLIC, decode(CYRILLIC_ENCODED),
-                "the bytes went out as UTF-8 and have to come back as UTF-8");
+    public void theBytesWentOutAsUtf8AndComeBackAsUtf8() {
+        Assertions.assertEquals(CYRILLIC, decode(CYRILLIC_ENCODED));
     }
 
-    @Test
-    public void testMalformedEscapesAreRefused() {
-        Assertions.assertNull(decode("/a%2"));
-        Assertions.assertNull(decode("/a%zz.txt"));
-        Assertions.assertNull(decode("/a%"));
+    @ParameterizedTest
+    @ValueSource(strings = {"/a%2", "/a%zz.txt", "/a%"})
+    public void aMalformedEscapeIsRefused(final String tail) {
+        Assertions.assertNull(decode(tail), tail);
     }
 
     @Test
@@ -73,27 +63,32 @@ class FilePathsTest {
         Assertions.assertNull(decode(tail.toString()));
     }
 
-    @Test
-    public void testWhatMayBeResolved() {
-        Assertions.assertTrue(FilePaths.isSafe("img/logo.png"));
-        Assertions.assertTrue(FilePaths.isSafe("a.txt"));
-        Assertions.assertTrue(FilePaths.isSafe("...a"));
-        Assertions.assertTrue(FilePaths.isSafe("a file.txt"));
-        Assertions.assertTrue(FilePaths.isSafe(CYRILLIC));
+    @ParameterizedTest
+    @CsvSource({
+        "img/logo.png,           true",
+        "a.txt,                  true",
+        "...a,                   true",  // dots which are not the dots
+        "a file.txt,             true",
+        "'',                     false",
+        "..,                     false",
+        "../etc/passwd,          false",
+        "img/../../etc/passwd,   false",
+        "img/./logo.png,         false",
+        "img//logo.png,          false",
+        "/etc/passwd,            false",
+        "img\\logo.png,          false"
+    })
+    public void isSafe(final String path,
+                       final boolean expected) {
+        Assertions.assertEquals(expected, FilePaths.isSafe(path), path);
     }
 
     @Test
-    public void testWhatMayNot() {
-        Assertions.assertFalse(FilePaths.isSafe(""));
-        Assertions.assertFalse(FilePaths.isSafe(".."));
-        Assertions.assertFalse(FilePaths.isSafe("../etc/passwd"));
-        Assertions.assertFalse(FilePaths.isSafe("img/../../etc/passwd"));
-        Assertions.assertFalse(FilePaths.isSafe("img/./logo.png"));
-        Assertions.assertFalse(FilePaths.isSafe("img//logo.png"));
-        Assertions.assertFalse(FilePaths.isSafe("/etc/passwd"));
-        Assertions.assertFalse(FilePaths.isSafe("img\\logo.png"));
-        Assertions.assertFalse(FilePaths.isSafe("logo.png\u0000.txt"),
-                "a NUL is where the name ends as far as the OS is concerned");
+    public void aNameNoFileSystemCouldCarryIsRefused() {
+        // a NUL is where the name ends as far as the OS is concerned
+        Assertions.assertFalse(FilePaths.isSafe("logo.png\u0000.txt"));
+        // while a name which is simply not ASCII is a name like any other
+        Assertions.assertTrue(FilePaths.isSafe(CYRILLIC));
     }
 
     @Test

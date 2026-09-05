@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.lang;
@@ -29,11 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * The whole life of one resource: opens it, holds the calling thread until the end is asked for, closes it,
- * and does the same when the JVM is going down. This is the last line of a {@code main}:
- * <pre>{@code
- * new Life().run(() -> RestServer.start(9009, api));
- * }</pre>
- * and the shape of one which can also be ended from the outside:
+ * and does the same when the JVM is going down. The last line of a {@code main}:
  * <pre>{@code
  * final Life life = new Life();
  *
@@ -41,37 +20,31 @@ import java.util.concurrent.TimeUnit;
  *
  * life.run(() -> RestServer.of(apiBuilder.build()).start(9009));
  * }</pre>
- * A {@link Life} is an {@link Ender} from the moment it is constructed, which is what makes the second form
- * work at all: the endpoint has to be registered before the api is built, and the server does not exist
- * until after that, so nothing else is available for the handle to hold.
- * <p>
- * <b>The resource is opened by {@link #run}, not handed to it.</b> That is what leaves no window: there is
- * no moment at which the thing is running and nobody owns it. Handing over an already-running resource
- * would leave the statements between starting it and waiting for it - however few - as a stretch in which
- * an end asked for is an end nobody carries out.
+ * A {@link Life} is an {@link Ender} from the moment it is constructed, which is what makes that form work:
+ * the endpoint is registered before the api is built, and the server does not exist until after that.
  * <p>
  * The contract, in full:
  * <ul>
+ *   <li><b>The resource is opened by {@link #run}, not handed to it</b>, so there is no stretch of caller
+ *       code in which it is running and nobody owns it.</li>
  *   <li>One {@link Life} runs one resource, once. A second {@link #run} is an
  *       {@link IllegalStateException}, whether it comes after the first returned or beside it.</li>
- *   <li>{@link #run} <b>blocks</b> until {@link #end}, and only then closes the resource - on the thread
- *       which called it, never on whichever thread asked for the end. That is deliberate: a
- *       {@code /shutdown} endpoint runs on an event loop, and closing a server from one of its own event
- *       loops makes it wait for a shutdown it is itself holding up.</li>
+ *   <li>{@link #run} <b>blocks</b> until {@link #end}, and closes the resource on the thread which called
+ *       it, never on the one which asked for the end: a {@code /shutdown} endpoint runs on an event loop,
+ *       and closing a server from one of its own loops makes it wait for a shutdown it is holding up.</li>
  *   <li>{@link #end} is safe from any thread, before {@link #run} as well as during it, and is idempotent.
  *       Asked for before {@link #run}, nothing is opened at all; asked for while the resource is being
  *       opened, it is honoured the instant opening returns.</li>
+ *   <li>A resource which can end without being closed says so by being {@link SelfEnding}, and {@link #run}
+ *       registers itself with it - which is what keeps a server that died under us from leaving the
+ *       process up and parked here.</li>
  *   <li>An {@link Observer} hears {@link Observer#onEnding} before {@link Observer#onEnded}, always.</li>
+ *   <li>A JVM shutdown hook is registered for the length of the run and removed afterwards.</li>
  * </ul>
- * Nothing here knows what the resource is - opening and closing it is all that is asked - so a {@link Life}
- * is also the whole of the JVM shutdown hook: it registers one for the length of the run, and removes it
- * afterwards.
- * <p>
- * One thing that hook cannot buy, because no hook can: when the end came from the JVM going down, the
- * process halts as soon as the last hook returns, and it does not wait for {@code main}. The hook here waits
- * for the resource to be closed, so that much is safe - but whatever a {@code main} does <i>after</i>
- * {@link #run} returns is racing the halt and may not run. Put anything that has to happen into the
- * resource's own {@code close()}, which is waited for, rather than after the run.
+ * One thing no hook can buy: the process halts as soon as the last hook returns and does not wait for
+ * {@code main}. The hook here waits for the resource to be closed, but whatever a {@code main} does
+ * <i>after</i> {@link #run} returns is racing that halt. Put what has to happen into the resource's own
+ * {@code close()}, which is waited for.
  */
 public final class Life implements Ender {
     /**
@@ -132,24 +105,22 @@ public final class Life implements Ender {
     }
 
     /**
-     * Several resources as one, for a {@link Life} which has more than one thing to run - two servers on
-     * two ports, say:
+     * Several resources as one, for a {@link Life} with more than one thing to run:
      * <pre>{@code
      * life.run(Life.all(
      *         () -> RestServer.start(9009, adminApi),
      *         () -> RestServer.start(9010, publicApi)));
      * }</pre>
      * They are <b>opened in the order given</b>, and one which fails to open closes those already open
-     * before the failure is passed on. That undoing has to happen here and nowhere else: until an opener
-     * returns, a {@link Life} owns nothing, so a resource opened beside one which then failed is a
-     * resource nothing else would ever close.
+     * before the failure is passed on - which has to happen here, because until an opener returns a
+     * {@link Life} owns nothing and a resource opened beside the failure is one nothing would ever close.
      * <p>
-     * They are <b>closed at once</b> rather than one after another, and the close returns when the last
-     * of them is closed. Resources which do not depend on each other lose nothing by that - two servers
-     * do not, each owning the event loops it shuts down - and it keeps the worst case at the timeouts of
-     * one close instead of the sum of all of them, which is what a JVM shutdown hook has to fit into.
-     * When the order of closing does matter, this is the wrong tool: write an opener which closes them in
-     * the order they need, and let the {@link Life} run that.
+     * They are <b>closed at once</b> rather than one after another, so the worst case is the timeout of one
+     * close instead of the sum of all of them, which is what a JVM shutdown hook has to fit into. When the
+     * order of closing matters, write an opener which closes them in the order they need and run that.
+     * <p>
+     * <b>Any one of them ending by itself ends them all</b>: one which is {@link SelfEnding} is registered
+     * with the {@link Life} running this.
      *
      * @param openers of the resources, in the order they are to be opened. At least one.
      * @return one opener of all of them, for {@link #run}.
@@ -175,8 +146,34 @@ public final class Life implements Ender {
                 throw failed;
             }
 
-            return () -> closeAll(opened, opened.length);
+            return new Opened(opened);
         };
+    }
+
+    /**
+     * What {@link #all} opened, as the one resource a {@link Life} runs - which is why the registering of
+     * an {@link Ender} has to be passed on: the {@link Life} sees this and never the resources themselves.
+     */
+    private static final class Opened implements SelfEnding {
+        private final AutoCloseable[] resources;
+
+        private Opened(final AutoCloseable[] resources) {
+            this.resources = resources;
+        }
+
+        @Override
+        public void whenEnded(final Ender ender) {
+            for (int i = 0; i < resources.length; i++) {
+                if (resources[i] instanceof SelfEnding) {
+                    ((SelfEnding) resources[i]).whenEnded(ender);
+                }
+            }
+        }
+
+        @Override
+        public void close() {
+            closeAll(resources, resources.length);
+        }
     }
 
     /**
@@ -226,6 +223,13 @@ public final class Life implements Ender {
             // owned from the instant it exists: nothing of the caller's runs between opening the resource
             // and this Life having it, which is what leaves no window
             opened = opener.open();
+
+            if (opened instanceof SelfEnding) {
+                // one which can die under us ends this Life itself, rather than leaving the thread below
+                // parked on an end nobody is left to ask for. An end which happened while it was being
+                // opened is not lost by registering only now - it is reported the moment we ask
+                ((SelfEnding) opened).whenEnded(this);
+            }
 
             final boolean endedWhileOpening;
             final String reasonWhileOpening;

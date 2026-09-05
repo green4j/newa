@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.server;
@@ -30,21 +13,19 @@ import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 
 /**
- * Which Netty transport a server runs on: kqueue on macOS, epoll on Linux, and NIO wherever neither is
- * available. What the trip through the kernel costs is most of what a request costs, so this is one of the
- * few things which moves a ceiling at all.
+ * Which Netty transport a server runs on: kqueue on macOS, epoll on Linux, NIO wherever neither is
+ * available.
  * <p>
- * The native transports are found by name rather than by a dependency: this module is built against
- * {@code netty-transport} alone, and adding {@code netty-transport-classes-epoll} or
- * {@code netty-transport-classes-kqueue} to it would put a jar on the path of every user of this library,
- * including the ones who will never bind a socket. So {@link #auto()} looks for what happens to be there and
- * falls back to NIO in silence when it is not - which is also what it does when a native artifact is present
- * but its classifier does not match the machine.
+ * The native ones are found by name rather than by a dependency - this module is built against
+ * {@code netty-transport} alone, so no user of this library carries an epoll or kqueue jar it will never
+ * bind a socket with. {@link #auto()} takes what happens to be on the classpath and falls back to NIO in
+ * silence, which is also what it does when a native artifact is there but its classifier does not match the
+ * machine.
  * <p>
- * The consequence worth knowing: nothing here reports that you meant to run on epoll and did not.
- * {@link #name()} is what a server should print at startup, and {@link #nio()} is the way to ask for the
- * portable one on purpose - in a GraalVM native image, where a class found by name needs reachability
- * metadata, that is the only one guaranteed to resolve.
+ * The consequence worth knowing: nothing reports that you meant to run on epoll and did not. {@link #name()}
+ * is what a server prints at startup, and {@link #nio()} asks for the portable one on purpose - in a GraalVM
+ * native image, where a class found by name needs reachability metadata, that is the only one guaranteed to
+ * resolve.
  */
 public final class Transport {
     private static final String KQUEUE = "kqueue";

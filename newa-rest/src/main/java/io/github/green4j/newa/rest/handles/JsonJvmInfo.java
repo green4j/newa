@@ -1,25 +1,8 @@
 /*
- * MIT License
+ * Copyright (c) 2023-2026 Anatoly Gudkov and others.
  *
- * Copyright (c) 2023-2026 Anatoly Gudkov and others
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the MIT License.
+ * See the LICENSE file in the project root for details.
  */
 
 package io.github.green4j.newa.rest.handles;
@@ -45,6 +28,12 @@ import static io.github.green4j.newa.rest.handles.Util.formatUtcToIso8601;
 import static io.github.green4j.newa.rest.handles.Util.toDuration;
 import static io.github.green4j.newa.rest.handles.Util.toMemorySize;
 
+/**
+ * What this JVM is and how it is doing, in JSON: version, vendor, pid and uptime, the operating system and
+ * its physical memory, the process and system CPU load, heap and non-heap usage, and the collectors. Read
+ * from the platform MX beans on the event loop of the request - an operator's endpoint rather than
+ * something to poll at any rate.
+ */
 public class JsonJvmInfo implements JsonRestHandle {
     private static final MethodHandle CPU_LOAD_GETTER;
     private static final MethodHandle TOTAL_MEMORY_SIZE_GETTER;
