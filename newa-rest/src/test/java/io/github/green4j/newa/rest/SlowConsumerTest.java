@@ -10,6 +10,8 @@ package io.github.green4j.newa.rest;
 import io.github.green4j.newa.rest.files.FileServer;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.server.NettyServer;
+import io.github.green4j.newa.server.NettyServerBuilder;
+import io.netty.channel.ChannelOption;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.io.TempDir;
@@ -35,10 +37,16 @@ import java.nio.file.Path;
  * response, rendered whole and written as one message, which is judged at its size in 64K units; and a file
  * sent from the page cache, whose region renews its window per unit transferred. Each keeps the sizes and
  * the timings it was found to need.
+ * <p>
+ * Both ends have their socket buffers pinned small, and that is what makes the test a test: a kernel whose
+ * send buffer can swallow the whole response completes the write the instant it takes the bytes, and a
+ * response nobody is owed is on no clock at all. Linux autotunes that buffer into the megabytes, so leaving
+ * it to the machine is how this passes at one desk and fails on another.
  */
 class SlowConsumerTest {
     private static final String HOST = "127.0.0.1";
     private static final int TINY_RECEIVE_BUFFER = 4 * 1024;
+    private static final int TINY_SEND_BUFFER = 32 * 1024;
     private static final int TRICKLE_PAUSE_MS = 50;
     private static final int BITE = 64 * 1024;
 
@@ -97,7 +105,7 @@ class SlowConsumerTest {
             server = RestServer.of(builder.build())
                     .withIdleTimeoutMs(0) // so that whatever closes a connection here can only be the deadline
                     .withResponseDeadlineMs(body.deadlineMs)
-                    .start(0);
+                    .start(trickleBootstrap());
             return "/v1/big";
         }
 
@@ -112,8 +120,17 @@ class SlowConsumerTest {
         server = FileServer.of(FileSet.builder().serve("/files", filesRoot).build())
                 .withIdleTimeoutMs(0)
                 .withResponseDeadlineMs(body.deadlineMs)
-                .start(0);
+                .start(trickleBootstrap());
         return "/files/big.bin";
+    }
+
+    /**
+     * @return an ephemeral port whose accepted connections cannot hide a response in the kernel.
+     */
+    private static NettyServerBuilder trickleBootstrap() {
+        return new NettyServerBuilder()
+                .port(0)
+                .childOption(ChannelOption.SO_SNDBUF, TINY_SEND_BUFFER);
     }
 
     private Socket ask(final String path) throws IOException {
@@ -138,14 +155,18 @@ class SlowConsumerTest {
         try (Socket socket = ask(path)) {
             final InputStream in = socket.getInputStream();
 
+            int trickled = 0;
             for (int i = 0; i < body.trickleReads && in.read() >= 0; i++) {
+                trickled++;
                 Thread.sleep(TRICKLE_PAUSE_MS);
             }
 
             // and then as fast as it comes. What the peer had buffered arrives either way - a connection
             // closed under a trickle is noticed after it, not instead of it - so what says whether the
             // response was given up on is where it ends
-            Assertions.assertTrue(drain(in, body.bytes) < body.bytes,
+            final int read = trickled + drain(in, body.bytes - trickled);
+
+            Assertions.assertTrue(read < body.bytes,
                     "a response taken a byte at a time ran to the end");
         }
     }

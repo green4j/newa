@@ -64,7 +64,7 @@ Example for Maven:
 ```xml
 <dependency>
     <groupId>io.github.green4j</groupId>
-    <artifactId>newa-rest</artifactId>
+    <artifactId>newa-all</artifactId>
     <version>${newa.version}</version>
 </dependency>
 ```
