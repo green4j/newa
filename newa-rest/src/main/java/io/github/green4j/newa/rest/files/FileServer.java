@@ -47,7 +47,8 @@ import java.util.concurrent.Executor;
  */
 public final class FileServer extends AbstractHttpServer<FileServer> {
     /**
-     * The whole server in one call, with everything at its default.
+     * The whole server in one call, with everything at its default - which includes the <b>loopback</b>, so
+     * nothing outside this machine can reach it. {@link #start(FileSet, String, int)} opens it up.
      *
      * @param files to serve.
      * @param port to listen on, or 0 to let the OS pick one.
@@ -57,6 +58,23 @@ public final class FileServer extends AbstractHttpServer<FileServer> {
     public static NettyServer start(final FileSet files,
                                     final int port) throws InterruptedException {
         return of(files).start(port);
+    }
+
+    /**
+     * The whole server in one call, on an interface of your own: the address of the network it belongs on,
+     * or {@link NettyServerBuilder#ANY_HOST} for every interface. The two-argument form leaves it on the
+     * loopback.
+     *
+     * @param files to serve.
+     * @param host to bind, or {@link NettyServerBuilder#ANY_HOST} for every interface.
+     * @param port to listen on, or 0 to let the OS pick one.
+     * @return the running server.
+     * @throws InterruptedException if the calling thread is interrupted while binding.
+     */
+    public static NettyServer start(final FileSet files,
+                                    final String host,
+                                    final int port) throws InterruptedException {
+        return of(files).start(host, port);
     }
 
     /**

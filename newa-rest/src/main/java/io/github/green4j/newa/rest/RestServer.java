@@ -44,7 +44,8 @@ import io.netty.handler.codec.http.HttpContentCompressor;
  */
 public final class RestServer extends AbstractHttpServer<RestServer> {
     /**
-     * The whole server in one call, with everything at its default.
+     * The whole server in one call, with everything at its default - which includes the <b>loopback</b>, so
+     * nothing outside this machine can reach it. {@link #start(RestRouter, String, int)} opens it up.
      *
      * @param api to route requests with.
      * @param port to listen on, or 0 to let the OS pick one.
@@ -54,6 +55,23 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
     public static NettyServer start(final RestRouter api,
                                     final int port) throws InterruptedException {
         return of(api).start(port);
+    }
+
+    /**
+     * The whole server in one call, on an interface of your own: the address of the network it belongs on,
+     * or {@link NettyServerBuilder#ANY_HOST} for every interface. The two-argument form leaves it on the
+     * loopback.
+     *
+     * @param api to route requests with.
+     * @param host to bind, or {@link NettyServerBuilder#ANY_HOST} for every interface.
+     * @param port to listen on, or 0 to let the OS pick one.
+     * @return the running server.
+     * @throws InterruptedException if the calling thread is interrupted while binding.
+     */
+    public static NettyServer start(final RestRouter api,
+                                    final String host,
+                                    final int port) throws InterruptedException {
+        return of(api).start(host, port);
     }
 
     /**

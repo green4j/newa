@@ -95,7 +95,8 @@ public final class WsServer {
     public static final int DEFAULT_DEADLINE_MS = 30_000;
 
     /**
-     * The whole server in one call, with everything at its default.
+     * The whole server in one call, with everything at its default - which includes the <b>loopback</b>, so
+     * nothing outside this machine can reach it. {@link #start(WsApi, String, int)} opens it up.
      *
      * @param api to serve, from an {@link AbstractWsApiBuilder}.
      * @param port to listen on, or 0 to let the OS pick one.
@@ -105,6 +106,23 @@ public final class WsServer {
     public static NettyServer start(final WsApi api,
                                     final int port) throws InterruptedException {
         return of(api).start(port);
+    }
+
+    /**
+     * The whole server in one call, on an interface of your own: the address of the network it belongs on,
+     * or {@link NettyServerBuilder#ANY_HOST} for every interface. The two-argument form leaves it on the
+     * loopback.
+     *
+     * @param api to serve, from an {@link AbstractWsApiBuilder}.
+     * @param host to bind, or {@link NettyServerBuilder#ANY_HOST} for every interface.
+     * @param port to listen on, or 0 to let the OS pick one.
+     * @return the running server.
+     * @throws InterruptedException if the calling thread is interrupted while binding.
+     */
+    public static NettyServer start(final WsApi api,
+                                    final String host,
+                                    final int port) throws InterruptedException {
+        return of(api).start(host, port);
     }
 
     /**
@@ -312,12 +330,30 @@ public final class WsServer {
     }
 
     /**
+     * Binds the <b>loopback</b>, which is where {@link NettyServerBuilder#DEFAULT_HOST} leaves a server
+     * nobody opened up. {@link #start(String, int)} is the one which is reachable from anywhere else.
+     *
      * @param port to listen on, or 0 to let the OS pick one.
      * @return the running server, on a bootstrap left at its defaults.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
     public NettyServer start(final int port) throws InterruptedException {
         return start(new NettyServerBuilder().port(port));
+    }
+
+    /**
+     * The same on an interface of your own: the address of the network this server belongs on, or
+     * {@link NettyServerBuilder#ANY_HOST} for every interface. Naming one is how a server becomes reachable
+     * at all - the default is the loopback.
+     *
+     * @param host to bind, or {@link NettyServerBuilder#ANY_HOST} for every interface.
+     * @param port to listen on, or 0 to let the OS pick one.
+     * @return the running server, on a bootstrap left at its defaults.
+     * @throws InterruptedException if the calling thread is interrupted while binding.
+     */
+    public NettyServer start(final String host,
+                             final int port) throws InterruptedException {
+        return start(new NettyServerBuilder().host(host).port(port));
     }
 
     /**

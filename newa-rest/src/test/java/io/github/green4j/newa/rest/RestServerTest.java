@@ -20,9 +20,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest.BodyPublishers;
@@ -35,6 +39,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 
 class RestServerTest {
@@ -100,6 +105,69 @@ class RestServerTest {
 
         Assertions.assertEquals(200, response.statusCode());
         Assertions.assertEquals("\"Hello world!\"", text(response));
+    }
+
+    @Test
+    public void aServerNobodyOpenedUpIsOnTheLoopback() throws Exception {
+        // the security default: nothing outside this machine can reach a server which was not told to be
+        // reachable, whatever Netty's own bind(int) would have done
+        server = RestServer.start(buildApi(), 0);
+
+        final InetSocketAddress bound = (InetSocketAddress) server.channel().localAddress();
+
+        Assertions.assertEquals(NettyServerBuilder.DEFAULT_HOST, bound.getAddress().getHostAddress());
+        Assertions.assertFalse(bound.getAddress().isAnyLocalAddress(),
+                "bound " + bound + ", which is every interface");
+        Assertions.assertEquals(200, get("/v1/hello/world").statusCode());
+    }
+
+    /**
+     * @param form  the shape being asked for, as the case is named.
+     * @param start the one-call form or the builder form, both of which take a host.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("everyFormWhichTakesAHost")
+    public void namingAnInterfaceIsWhatOpensAServerUp(final String form,
+                                                      final StartOnHost start) throws Exception {
+        server = start.on(NettyServerBuilder.ANY_HOST, 0);
+
+        final InetSocketAddress bound = (InetSocketAddress) server.channel().localAddress();
+
+        Assertions.assertTrue(bound.getAddress().isAnyLocalAddress(), form + " bound " + bound);
+        Assertions.assertEquals(200, get("/v1/hello/world").statusCode(), form);
+    }
+
+    private interface StartOnHost {
+        NettyServer on(String host, int port) throws Exception;
+    }
+
+    /**
+     * @return the three ways to name the interface: the whole server in one call, the builder form the
+     *         one-liner folds into, and the bootstrap under both.
+     */
+    private static Stream<Arguments> everyFormWhichTakesAHost() {
+        return Stream.of(
+                Arguments.of("RestServer.start(api, host, port)",
+                        (StartOnHost) (host, port) -> RestServer.start(buildApi(), host, port)),
+                Arguments.of("RestServer.of(api).start(host, port)",
+                        (StartOnHost) (host, port) -> RestServer.of(buildApi()).start(host, port)),
+                Arguments.of("RestServer.of(api).start(bootstrap)",
+                        (StartOnHost) (host, port) -> RestServer.of(buildApi())
+                                .start(new NettyServerBuilder().host(host).port(port))));
+    }
+
+    @Test
+    public void aHostNobodyChoseIsRefused() throws Exception {
+        // whichever of the two a null was read as, the server would listen somewhere nobody asked for -
+        // and one of the two answers is the whole machine
+        // the cast is the compiler's own comment on a null host: without it the call is ambiguous between
+        // this and the one-call form, since a null reads as an api just as readily
+        final IllegalArgumentException refused = Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> RestServer.of(buildApi()).start((String) null, 0));
+
+        Assertions.assertTrue(refused.getMessage().contains(NettyServerBuilder.ANY_HOST),
+                "the message does not say how to ask for every interface: " + refused.getMessage());
     }
 
     @Test

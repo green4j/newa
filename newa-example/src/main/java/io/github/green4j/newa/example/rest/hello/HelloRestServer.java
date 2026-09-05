@@ -81,7 +81,7 @@ public class HelloRestServer {
         life.run(() -> {
             final NettyServer server = RestServer.of(api)
                     .withCompression()
-                    .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
+                    .start(LOCAL_IFC, PORT);   // the loopback is the default; this says it out loud
 
             System.out.printf("Server started and listening on %s. Try:%n", LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -s %s/v1/hello/world%n", LOCAL_SERVER_ADDRESS);

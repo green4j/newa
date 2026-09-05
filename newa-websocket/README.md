@@ -56,8 +56,14 @@ what every session subscribed to - see below. Everything else on the builder is 
 The whole server, with everything at its default, is one call:
 
 ```java
-NettyServer server = WsServer.start(api, 9010);
+NettyServer server = WsServer.start(api, 9010);                // on the loopback
+NettyServer server = WsServer.start(api, "10.0.0.5", 9010);    // on one network
+NettyServer server = WsServer.start(api, ANY_HOST, 9010);      // on every interface
 ```
+
+**A server binds the loopback until it is told otherwise** - the safe default, since a session this end
+never meant to offer is one nobody can open. Naming an address, or `NettyServerBuilder.ANY_HOST` for every
+interface, is what makes it reachable; a null host is refused rather than read as either.
 
 Past that there are **two builders**, and they are about two different things. `WsServer` is what runs
 *above* the socket; `NettyServerBuilder` is the socket itself. What belongs to the api - the path, the ping
@@ -93,7 +99,7 @@ WsServer ws = WsServer.of(api)
 ```java
 NettyServerBuilder bootstrap = new NettyServerBuilder()
         .port(9010)
-        .host("127.0.0.1")                       // every interface by default
+        .host(ANY_HOST)                          // every interface; the loopback by default
         .workerThreads(8)                        // a worker per core by default
         .maxConnections(4096)                    // unlimited by default
         .writeBufferWaterMark(low, high);

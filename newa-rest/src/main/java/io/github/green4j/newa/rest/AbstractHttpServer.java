@@ -320,12 +320,30 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     }
 
     /**
+     * Binds the <b>loopback</b>, which is where {@link NettyServerBuilder#DEFAULT_HOST} leaves a server
+     * nobody opened up. {@link #start(String, int)} is the one which is reachable from anywhere else.
+     *
      * @param port to listen on, or 0 to let the OS pick one.
      * @return the running server, on a bootstrap left at its defaults.
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
     public final NettyServer start(final int port) throws InterruptedException {
         return start(new NettyServerBuilder().port(port));
+    }
+
+    /**
+     * The same on an interface of your own: the address of the network this server belongs on, or
+     * {@link NettyServerBuilder#ANY_HOST} for every interface. Naming one is how a server becomes reachable
+     * at all - the default is the loopback.
+     *
+     * @param host to bind, or {@link NettyServerBuilder#ANY_HOST} for every interface.
+     * @param port to listen on, or 0 to let the OS pick one.
+     * @return the running server, on a bootstrap left at its defaults.
+     * @throws InterruptedException if the calling thread is interrupted while binding.
+     */
+    public final NettyServer start(final String host,
+                                   final int port) throws InterruptedException {
+        return start(new NettyServerBuilder().host(host).port(port));
     }
 
     /**

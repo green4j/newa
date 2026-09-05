@@ -19,9 +19,13 @@ import io.github.green4j.newa.server.NettyServerBuilder;
 
 /**
  * Two REST servers on two ports, run by one {@link Life}: a public api on every interface, and an admin api
- * - the jvm endpoints and {@code /shutdown} - reachable from the loopback only. That is what a second port
- * buys, and the only reason to pay for one: a different interface, a different pool of workers, or a
- * different limit on what a request may be.
+ * - the jvm endpoints and {@code /shutdown} - left where every server starts, on the loopback. That is what
+ * a second port buys, and the only reason to pay for one: a different interface, a different pool of
+ * workers, or a different limit on what a request may be.
+ * <p>
+ * Note which of the two says something about its interface. The loopback is the default, so the admin api
+ * would be isolated whether or not it named one; it is the <b>public</b> server which has to ask, with
+ * {@code host(ANY_HOST)}, to be reachable from anywhere at all.
  * <p>
  * {@link Life#all} is the whole of running a pair. It opens them in the order given, closes both when the
  * end is asked for, and - the part worth having a method for - closes what it already opened if a later one
@@ -66,10 +70,12 @@ public class PairedRestServers {
                 Life.all(
                         () -> RestServer.of(adminApi).start(new NettyServerBuilder()
                                 .port(ADMIN_PORT)
-                                .host(LOCAL_IFC)      // the whole of the isolation: no other interface
+                                .host(LOCAL_IFC)      // the loopback is the default, and this says so
                                 .workerThreads(1)),   // it answers one operator, not the world
                         () -> RestServer.of(publicApi).start(new NettyServerBuilder()
                                 .port(PUBLIC_PORT)
+                                // every interface: the one line which opens a server up
+                                .host(NettyServerBuilder.ANY_HOST)
                                 .workerThreads(Math.max(1, Runtime.getRuntime().availableProcessors() - 1)))
                 ),
                 new Life.Observer() {

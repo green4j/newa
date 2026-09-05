@@ -33,9 +33,10 @@ new Life().run(() -> WsServer.start(api, 9010));     // WebSocket, echoing
 ```
 
 `RestServer`, `FileServer` and `WsServer` assemble the documented pipeline out of the same public handlers,
-on a `NettyServerBuilder` which picks the best transport this machine has and a worker per core. `Life` opens
-the server, parks the main thread until it should stop, closes it, and does the same when the JVM is going
-down or when the server's own listening channel closes under it. Everything is still yours to take over:
+on a `NettyServerBuilder` which picks the best transport this machine has, a worker per core, and the
+loopback until a server is told which interface to be reachable on. `Life` opens the server, parks the main
+thread until it should stop, closes it, and does the same when the JVM is going down or when the server's
+own listening channel closes under it. Everything is still yours to take over:
 `NettyServerBuilder` for the transport, the threads, the channel options and how many connections a server
 will hold at once, and `RestServer.pipeline()` / `FileServer.pipeline()` / `WsServer.pipeline()` - or a
 hand-written pipeline - for what runs above the socket. The module READMEs document both, and `newa-example`

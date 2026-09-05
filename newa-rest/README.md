@@ -39,8 +39,17 @@ new Life().run(() -> RestServer.start(api, 9009));   // serving GET /v1/hello/wo
 The whole server, with everything at its default, is one call:
 
 ```java
-NettyServer server = RestServer.start(api, 9009);
+NettyServer server = RestServer.start(api, 9009);                // on the loopback
+NettyServer server = RestServer.start(api, "10.0.0.5", 9009);    // on one network
+NettyServer server = RestServer.start(api, ANY_HOST, 9009);      // on every interface
 ```
+
+**A server binds the loopback until it is told otherwise**, and that default is about safety rather than
+convenience: a service nobody opened up is one no other machine can reach, so exposing it is a line
+somebody has to write - the address to listen on, or `NettyServerBuilder.ANY_HOST` for every interface,
+which is what Netty's own `bind(int)` would have done from the start. A null host is refused rather than
+read as either: whichever way it was taken, the server would be listening somewhere nobody chose, and one
+of the two answers is the whole machine.
 
 Past that there are **two builders**, and they are about two different things. `RestServer` is what runs
 *above* the socket; `NettyServerBuilder` is the socket itself.
@@ -78,7 +87,7 @@ RestServer rest = RestServer.of(api)
 ```java
 NettyServerBuilder bootstrap = new NettyServerBuilder()
         .port(9009)
-        .host("127.0.0.1")                       // every interface by default
+        .host(ANY_HOST)                          // every interface; the loopback by default
         .workerThreads(8)                        // a worker per core by default
         .writeBufferWaterMark(32 * 1024, 64 * 1024)
         .maxConnections(4096)                    // unlimited by default, see below

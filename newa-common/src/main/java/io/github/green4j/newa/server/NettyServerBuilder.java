@@ -37,12 +37,33 @@ import java.util.function.Consumer;
  * Object)} or {@link #childOption(ChannelOption, Object)} away, and those are applied after the defaults, so
  * setting one of them again overrides it.
  * <p>
+ * <b>The default interface is the loopback</b>, and that one is a security decision rather than a
+ * convenience: a server which nobody opened up is a server no other machine can reach, so exposing one is a
+ * line somebody has to write - {@link #host(String)} with the address to listen on, or with
+ * {@link #ANY_HOST} for every interface.
+ * <p>
  * Two numbers are deliberately left unset, because neither of them is this library's to guess: how many
  * connections the server will hold at once ({@link #maxConnections(int)}), and how deep the kernel's queue of
  * connections waiting to be accepted is ({@link #backlog(int)}). Without the first there is no limit, and
  * without the second the queue is as deep as the operating system says.
  */
 public final class NettyServerBuilder {
+    /**
+     * The loopback, so a server binds nothing another machine can reach until it is told to. Netty's own
+     * {@code bind(int)} means every interface; this one does not, because a default which exposes a service
+     * is a default which exposes the one somebody forgot about.
+     */
+    public static final String DEFAULT_HOST = "127.0.0.1";
+
+    /**
+     * What {@link #host(String)} is given to reach every interface - the word a deployment has to say out
+     * loud, rather than a null or an empty string arriving from a configuration nobody filled in.
+     * <p>
+     * It binds the way Netty's {@code bind(int)} does, so it covers every address of every family this
+     * machine has, which the literal {@code 0.0.0.0} resolved as an address would not.
+     */
+    public static final String ANY_HOST = "0.0.0.0";
+
     /**
      * A worker per core. The framework holds nothing per loop that a server has to pay for twice: routing
      * keeps a matcher per thread, and the counters shared across loops are atomics.
@@ -69,7 +90,7 @@ public final class NettyServerBuilder {
     private final Map<ChannelOption<?>, Object> childOptions = new LinkedHashMap<>();
 
     private int port;
-    private String host;
+    private String host = DEFAULT_HOST;
     private Transport transport = Transport.auto();
     private int bossThreads = DEFAULT_BOSS_THREADS;
     private int workerThreads = DEFAULT_WORKER_THREADS;
@@ -93,14 +114,22 @@ public final class NettyServerBuilder {
     }
 
     /**
-     * The interface to bind. Every interface by default, which is what a server deployed anywhere needs and
-     * what Netty's own {@code bind(int)} means; narrow it to {@code "127.0.0.1"} to keep a server to the
-     * machine it runs on.
+     * The interface to bind, {@link #DEFAULT_HOST} by default - the loopback, which no other machine can
+     * reach. A server which is meant to be reached says so here: the address of the one network it belongs
+     * on, or {@link #ANY_HOST} for every interface.
+     * <p>
+     * A null is refused rather than read as either of those. Whichever of them it was taken to mean, the
+     * server would be listening somewhere nobody chose, and one of the two answers is the whole machine.
      *
-     * @param host to bind, null for every interface.
+     * @param host to bind, or {@link #ANY_HOST} for every interface.
      * @return this builder.
+     * @throws IllegalArgumentException if the host is null.
      */
     public NettyServerBuilder host(final String host) {
+        if (host == null) {
+            throw new IllegalArgumentException("A host is required: " + DEFAULT_HOST + " keeps a server to "
+                    + "this machine, " + ANY_HOST + " opens it to every interface");
+        }
         this.host = host;
         return this;
     }
@@ -274,7 +303,9 @@ public final class NettyServerBuilder {
 
             bootstrap.childHandler(limited(childHandler));
 
-            final Channel channel = (host == null
+            // ANY_HOST goes through bind(port) rather than through an address of that name: the wildcard
+            // Netty binds there covers every family this machine has, where 0.0.0.0 resolved is IPv4 alone
+            final Channel channel = (ANY_HOST.equals(host)
                     ? bootstrap.bind(port)
                     : bootstrap.bind(InetAddress.getByName(host), port))
                     .sync()
@@ -287,7 +318,7 @@ public final class NettyServerBuilder {
         } catch (final Exception failed) {
             shutdown(bossGroup, workerGroup);
             throw new IllegalStateException(
-                    "Could not bind to " + (host == null ? "*" : host) + ":" + port, failed);
+                    "Could not bind to " + host + ":" + port, failed);
         }
     }
 
