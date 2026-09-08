@@ -30,7 +30,10 @@ import java.util.List;
  * handler behind this one serve the same port. One per channel; it holds the session it opened.
  * <p>
  * A fragmented message is handed over piece by piece, with {@code last} saying which piece ends it, and
- * nothing here holds the pieces: the frame limit bounds one frame and not what several of them add up to.
+ * nothing here holds the pieces: one frame is the largest buffer this pipeline holds, which is why the
+ * frame limit is the only size an inbound message is bounded by. What is carried across a fragment
+ * boundary is three bytes of a cut character and nothing else.
+ * <p>
  * A frame of a type this api took no receiver for is answered {@code 1003} and the session ends.
  */
 public class WsApiHandler extends WebSocketServerProtocolHandler {
@@ -79,7 +82,8 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
      * @param wsApi this handler serves.
      * @param channelErrorHandler told about channel failures, or null to say nothing.
      * @param maxFramePayloadLength a single frame may carry; a larger one is answered with close status
-     *                              1009 and the connection goes.
+     *                              1009 and the connection goes. Under a compression handler it is the
+     *                              inflated frame this bounds as well - see {@link WsServer}.
      * @param allowExtensions whether the decoder accepts the reserved bits an extension negotiates.
      */
     public WsApiHandler(final WsApi wsApi,

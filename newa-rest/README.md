@@ -4,7 +4,8 @@ HTTP REST API routing and handlers built on Netty.
 
 ```
 Client --> IdleConnectionHandler --> HttpServerCodec --> HttpObjectAggregator
-           --> RequestDeadlineHandler --> ResponseDeadlineHandler --> DecoderFailureHandler
+           --> SingleHttpExchangeHandler --> RequestDeadlineHandler --> ResponseDeadlineHandler
+           --> DecoderFailureHandler
            --> [CorsHandler] --> [your handlers] --> [HttpContentCompressor] --> RestApiHandler
 ```
 
@@ -69,10 +70,11 @@ RestServer rest = RestServer.of(api)
         // what an answer is, and who hears about it
         .withErrorHandler(new JsonErrorHandler())
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
-        .withObservers(observers)                // see Observing
+        .withObservers(observers)                // per request, see Observing
+        .withConnectionObserver(connections)     // per connection, see Connections
 
         // what a request may be
-        .withMaxContentLength(65536)             // the request body, not its headers and not a response
+        .withMaxContentLength(1024 * 1024)       // the request body, not its headers and not a response
         .withMaxInitialLineLength(4096)          // the request line: the method, the whole uri, the version
         .withMaxHeaderSize(8192)                 // the header block, all of it together
 
@@ -174,6 +176,10 @@ all, in front of the codec. Note that Netty's own `IdleStateHandler` is only hal
 `IdleStateEvent` and closes nothing, so a pipeline with one and no handler for that event holds the
 connection exactly as long as it would have without it.
 
+Nothing is written back when it closes - the timeout is this server's own, and a connection nobody is using
+has nobody waiting to read an explanation. A `ConnectionObserver` is told all the same, which is the only
+trace the close leaves; see [Connections](#connections).
+
 ### Deadlines
 
 A connection has two ends, and a peer can be slow at either. Both are bounded by the same idea - *what has
@@ -213,10 +219,19 @@ The handlers are `RequestDeadlineHandler` and `ResponseDeadlineHandler`, both pu
 placement is not a preference - the request half tells bytes which became a message from bytes which did not,
 and in front of a decoder every read looks the same.
 
+Both close silently, and both report to a `ConnectionObserver` first. For the request half that is the only
+report there can be: no request arrived, so no observer of requests has anything to be told about.
+
 ### Cross-origin requests
 
-Nothing is answered cross-origin without `withCors`. It takes Netty's own `CorsConfig` and puts a
-`CorsHandler` in the pipeline, which does the whole protocol - the preflight, the `Access-Control-` headers,
+Without `withCors` a cross-origin request is still served - the server neither knows nor cares which page
+sent it - and the side effects of a simple `GET` or `POST` have happened by the time the response is written.
+What is missing is the `Access-Control-` headers on it, so the browser refuses to let the page read an answer
+it already holds. The request which never arrives is the preflighted one: the browser asks with `OPTIONS`
+first, gets an answer without those headers, and does not send the real request at all.
+
+`withCors` is what makes the answer readable. It takes Netty's own `CorsConfig` and puts a `CorsHandler` in
+the pipeline, which does the whole protocol - the preflight, the `Access-Control-` headers,
 `allowCredentials()`, `shortCircuit()`:
 
 ```java
@@ -433,8 +448,9 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
 48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
 
 - **The request body** - `HttpObjectAggregator` caps it and nothing else does; a body past the cap is
-  answered `413` and the connection closed. The request line and the header block are the codec's own limits,
-  4096 and 8192 bytes, and each has its own knob - past them the answer is `414` or `431`:
+  answered `413` and the connection closed. A REST server caps it at 1 MB, a file server at 64 KB, since a
+  file server is sent `GET`s with nothing in them. The request line and the header block are the codec's own
+  limits, 4096 and 8192 bytes, and each has its own knob - past them the answer is `414` or `431`:
 
   ```java
   RestServer.of(api).withMaxContentLength(2 * 1024 * 1024)             // largest request
@@ -443,17 +459,28 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
   pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the body, by hand
   ```
 
-- **`N` is the connection count** - one request in flight per keep-alive connection - and capping it is
-  yours, in the initializer (which is one reason to write the pipeline out rather than take
-  `RestServer.pipeline()`):
+  An inbound limit bounds the largest buffer held at once. This server aggregates, so that buffer is the
+  whole request; a WebSocket server holds a frame, so
+  [its number is a frame](../newa-websocket/README.md#frame-and-handshake-limits).
 
-  ```java
-  if (open.incrementAndGet() > 46) { ch.close(); return; }            // AtomicInteger open
-  ch.closeFuture().addListener(f -> open.decrementAndGet());
-  ```
+  **A request body is never inflated** - `withCompression()` is outbound only. An `HttpContentDecompressor`
+  added through `withHandler` lands behind the aggregator, so `maxContentLength` would then bound the
+  compressed body alone: give the decompressor a maximum allocation and count it in the budget.
 
-- **Chunked responses** are not covered by `N`, so cap the cursors - a request past the cap is answered `503`
-  before its cursor is opened:
+- **`N` is the connection count**, because every server built by `RestServer` or `FileServer` holds a
+  connection to one unfinished response. HTTP/1.1 permits a client to send the next request without waiting
+  for the answer to the previous one, and that is served to a depth of one: reads are paused until the final
+  response content is written, and the one request the codec had already decoded from the same network read
+  is kept and replayed after it, in order. A further request on top of that one closes the connection, which
+  is what a pipelining client has to be ready for anyway. So a connection is charged two requests and one
+  response, not one of each - which is what the estimates below count. The handler is
+  `SingleHttpExchangeHandler`, public and in `newa-common` like the deadline handlers above it: a pipeline
+  written out from `HttpServerCodec` upwards adds one itself, directly behind the aggregator. `WsServer` has
+  one too, so an api sharing a port with a websocket is held to the same invariant - see
+  [newa-websocket](../newa-websocket/README.md#starting-a-server).
+
+- **Chunked responses** remain bounded globally too: cap the cursors so application work cannot open more
+  producers than intended - a request past the cap is answered `503` before its cursor is opened:
 
   ```java
   ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
@@ -468,6 +495,65 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
   ```
 
 Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
+
+### A shared process budget
+
+`ServerMemoryBudget` turns the same estimate into dynamic admission when REST and file servers share a JVM:
+
+```java
+ServerMemoryBudget memory = ServerMemoryBudget.builder()
+        .heapPercentage(70)
+        .directMemoryPercentage(70)
+        .build();
+
+RestServer.of(api)
+        .withMaxContentLength(2 * 1024 * 1024)
+        .withMemoryBudget(memory, 8 * 1024 * 1024)
+        .start(new NettyServerBuilder()
+                .port(9009)
+                .workerThreads(4)
+                .minConnections(10)                       // optional guaranteed floor
+                .maxConnections(100));                    // optional fairness ceiling
+
+FileServer.of(files)
+        .withMaxContentLength(8 * 1024)
+        .withChunkSize(64 * 1024)
+        .withMemoryBudget(memory)
+        .start(new NettyServerBuilder()
+                .port(9010)
+                .workerThreads(2)
+                .maxConnections(500));
+```
+
+The percentages are applied to `Runtime.maxMemory()` and Netty's effective direct-memory maximum once, when
+the budget is built. Every active connection is covered by both estimates atomically; whichever capacity
+would be crossed refuses admission. Closing returns both reservations, so capacity which is not guaranteed
+to a server follows traffic between them.
+
+For REST the estimate includes the configured request maximum twice - the request being answered and the
+one the exchange gate may be holding behind it - and the larger of the ordinary response estimate passed
+with the budget or the chunked response backlog. The response estimate does not cap a
+handler's output - it states the largest ordinary response buffer the admission assumption is based on,
+including the result of custom output transformations. For files the pumped path is budgeted as the
+effective write watermark plus two chunks, whether this pipeline currently uses zero-copy or not: a file is
+as long as it is, so `withChunkSize` and the watermark are what bound a file server rather than any
+response size. The
+estimator adds the source and a conservative encoded-size bound when built-in compression is enabled.
+Staging introduced by custom handlers still belongs in `withAdditionalMemoryEstimate`.
+`withAdditionalMemoryEstimate` adds observer, handler and application-owned memory which neither server can
+derive.
+
+`minConnections` and `maxConnections` are both optional (`0` leaves that bound unset). A minimum reserves
+`minConnections × estimate` when the server registers, guaranteeing that many admissions but making the
+unused reservation unavailable to the other servers; registration fails if the floor does not fit the
+capacity remaining at that moment. A maximum remains an independent fairness ceiling. Admissions above the
+floor share whatever capacity remains.
+
+Current totals are available from `memory.snapshot()`, and current per-server figures from
+`NettyServer.memoryRegistrationSnapshot()`. The optional budget observer reports lifecycle, admission,
+release and reasoned refusal events for logs and metrics. Each event carries the server's
+`ServerMemoryBudget.Registration`; connection-limit refusals use `CONNECTION_LIMIT`. The budget deliberately
+retains no historical counters.
 
 ## Large responses
 
@@ -734,8 +820,9 @@ Every error is reported exactly once, by the stage which knows most about it. Co
 | a chunked response stalled or was abandoned | `onCursorClosed(..., Outcome)` |
 | the `HttpErrorHandler` itself threw | `ChannelErrorHandler`, and the connection goes: the response cannot be written |
 | the channel failed | `ChannelErrorHandler` |
-| the body was larger than `maxContentLength` | answered `413` by Netty's aggregator, ahead of any of this |
-| the request line or the headers were past their limits | answered `414` / `431` by `DecoderFailureHandler` and the connection closed, ahead of any of this |
+| the body was larger than `maxContentLength` | answered `413` in front of the api, and `onRequestRefused(status, cause)` |
+| the request line or the headers were past their limits | answered `414` / `431` in front of the api and the connection closed, and `onRequestRefused(status, cause)` |
+| the connection was closed by a rule of this server's own - idle, a deadline, the connection limit | `ConnectionObserver`, see [Connections](#connections) |
 
 `onRequestNotRouted` and `onResponseFailed` are both on `HttpObserver`, so a plain observer sees the
 failures of the API and of the file server alike. For a request which reached an endpoint it also falls
@@ -793,9 +880,17 @@ chunked:        onRequestReceived -> onHandlingStarted -> onCursorOpened -> onCh
 refused (503):  onRequestReceived -> onHandlingStarted -> onCursorRefused -> onResponseFailed
                                                        -> onHandlingFinished -> onRequestCompleted
 not routed:     onRequestReceived -> onRequestNotRouted -> onRequestCompleted (404 | 405)
+refused:        onRequestReceived -> onRequestRefused   -> onRequestCompleted (413 | 414 | 431 | 400)
 a file:         onRequestReceived -> onRequestCompleted
 a file failed:  onRequestReceived -> onResponseFailed  -> onRequestCompleted
 ```
+
+A refused request is the one bracket opened and closed from outside the api: the limits answer in front of
+every handler, so nothing inside was ever asked. It is still one `onRequestCompleted`, which is what keeps a
+count of requests a count of all of them. Two things are its own: `durationNanos` is zero, nothing at the
+front of the pipeline knowing when the request began arriving, and for a `414` or a `431` the request handed
+to `onRequestReceived` is the substitute the decoder built - `GET /bad-request`, told apart by
+`request.decoderResult().isFailure()` - rather than what the peer sent.
 
 A file fails in two shapes and both are that one line. Before anything was written it is answered as an
 error, and the status of the two events is the same. After the head has gone there is nothing left to answer
@@ -826,6 +921,32 @@ is one of unboundedly many.
 
 `newObserver()` may return a shared instance instead, and then telling the requests apart is yours. Return
 null and the request is not observed at all - not even the clock is read for it.
+
+### Connections
+
+An `HttpObserver` sees requests, and some of what a server does is not one. A connection refused by
+`maxConnections`, one taken back by the idle timeout, a request which ran out of its deadline before it
+arrived, a peer which stopped reading its response, a client pipelining deeper than one request: no request
+carries any of them, and none is answered on the wire, so a peer cannot tell them from a server which died -
+and neither can this side without being told.
+
+```java
+RestServer.of(api)
+        .withObservers(observers)                        // per request
+        .withConnectionObserver(new StdErrConnections()) // per connection, one for the whole server
+        .start(bootstrap);
+```
+
+One instance serves the whole server - it is called from every event loop at once, so it must not block -
+and every call happens before the close, while the channel still knows its peer. Handed to the bootstrap's
+connection limit as well, so one observer covers all five. Under a `ServerMemoryBudget` the refusal is the
+budget's to report instead, as `RefusalReason.CONNECTION_LIMIT`.
+
+A pipeline assembled by hand passes it to the handlers itself: `ConnectionLimitHandler`,
+`IdleConnectionHandler`, `RequestDeadlineHandler`, `ResponseDeadlineHandler` and `SingleHttpExchangeHandler`
+each take one. So do the two which refuse requests - `ObservedHttpObjectAggregator` and
+`DecoderFailureHandler` - but those take a `RefusedRequestObserver`, and `new RefusedRequestReporter(factory)`
+is what turns the same factory `withObservers` was given into one. See `rest.pipeline.PipelineRestServer`.
 
 ## Serving files
 

@@ -9,17 +9,22 @@ package io.github.green4j.newa.websocket;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
+import io.github.green4j.newa.server.ConnectionObserver;
 import io.github.green4j.newa.server.DecoderFailureHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.server.ObservedHttpObjectAggregator;
+import io.github.green4j.newa.server.RefusedRequestObserver;
 import io.github.green4j.newa.server.RequestDeadlineHandler;
 import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.github.green4j.newa.server.ServerMemoryBudget;
+import io.github.green4j.newa.server.ServerMemoryEstimate;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.HttpDecoderConfig;
-import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpObjectDecoder;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.extensions.compression.WebSocketServerCompressionHandler;
@@ -40,10 +45,10 @@ import java.util.function.Supplier;
  * <p>
  * It assembles this pipeline, out of the same public handlers a pipeline written by hand is made of:
  * <pre>
- * Client --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt; [RequestDeadlineHandler] --&gt;
- *            [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt; OriginCheckHandler --&gt;
- *            [WebSocketServerCompressionHandler] --&gt; WsApiHandler --&gt; [your handlers] --&gt;
- *            HandshakeOnlyHandler
+ * Client --&gt; HttpServerCodec --&gt; ObservedHttpObjectAggregator --&gt; SingleHttpExchangeHandler --&gt;
+ *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt;
+ *            OriginCheckHandler --&gt; [WebSocketServerCompressionHandler] --&gt; WsApiHandler --&gt;
+ *            [your handlers] --&gt; HandshakeOnlyHandler
  * </pre>
  * Nothing is hidden and nothing is one-way: {@link #pipeline()} hands the same initializer to a
  * {@link io.netty.bootstrap.ServerBootstrap} of your own, and everything below the pipeline - the transport,
@@ -146,9 +151,16 @@ public final class WsServer {
     private int requestDeadlineMs = DEFAULT_DEADLINE_MS;
     private int responseDeadlineMs = DEFAULT_DEADLINE_MS;
     private boolean compression;
+    private int maxOutboundFramePayloadLengthEstimate;
+    private ServerMemoryBudget memoryBudget;
+    private long additionalHeapBytesPerConnection;
+    private long additionalDirectMemoryBytesPerConnection;
+    private ConnectionObserver connectionObserver;
+    private RefusedRequestObserver refusedRequests;
 
     private WsServer(final WsApi api) {
         this.api = api;
+        this.refusedRequests = refusedRequestsTo(channelErrorHandler);
     }
 
     /**
@@ -163,11 +175,28 @@ public final class WsServer {
     }
 
     /**
-     * @param channelErrorHandler told about channel failures, null to say nothing.
+     * @param channelErrorHandler told about channel failures, null to say nothing. A handshake refused by
+     *                            one of the limits in front of this server - a {@code 414}, {@code 431} or
+     *                            {@code 413} - is reported here too: there is no session to report it to.
      * @return this builder.
      */
     public WsServer withChannelErrorHandler(final ChannelErrorHandler channelErrorHandler) {
         this.channelErrorHandler = channelErrorHandler;
+        this.refusedRequests = refusedRequestsTo(channelErrorHandler);
+        return this;
+    }
+
+    /**
+     * Sets where the connections this server closes by a rule of its own are reported - a request or
+     * response deadline, the connection limit of the bootstrap it is started on, a client pipelining behind
+     * a handshake. None of them reaches a {@link WsApiObserver}: they happen before a session exists, or
+     * they are the connection rather than the session.
+     *
+     * @param observer told about them, null to say nothing. One serves the whole server and must not block.
+     * @return this builder.
+     */
+    public WsServer withConnectionObserver(final ConnectionObserver observer) {
+        this.connectionObserver = observer;
         return this;
     }
 
@@ -216,6 +245,15 @@ public final class WsServer {
     }
 
     /**
+     * Sets how large a frame may be - the largest buffer this pipeline holds at once, and therefore the
+     * number a memory budget turns on. Under {@link #withCompression()} it bounds a frame twice: as it
+     * arrives, by the decoder, and again as Netty's maximum decompression allocation, so a compression
+     * ratio is not a way past it.
+     *
+     * <p>It bounds one frame and not a message of several: nothing in this server assembles the fragments
+     * of a message - each is handed to a receiver as it comes and released - so one frame is all that is
+     * ever held. An api which does assemble a message is what bounds that assembly.
+     *
      * @param bytes a single frame may carry, {@link #DEFAULT_MAX_FRAME_PAYLOAD_LENGTH} by default. This is
      *              the one which bounds a session: {@link #withMaxContentLength(int)} bounds the handshake
      *              request and nothing after it. A frame past this is answered with close status 1009 and
@@ -223,7 +261,60 @@ public final class WsServer {
      * @return this builder.
      */
     public WsServer withMaxFramePayloadLength(final int bytes) {
+        if (bytes < 1) {
+            throw new IllegalArgumentException(
+                    "A maximum frame payload length must be positive: " + bytes);
+        }
         this.maxFramePayloadLength = bytes;
+        return this;
+    }
+
+    /**
+     * Dynamically shares the configured percentages of this process's heap and direct-memory maxima with
+     * every other server using the same budget. The outbound frame size is an estimate rather than a frame
+     * limit: an application remains free to send more, and admission remains based on the value given here.
+     *
+     * @param budget shared process-wide admission budget
+     * @param maxOutboundFramePayloadLengthEstimate estimated largest application frame before compression
+     * @return this builder
+     */
+    public WsServer withMemoryBudget(
+            final ServerMemoryBudget budget,
+            final int maxOutboundFramePayloadLengthEstimate) {
+        if (budget == null) {
+            throw new IllegalArgumentException("A server memory budget is required");
+        }
+        if (maxOutboundFramePayloadLengthEstimate < 1) {
+            throw new IllegalArgumentException(
+                    "A maximum outbound frame payload estimate must be positive: "
+                            + maxOutboundFramePayloadLengthEstimate);
+        }
+        this.memoryBudget = budget;
+        this.maxOutboundFramePayloadLengthEstimate = maxOutboundFramePayloadLengthEstimate;
+        return this;
+    }
+
+    /**
+     * Adds application-owned session, observer, receiver or custom-handler state which the built-in
+     * estimate cannot see.
+     *
+     * @param heapBytesPerConnection additional estimated heap bytes per connection
+     * @param directMemoryBytesPerConnection additional estimated direct-memory bytes per connection
+     * @return this builder
+     */
+    public WsServer withAdditionalMemoryEstimate(final long heapBytesPerConnection,
+                                                  final long directMemoryBytesPerConnection) {
+        if (heapBytesPerConnection < 0) {
+            throw new IllegalArgumentException(
+                    "heapBytesPerConnection must not be negative: " + heapBytesPerConnection);
+        }
+        if (directMemoryBytesPerConnection < 0) {
+            throw new IllegalArgumentException(
+                    "directMemoryBytesPerConnection must not be negative: "
+                            + directMemoryBytesPerConnection);
+        }
+        this.additionalHeapBytesPerConnection = heapBytesPerConnection;
+        this.additionalDirectMemoryBytesPerConnection = directMemoryBytesPerConnection;
         return this;
     }
 
@@ -306,6 +397,11 @@ public final class WsServer {
      * <p>A {@link HandshakeOnlyHandler} stands behind whatever is added here, so a request neither the
      * handshake nor any of these took closes the connection rather than holding it open unanswered.
      *
+     * <p>Whatever is added here is served one exchange at a time: a
+     * {@link io.github.green4j.newa.server.SingleHttpExchangeHandler} in front of the api handler holds this
+     * connection to one unfinished response, so a request pipelined behind one being answered waits for it
+     * and a third closes the connection.
+     *
      * @param handler asked for one handler per channel, because a handler is rarely {@code @Sharable}.
      * @return this builder.
      */
@@ -366,33 +462,72 @@ public final class WsServer {
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
     public NettyServer start(final NettyServerBuilder bootstrap) throws InterruptedException {
+        if (memoryBudget != null) {
+            final ServerMemoryEstimate estimate = WsServerMemoryEstimator.builder()
+                    .handshake(maxContentLength, maxInitialLineLength, maxHeaderSize)
+                    .inboundFrame(maxFramePayloadLength)
+                    .outboundFrame(maxOutboundFramePayloadLengthEstimate)
+                    .transport(bootstrap.writeBufferWaterMarkHigh(), compression)
+                    .additional(
+                            additionalHeapBytesPerConnection,
+                            additionalDirectMemoryBytesPerConnection
+                    )
+                    .estimate();
+            bootstrap.memoryBudget("websocket", memoryBudget, estimate);
+        }
+        if (connectionObserver != null) {
+            // the connection limit lives on the bootstrap, in front of the pipeline assembled here
+            bootstrap.connectionObserver(connectionObserver);
+        }
         return bootstrap.childHandler(pipeline()).start();
+    }
+
+    /**
+     * @param handler channel failures are reported to, or null.
+     * @return where a refused handshake goes - the same handler, there being no session to report it to
+     */
+    private static RefusedRequestObserver refusedRequestsTo(final ChannelErrorHandler handler) {
+        return handler == null
+                ? null
+                : (ctx, request, status, cause) -> handler.onError(ctx.channel(), cause);
     }
 
     private void initPipeline(final ChannelPipeline pipeline) {
         pipeline.addLast(new HttpServerCodec(new HttpDecoderConfig()
                 .setMaxInitialLineLength(maxInitialLineLength)
                 .setMaxHeaderSize(maxHeaderSize)));
-        pipeline.addLast(new HttpObjectAggregator(maxContentLength, true));
+        // Netty's aggregator answers an oversized handshake body from here, in front of everything which
+        // would have reported it - which is why it is this one, which says so
+        pipeline.addLast(new ObservedHttpObjectAggregator(maxContentLength, true, refusedRequests));
+        // directly behind the aggregator, so that what it counts is whole requests and whole responses, and
+        // in front of the handshake handler: a handshake arriving while a response of a handler behind it is
+        // still being written is held here, where reaching the handshaker it would take the aggregator out
+        // of this pipeline and swap the response encoder in the middle of that response. A handshake this
+        // does let through retires it - see SingleHttpExchangeHandler
+        pipeline.addLast(new SingleHttpExchangeHandler(connectionObserver));
 
         if (requestDeadlineMs > 0) {
             // behind the aggregator, which is the only place the rule can be expressed: what it tells apart
             // is bytes which became a message from bytes which did not, and in front of a decoder every read
             // looks the same. It stays for the life of the connection - after the handshake the messages it
             // waits for are frames
-            pipeline.addLast(new RequestDeadlineHandler(requestDeadlineMs));
+            pipeline.addLast(new RequestDeadlineHandler(requestDeadlineMs, connectionObserver));
         }
 
         if (responseDeadlineMs > 0) {
             // in front of everything which writes, and behind the codec, so what it counts is the payload
             // rather than the frame put around it
-            pipeline.addLast(new ResponseDeadlineHandler(responseDeadlineMs));
+            pipeline.addLast(new ResponseDeadlineHandler(
+                    responseDeadlineMs,
+                    ResponseDeadlineHandler.DEFAULT_UNIT,
+                    connectionObserver
+            ));
         }
 
         // in front of everything which answers, so that nothing behind it has to ask whether the request it
         // was given is a real one: what the codec refused arrives as a substitute request, which no
         // handshake handler would recognise and no handler here would answer honestly
-        pipeline.addLast(new DecoderFailureHandler());
+        pipeline.addLast(new DecoderFailureHandler(refusedRequests));
 
         // ahead of everything which would do work for this request: a refused handshake should cost no more
         // than it has already cost to read. Always there - there is no policy which checks nothing, only
@@ -400,7 +535,9 @@ public final class WsServer {
         pipeline.addLast(new OriginCheckHandler(api.websocketPath(), originPolicy, channelErrorHandler));
 
         if (compression) {
-            pipeline.addLast(new WebSocketServerCompressionHandler(0));
+            // the same number the decoder above bounds the arriving frame by: one frame is one buffer,
+            // whether it was inflated on the way or not, and a ratio is not a way past it
+            pipeline.addLast(new WebSocketServerCompressionHandler(maxFramePayloadLength));
         }
 
         // the frame size is the pipeline's to say, and so is whether extensions may be negotiated - which

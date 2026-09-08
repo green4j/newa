@@ -68,21 +68,25 @@ public class PairedRestServers {
 
         life.run(
                 Life.all(
-                        () -> RestServer.of(adminApi).start(new NettyServerBuilder()
-                                .port(ADMIN_PORT)
-                                .host(LOCAL_IFC)      // the loopback is the default, and this says so
-                                .workerThreads(1)),   // it answers one operator, not the world
-                        () -> RestServer.of(publicApi).start(new NettyServerBuilder()
-                                .port(PUBLIC_PORT)
-                                // every interface: the one line which opens a server up
-                                .host(NettyServerBuilder.ANY_HOST)
-                                .workerThreads(Math.max(1, Runtime.getRuntime().availableProcessors() - 1)))
+                        () -> RestServer.of(adminApi)
+                                .start(new NettyServerBuilder()
+                                        .port(ADMIN_PORT)
+                                        .host(LOCAL_IFC)      // the loopback is the default, and this says so
+                                        .workerThreads(1)),   // it answers one operator, not the world
+                        () -> RestServer.of(publicApi)
+                                .start(new NettyServerBuilder()
+                                        .port(PUBLIC_PORT)
+                                        // every interface: the one line which opens a server up
+                                        .host(NettyServerBuilder.ANY_HOST)
+                                        .workerThreads(Math.max(
+                                                1,
+                                                Runtime.getRuntime().availableProcessors() - 1)))
                 ),
                 new Life.Observer() {
                     @Override
                     public void onRunning() {
                         // both are open and this thread is about to park, which is the moment to say so
-                        printUsage(adminApi, publicApi);
+                        printUsage(publicApi, adminApi);
                     }
 
                     @Override

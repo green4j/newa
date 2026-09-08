@@ -3,10 +3,10 @@
 WebSocket sessions, broadcasting and subscription channels built on Netty.
 
 ```
-Client --> HttpServerCodec --> HttpObjectAggregator --> RequestDeadlineHandler
-           --> ResponseDeadlineHandler --> DecoderFailureHandler --> OriginCheckHandler
-           --> [WebSocketServerCompressionHandler] --> WsApiHandler --> [your handlers]
-           --> HandshakeOnlyHandler
+Client --> HttpServerCodec --> HttpObjectAggregator --> SingleHttpExchangeHandler
+           --> RequestDeadlineHandler --> ResponseDeadlineHandler --> DecoderFailureHandler
+           --> OriginCheckHandler --> [WebSocketServerCompressionHandler] --> WsApiHandler
+           --> [your handlers] --> HandshakeOnlyHandler
 ```
 
 `WsServer` assembles that pipeline and `NettyServerBuilder` the bootstrap under it, so a working server is one
@@ -80,14 +80,15 @@ WsServer ws = WsServer.of(api)
         .withCompression()                       // permessage-deflate, off by default
         .withHandler(() -> new RestApiHandler(restApi, new JsonErrorHandler(), errors))
 
-        // who hears about a channel which failed
+        // who hears about a channel which failed, and about a connection nothing answers
         .withChannelErrorHandler(new StdErrChannelErrorHandler())
+        .withConnectionObserver(connections)     // see Connections
 
         // what a handshake and a frame may be
         .withMaxContentLength(65536)             // the handshake request body, not what a session sends
         .withMaxInitialLineLength(4096)          // its request line: the method, the whole uri, the version
         .withMaxHeaderSize(8192)                 // its header block - where a browser's cookies travel
-        .withMaxFramePayloadLength(65536)        // and this is what a session sends, see the limits below
+        .withMaxFramePayloadLength(65536)        // one frame, inflated or not, see the limits below
 
         // when a connection is given up on
         .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
@@ -122,6 +123,14 @@ there serves the REST api on the websocket's port. Pass the handler, never `Rest
 and the aggregator are already in front of it, and a second pair would decode everything twice. Behind
 whatever you add stands a `HandshakeOnlyHandler`, which closes a connection nothing answered - see
 [Errors](#errors).
+
+What that api serves is served one exchange at a time, by the same `SingleHttpExchangeHandler` the REST
+servers have and for the same reasons - see [Memory budget](../newa-rest/README.md#memory-budget). It sits in
+front of the handshake here as well as in front of your handlers, which is the placement the one-port
+composition needs: a handshake sent without waiting for the answer to a request in front of it would
+otherwise reach the handshaker mid-response, and an upgrade takes the aggregator out of the pipeline and
+swaps the response encoder. Held instead, it is answered after that response and the connection upgrades as
+any other would. A `101` retires the handler: what follows one is frames, and a frame is nobody's exchange.
 
 `NettyServer` is what you get back, an `AutoCloseable` and nothing more: `port()`, `channel()`, `close()`,
 and `workerGroup()` - which is where a periodic broadcast belongs, on the loops the sessions it writes to
@@ -206,18 +215,33 @@ the connection itself, which the session's `readTimeoutMs` would otherwise be th
 Both handlers are `newa-common`'s and public: a pipeline assembled by hand adds them itself, behind the
 aggregator.
 
+Both close silently, and both report to a `ConnectionObserver` first. That matters most for a connection
+which runs out of time before its handshake: there is no session, so `onSessionClosed` is not owed and never
+comes. See [Connections](#connections).
+
 ### Frame and handshake limits
 
-**Frames come in at 64 KB** unless `withMaxFramePayloadLength` says otherwise. The `HttpObjectAggregator` in
-front bounds the *body* of the handshake request and nothing after it, so `withMaxContentLength` is not this
-and this is not it. A frame past the limit is answered with close status `1009` and the connection goes.
+**Frames come in at 64 KB** unless `withMaxFramePayloadLength` says otherwise, and under
+`withCompression()` that number bounds a frame twice - as it arrives and again once inflated - so a
+compression ratio is not a way past it. A frame past it is answered with close status `1009` and the
+connection goes. The `HttpObjectAggregator` in front bounds the *body* of the handshake request and nothing
+after it, so `withMaxContentLength` is not this and this is not it.
+
+**One frame is all a message is bounded by**, because one frame is all that is held: a message of several
+frames is handed over fragment by fragment and nothing here collects them, so a long message costs what a
+short one does. An api which collects them itself is what bounds that - the size it accepts is its own
+policy, and `last` is what it counts with. This is why an inbound limit means a frame here and a whole
+request in [newa-rest](../newa-rest/README.md#memory-budget): each bounds the largest buffer its server
+holds at once, and an HTTP server holds the message.
+
 Neither number is what an outbound frame is measured against.
 
 **The handshake's headers are the codec's**, 4096 bytes of request line and 8192 of header block by default -
 `withMaxInitialLineLength` and `withMaxHeaderSize`. That block is where a browser puts the cookies of this
 origin, and it is the only HTTP request a session ever makes, so it is the number a handshake reaches first.
 Past either, the answer is `414` or `431` and the connection closes - the decoder has stopped reading it
-anyway.
+anyway. There is no session to report that to, so it goes to the `ChannelErrorHandler` with the rest of what
+this server turns down before a session exists.
 
 ### Beside a REST server
 
@@ -487,6 +511,8 @@ and each failure is reported once, by the stage which knows what it was:
 | a frame did not go out | `onWriteFailed(cause)`, and `onWriteBackPressure` before it when the channel was full | the session ends, unless `withSkipOnBackPressure()` |
 | the channel itself failed | `ChannelErrorHandler` | the connection goes |
 | an HTTP request nothing took - not the handshake path, nothing mounted behind | `ChannelErrorHandler`, a `NotAHandshakeException` carrying the method and the uri | the connection goes, unanswered |
+| a handshake past `maxInitialLineLength`, `maxHeaderSize` or `maxContentLength` | `ChannelErrorHandler`, with the cause the decoder recorded | `414`, `431` or `413`, and the connection goes |
+| the connection was closed by a rule of this server's own - a deadline, the connection limit | `ConnectionObserver`, see [Connections](#connections) | nothing at all |
 | the client sent something you do not serve | wherever your receiver reports it | whatever your protocol says |
 | you ended the session yourself | nowhere - it is not a failure | `closeWith(status)` says which close it is, `close()` says nothing |
 
@@ -593,6 +619,28 @@ Both halves are optional. `withObservers` may be left out entirely, and `newObse
 a session that is not worth observing - then not even the clock is read for it. A shared instance is allowed
 too, and then telling the sessions apart is yours.
 
+### Connections
+
+A `WsApiObserver` sees sessions, and some of what this server does happens where there is none. A connection
+refused by `maxConnections`, a handshake which ran out of its deadline before it arrived, a peer which
+stopped taking its response, a client pipelining behind a handshake: no session carries any of them, and none
+is answered on the wire.
+
+```java
+WsServer.of(api)
+        .withChannelErrorHandler(errors)                 // per channel failure
+        .withConnectionObserver(new StdErrConnections()) // per connection, one for the whole server
+        .start(bootstrap);
+```
+
+One instance serves the whole server - it is called from every event loop at once, so it must not block -
+and every call happens before the close, while the channel still knows its peer. Handed to the bootstrap's
+connection limit as well. Under a `ServerMemoryBudget` the refusal is the budget's to report instead, as
+`RefusalReason.CONNECTION_LIMIT`.
+
+A pipeline assembled by hand passes it to `ConnectionLimitHandler`, `IdleConnectionHandler`,
+`RequestDeadlineHandler`, `ResponseDeadlineHandler` and `SingleHttpExchangeHandler` itself.
+
 ## Memory budget
 
 **Size the watermark in time, not in bytes.** How much room a number buys depends entirely on what a session
@@ -667,6 +715,53 @@ to cover heap plus direct memory plus metaspace, code cache and thread stacks:
 
 Refusing a connection is the cheap failure.
 
+### Sharing the process budget
+
+The byte calculation above can be applied dynamically across WebSocket, REST and file servers instead of
+being divided into fixed connection counts:
+
+```java
+ServerMemoryBudget memory = ServerMemoryBudget.builder()
+        .heapPercentage(70)
+        .directMemoryPercentage(70)
+        .build();
+
+WsServer.of(api)
+        .withMaxContentLength(8 * 1024)                    // handshake body
+        .withMaxFramePayloadLength(16 * 1024)              // inbound frame
+        .withAdditionalMemoryEstimate(2 * 1024, 0)         // application session state
+        .withMemoryBudget(memory, 4 * 1024)                 // outbound frame estimate
+        .start(new NettyServerBuilder()
+                .port(9010)
+                .writeBufferWaterMark(20 * 1024, 40 * 1024)
+                .minConnections(100)                         // optional guaranteed floor
+                .maxConnections(10_000));                    // optional fairness ceiling
+```
+
+The outbound value is an estimate, not a frame limit. The WebSocket cost includes the handshake or
+established-session path, the decoded inbound text and the heap-backed outbound payload which may coexist,
+the effective write watermark and the outbound frame which may cross it. `withCompression()` needs no
+further number: the frame limit bounds the inflated frame too, so the estimate charges the arriving frame
+and the buffer it inflates into, plus the outbound source and a conservative encoded-size bound.
+
+A message costs one frame however many frames it is - nothing here collects the fragments. Collecting them
+yourself, staging added by custom handlers, retained frames and session state belong in
+`withAdditionalMemoryEstimate`.
+
+Pass the same `ServerMemoryBudget` object to every server in the process. A WebSocket connection then competes
+by its estimated bytes rather than counting as the same-sized slot as a REST or file connection. Its local
+`minConnections` and `maxConnections` are both optional (`0` leaves that bound unset). A minimum reserves
+`minConnections × estimate` at registration, guaranteeing those admissions at the cost of keeping unused
+capacity from the other servers; registration fails if the floor does not fit the capacity remaining at
+that moment. A maximum remains an independent fairness ceiling, and connections above the floor share the
+remaining pool.
+
+`memory.snapshot()` reports current process totals and `NettyServer.memoryRegistrationSnapshot()` reports
+this server's current state. The optional budget observer emits lifecycle, admission, release and reasoned
+refusal events; each event carries the server's `ServerMemoryBudget.Registration`, and a local ceiling is
+reported as `CONNECTION_LIMIT`. The observer is the place to maintain logs and metrics because the budget
+stores no historical counters.
+
 ## Tuning for high load
 
 **Watermarks are the real knob.** `WRITE_BUFFER_WATER_MARK` decides how much a session may fall behind
@@ -725,6 +820,12 @@ pair is described under [Sessions](#sessions).
 **Compression is per connection.** `permessage-deflate` holds a compressor context per session and runs on
 every frame - the price of a fan-out grows with the number of subscribers, not with the number of distinct
 messages. Bandwidth against CPU and memory: measure before enabling it for a broadcast-heavy server.
+
+**A compressed frame is bounded twice by the same number.** A limit on the frame as it arrives would bound
+nothing under `permessage-deflate`, so `withMaxFramePayloadLength` is given to the compression handler as
+Netty's maximum decompression allocation too - Netty's own default there is zero, meaning unlimited. Raising
+it raises what a peer may send uncompressed as well, and the estimate charges both. It is one frame's limit,
+and one frame is all that is held - see [Frame and handshake limits](#frame-and-handshake-limits).
 
 **Extensions follow `withCompression()`.** With it, `permessage-deflate` is negotiated and the decoder
 accepts the reserved bits it sets; without it, nothing in the pipeline could inflate a frame and the

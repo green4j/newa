@@ -7,6 +7,7 @@
 
 package io.github.green4j.newa.example.ws.errors;
 
+import io.github.green4j.newa.example.StdOutConnectionObserver;
 import io.github.green4j.newa.example.ws.StdOutWsApiObserver;
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
@@ -39,6 +40,10 @@ import io.github.green4j.newa.websocket.WsServer;
  * {@code WsApiObserver.onReceiveFailed} is given the cause as it was thrown, and is the only place it is ever
  * told. It does not reach the peer, and it does not reach the {@code ChannelErrorHandler} - a failure of the
  * application is not a failure of the channel. Watch {@code BOOM} below land in the one and not the other.
+ * <p>
+ * A third thing is neither: a connection this server closes by a rule of its own - a handshake which began
+ * and never finished, a peer which stopped reading. There is no session, so no {@code onSessionClosed}, and
+ * nothing is written back. {@link StdOutConnectionObserver} is the only place they are told.
  * <p>
  * The handshake itself is an ordinary HTTP request until the {@code 101}, so a request which is not it - a
  * handshake at a path this server does not serve, or plain {@code curl} - is answered by whatever is mounted
@@ -95,7 +100,7 @@ public class ErrorsWsServer {
 
         // the channel itself failing, which is neither of the two errors above. BOOM never reaches this
         final ChannelErrorHandler channelErrors =
-                (channel, cause) -> System.out.printf("   channel failed: %s [%s]%n", cause, channel);
+                (channel, cause) -> System.out.printf("   Channel failed: %s [%s]%n", cause, channel);
 
         // the HTTP half of the port, and this object belongs to the RestApiHandler: there is nowhere on a
         // WsApi to put one, because a websocket has nothing for it to render
@@ -104,6 +109,10 @@ public class ErrorsWsServer {
         new Life().run(() -> {
             final NettyServer server = WsServer.of(api)
                     .withChannelErrorHandler(channelErrors)
+                    // the third axis: a connection closed before a session exists. No status, no frame,
+                    // and no onSessionClosed - there was no session
+                    .withConnectionObserver(new StdOutConnectionObserver())
+                    .withRequestDeadlineMs(10_000) // short enough to watch a handshake run out of time
                     // behind the handshake handler: whatever was not the websocket path carries on to here
                     .withHandler(() -> new RestApiHandler(healthApi(), httpErrors, channelErrors))
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
@@ -119,6 +128,8 @@ public class ErrorsWsServer {
                     LOCAL_IFC, PORT);
             System.out.printf("  curl -sD- http://%s:%d/v1/health   -> the HTTP half of the same port%n",
                     LOCAL_IFC, PORT);
+            System.out.printf("  nc %s %d                    -> begin a handshake and stop: closed "
+                    + "after 10s, and the connection observer is the only one told%n", LOCAL_IFC, PORT);
 
             return server;
         });

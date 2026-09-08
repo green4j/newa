@@ -111,11 +111,11 @@ class NettyServerTest {
                 ended.countDown();
             });
 
-            Assertions.assertEquals(1, ended.getCount(), "reported an end before anything ended");
+            Assertions.assertEquals(1, ended.getCount(), "Reported an end before anything ended");
 
             server.channel().close(); // as losing the bound port under it would look
 
-            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "the end went unheard");
+            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "The end went unheard");
             Assertions.assertEquals("Port " + server.port() + " closed", cause.get());
         }
     }
@@ -129,7 +129,7 @@ class NettyServerTest {
 
             server.whenEnded(reason -> ended.countDown());
 
-            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "the end went unheard");
+            Assertions.assertTrue(ended.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS), "The end went unheard");
         }
     }
 
@@ -167,6 +167,51 @@ class NettyServerTest {
             server.workerGroup().schedule(fired::countDown, 1, TimeUnit.MILLISECONDS);
             Assertions.assertTrue(fired.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
         }
+    }
+
+    @Test
+    public void closingFromAnOwnEventLoopWaitsForNothing() throws Exception {
+        final CountDownLatch closed = new CountDownLatch(1);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final long[] elapsedNanos = new long[1];
+
+        final NettyServer server = new NettyServerBuilder()
+                .host(HOST)
+                .port(0)
+                .workerThreads(1)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(final SocketChannel ch) {
+                        ch.pipeline().addLast(new Echo());
+                    }
+                })
+                .start();
+
+        // a worker loop is where an Ender which closed its own server would be standing: the wait it would
+        // have asked for can never be satisfied, so it must not be made
+        server.workerGroup().execute(() -> {
+            final long started = System.nanoTime();
+            try {
+                server.close();
+            } catch (final Throwable thrown) {
+                failure.set(thrown);
+            } finally {
+                elapsedNanos[0] = System.nanoTime() - started;
+                closed.countDown();
+            }
+        });
+
+        Assertions.assertTrue(closed.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+        Assertions.assertNull(failure.get());
+        Assertions.assertTrue(
+                elapsedNanos[0] < TimeUnit.SECONDS.toNanos(1),
+                "close() from an own event loop took " + elapsedNanos[0] + "ns"
+        );
+
+        // and it still closed: the port is gone, whether or not the groups have finished stopping
+        Assertions.assertTrue(server.workerGroup().isShuttingDown());
+        final int port = server.port();
+        Assertions.assertThrows(IOException.class, () -> roundTrip(port, 1));
     }
 
     @Test

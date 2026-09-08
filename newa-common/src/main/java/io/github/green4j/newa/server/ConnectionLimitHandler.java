@@ -38,7 +38,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code newa-rest} refuses a request it has read with a {@code 503} of its own.
  * <p>
  * The cost of saying nothing is that a refusal looks, on the client's side, like a server which died.
- * {@link #refused()} is the other side of that: overload is a number this server can read about itself.
+ * {@link #refused()} is the other side of that: overload is a number this server can read about itself, and
+ * a {@link ConnectionObserver} is the same thing said as it happens.
  */
 @ChannelHandler.Sharable
 public class ConnectionLimitHandler extends ChannelInboundHandlerAdapter {
@@ -46,16 +47,28 @@ public class ConnectionLimitHandler extends ChannelInboundHandlerAdapter {
     private final AtomicLong refused = new AtomicLong();
 
     private final int maxConnections;
+    private final ConnectionObserver observer;
 
     /**
      * @param maxConnections this server will hold at once, above which one is closed as it arrives.
      */
     public ConnectionLimitHandler(final int maxConnections) {
+        this(maxConnections, null);
+    }
+
+    /**
+     * @param maxConnections this server will hold at once, above which one is closed as it arrives.
+     * @param observer told about each refusal, or null to say nothing. Shared by every channel, as this
+     *                 handler is.
+     */
+    public ConnectionLimitHandler(final int maxConnections,
+                                  final ConnectionObserver observer) {
         if (maxConnections < 1) {
             throw new IllegalArgumentException("A server which may hold no connection would serve nothing: "
                     + maxConnections);
         }
         this.maxConnections = maxConnections;
+        this.observer = observer;
     }
 
     /**
@@ -87,6 +100,7 @@ public class ConnectionLimitHandler extends ChannelInboundHandlerAdapter {
         if (connections.incrementAndGet() > maxConnections) {
             connections.decrementAndGet();
             refused.incrementAndGet();
+            Observed.by(observer, told -> told.onConnectionRefused(ctx.channel()));
             ctx.close();
             return; // nothing behind this is told about a connection which is already going
         }

@@ -8,6 +8,7 @@
 
 package io.github.green4j.newa.example.rest.errors;
 
+import io.github.green4j.newa.example.StdOutConnectionObserver;
 import io.github.green4j.newa.example.rest.StdOutRestApiObserver;
 import io.github.green4j.newa.lang.Charset;
 import io.github.green4j.newa.lang.Life;
@@ -38,6 +39,12 @@ import java.nio.charset.StandardCharsets;
  * {@code onResponseFailed} is where the exception which caused a {@code 500} is to be found: the page says
  * only the status, which is the point. Ask for {@code /v1/boom} and watch the two halves land in different
  * places.
+ * <p>
+ * There is a third audience: {@link StdOutConnectionObserver} gets the connections this server closes on its
+ * own - an idle one taken back, a request which never finished arriving, a peer which stopped reading. They
+ * belong to no request and are answered with nothing, so without it a client sees a closed socket and the
+ * server sees nothing at all. Send an oversized header block and watch a {@code 431} the api never saw be
+ * reported like any other request; then connect and say nothing, and watch the connection be taken back.
  * <p>
  * The same {@link HttpErrorHandler} serves a file handler put in front of the api with
  * {@code withHandler(() -> new FileServerHandler(files, errors, ...))}, and a {@code FileServer} of its own:
@@ -216,6 +223,11 @@ public class ErrorsRestServer {
                     // message, its stack trace and every cause
                     // .withErrorHandler(JsonErrorHandler.disclosingInternals())
                     .withObservers(StdOutRestApiObserver.factory())
+                    // the third audience: a connection closed by this server's own settings, which no
+                    // request ever hears about because there is no request
+                    .withConnectionObserver(new StdOutConnectionObserver())
+                    .withIdleTimeoutMs(15_000) // short enough to watch a connection be taken back
+                    .withMaxHeaderSize(1024)   // small enough to reach with one header
                     .start(new NettyServerBuilder().port(PORT).host(LOCAL_IFC));
 
             System.out.printf("Server started and listening on %s. Try:%n", LOCAL_SERVER_ADDRESS);
@@ -228,6 +240,12 @@ public class ErrorsRestServer {
             System.out.printf("  curl -i -X POST %s/v1/boom   -> 405%n", LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -i %s/v1/boom           -> 500, and the cause is printed here%n",
                     LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -i -H \"X-Big: $(head -c 2000 /dev/zero | tr '\\\\0' a)\" "
+                    + "%s/v1/stock/B-2%n", LOCAL_SERVER_ADDRESS);
+            System.out.println("                              -> 431, refused in front of the api and "
+                    + "reported all the same");
+            System.out.printf("  nc %s %d                     -> say nothing for 15s and watch the "
+                    + "connection be taken back%n", LOCAL_IFC, PORT);
 
             return server;
         });

@@ -85,8 +85,23 @@ final class RawWebSocket implements AutoCloseable {
     void sendFrame(final int opcode,
                    final boolean fin,
                    final byte[] payload) throws IOException {
+        sendFrame(opcode, fin, false, payload);
+    }
+
+    /**
+     * @param opcode of the frame - {@link #TEXT}, {@link #BINARY} or {@link #CONTINUATION}.
+     * @param fin whether the message ends with this frame.
+     * @param rsv1 whether the reserved bit is set, which under a negotiated permessage-deflate is what says
+     *             the payload is deflated rather than the bytes themselves.
+     * @param payload to send as one masked frame, as a client must.
+     * @throws IOException if the socket does.
+     */
+    void sendFrame(final int opcode,
+                   final boolean fin,
+                   final boolean rsv1,
+                   final byte[] payload) throws IOException {
         final ByteArrayOutputStream frame = new ByteArrayOutputStream();
-        frame.write((fin ? 0x80 : 0x00) | opcode);
+        frame.write((fin ? 0x80 : 0x00) | (rsv1 ? 0x40 : 0x00) | opcode);
 
         final int length = payload.length;
         if (length < 126) {

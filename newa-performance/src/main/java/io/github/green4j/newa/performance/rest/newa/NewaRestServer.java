@@ -16,6 +16,7 @@ import io.github.green4j.newa.rest.JsonErrorHandler;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestApiHandler;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -85,6 +86,10 @@ public final class NewaRestServer implements RestServer {
                     protected void initChannel(final Channel ch) {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(MAX_REQUEST_BYTES, true));
+                        // what RestServer puts here: one unfinished response per connection. Written out
+                        // because this pipeline is what the benchmark measures, and it has to be the
+                        // pipeline the library ships
+                        ch.pipeline().addLast(new SingleHttpExchangeHandler());
                         ch.pipeline().addLast(
                                 new RestApiHandler(
                                         api,

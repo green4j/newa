@@ -37,8 +37,10 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * That is also why the timeout is halved and the first expiry is let go: Netty delivers the first idle event
  * whatever the outbound buffer is doing and suppresses the ones after it only once it has a reading to
- * compare against, so the first expiry takes that reading and the second decides. The close is silent - the
- * timeout is the caller's own, so its expiry is not news.
+ * compare against, so the first expiry takes that reading and the second decides.
+ * <p>
+ * Nothing is written back - the timeout is the caller's own, so its expiry is not news to the peer. A
+ * {@link ConnectionObserver} is told all the same: it is the only trace the close leaves.
  * <p>
  * It belongs at the head of the pipeline, in front of any codec: what it measures is traffic, not messages,
  * and a decoder still waiting for the rest of one has nothing to hand on.
@@ -49,13 +51,25 @@ import java.util.concurrent.TimeUnit;
  * them - set below, it decides instead, and on a worse measurement than the one it overrode.
  */
 public class IdleConnectionHandler extends IdleStateHandler {
+    private final ConnectionObserver observer;
+
     /**
      * @param idleTimeoutMs of silence in both directions, after which the connection is closed.
      */
     public IdleConnectionHandler(final long idleTimeoutMs) {
+        this(idleTimeoutMs, null);
+    }
+
+    /**
+     * @param idleTimeoutMs of silence in both directions, after which the connection is closed.
+     * @param observer told before each close, or null to say nothing.
+     */
+    public IdleConnectionHandler(final long idleTimeoutMs,
+                                 final ConnectionObserver observer) {
         super(true, 0L, 0L, Math.max(1L, idleTimeoutMs / 2L), TimeUnit.MILLISECONDS); // true: watch the
         // outbound buffer make progress, rather than wait for a write to complete before calling the
         // connection used. Half, because it takes two expiries to use that - see channelIdle
+        this.observer = observer;
     }
 
     @Override
@@ -67,6 +81,7 @@ public class IdleConnectionHandler extends IdleStateHandler {
             // without having looked
             return;
         }
+        Observed.by(observer, told -> told.onIdleTimeout(ctx.channel()));
         ctx.close();
     }
 }

@@ -17,6 +17,7 @@ import io.github.green4j.newa.rest.JsonErrorHandler;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestApiHandler;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.github.green4j.newa.websocket.ClientSession;
 import io.github.green4j.newa.websocket.Receiver;
 import io.github.green4j.newa.websocket.WsApi;
@@ -148,6 +149,10 @@ public final class NewaWsServer implements WsServer {
                     protected void initChannel(final io.netty.channel.Channel ch) {
                         ch.pipeline().addLast(new HttpServerCodec());
                         ch.pipeline().addLast(new HttpObjectAggregator(MAX_REQUEST_BYTES, true));
+                        // what WsServer puts here: one unfinished response per connection, in front of the
+                        // handshake handler. Written out because this pipeline is what the benchmark
+                        // measures, and it has to be the pipeline the library ships
+                        ch.pipeline().addLast(new SingleHttpExchangeHandler());
                         ch.pipeline().addLast(new WsApiHandler(api, NewaWsServer::onError));
                         // whatever was not the websocket path carries on to here: the handshake handler
                         // forwards a request whose uri it does not recognise, and the api handler only

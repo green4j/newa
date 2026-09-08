@@ -42,10 +42,13 @@ import java.util.concurrent.TimeUnit;
  * one - a server which raises {@code maxContentLength} to take uploads raises this with it.
  * <p>
  * A connection which runs out of time is closed without a word rather than answered {@code 408}: the request
- * never arrived, so there is nothing to answer, and nothing here knows how to render an error anyway.
+ * never arrived, so there is nothing to answer, and nothing here knows how to render an error anyway. A
+ * {@link ConnectionObserver} is told before the close: the request reached no handler, so nothing else can
+ * report it.
  */
 public class RequestDeadlineHandler extends ChannelInboundHandlerAdapter {
     private final long deadlineMs;
+    private final ConnectionObserver observer;
 
     private ScheduledFuture<?> expiry;
     private boolean messageInBurst;
@@ -55,11 +58,22 @@ public class RequestDeadlineHandler extends ChannelInboundHandlerAdapter {
      *                   first burst of bytes which did not complete one.
      */
     public RequestDeadlineHandler(final long deadlineMs) {
+        this(deadlineMs, null);
+    }
+
+    /**
+     * @param deadlineMs a request has to arrive within, counted from the connection opening or from the
+     *                   first burst of bytes which did not complete one.
+     * @param observer told before each close, or null to say nothing.
+     */
+    public RequestDeadlineHandler(final long deadlineMs,
+                                  final ConnectionObserver observer) {
         if (deadlineMs < 1) {
             throw new IllegalArgumentException("A deadline which has already passed would close every "
                     + "connection as it arrives: " + deadlineMs);
         }
         this.deadlineMs = deadlineMs;
+        this.observer = observer;
     }
 
     @Override
@@ -113,10 +127,15 @@ public class RequestDeadlineHandler extends ChannelInboundHandlerAdapter {
             return; // already running, and a deadline which is re-armed by what the peer does is a timeout
         }
         expiry = ctx.executor().schedule(
-                (Runnable) ctx::close, // ctx::close fits Callable too, and the two overloads are ambiguous
+                () -> expired(ctx),
                 deadlineMs,
                 TimeUnit.MILLISECONDS
         );
+    }
+
+    private void expired(final ChannelHandlerContext ctx) {
+        Observed.by(observer, told -> told.onRequestDeadlineExpired(ctx.channel()));
+        ctx.close();
     }
 
     private void cancel() {

@@ -8,6 +8,7 @@
 
 package io.github.green4j.newa.server;
 
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -18,6 +19,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 class ConnectionLimitHandlerTest {
     private static final String HOST = "127.0.0.1";
@@ -69,8 +72,8 @@ class ConnectionLimitHandlerTest {
         final EmbeddedChannel refused = connect(limit);
 
         Assertions.assertTrue(kept.isOpen());
-        Assertions.assertFalse(refused.isOpen(), "a connection past the limit was kept");
-        Assertions.assertEquals(1, limit.connections(), "the refused one took a slot with it");
+        Assertions.assertFalse(refused.isOpen(), "A connection past the limit was kept");
+        Assertions.assertEquals(1, limit.connections(), "The refused one took a slot with it");
         Assertions.assertEquals(1, limit.refused());
 
         kept.finishAndReleaseAll();
@@ -89,9 +92,9 @@ class ConnectionLimitHandlerTest {
         final EmbeddedChannel first = new EmbeddedChannel(limit, kept);
         final EmbeddedChannel refused = new EmbeddedChannel(limit, refusedAnnounced);
 
-        Assertions.assertTrue(kept.active, "the connection within the limit was not announced");
+        Assertions.assertTrue(kept.active, "The connection within the limit was not announced");
         Assertions.assertFalse(refusedAnnounced.active,
-                "the handlers behind the limit saw a refused connection");
+                "The handlers behind the limit saw a refused connection");
 
         first.finishAndReleaseAll();
         refused.finishAndReleaseAll();
@@ -107,7 +110,7 @@ class ConnectionLimitHandlerTest {
         Assertions.assertEquals(0, limit.connections());
 
         final EmbeddedChannel second = connect(limit);
-        Assertions.assertTrue(second.isOpen(), "the slot the first one gave back was not reused");
+        Assertions.assertTrue(second.isOpen(), "The slot the first one gave back was not reused");
 
         second.finishAndReleaseAll();
     }
@@ -153,12 +156,12 @@ class ConnectionLimitHandlerTest {
             final Socket first = new Socket(HOST, server.port());
             try {
                 Assertions.assertEquals('x', echo(first),
-                        "the connection which was within the limit was not served");
+                        "The connection which was within the limit was not served");
 
                 try (Socket second = new Socket(HOST, server.port())) {
                     second.setSoTimeout(10_000);
                     Assertions.assertEquals(-1, second.getInputStream().read(),
-                            "a connection past the limit was held rather than closed");
+                            "A connection past the limit was held rather than closed");
                 }
             } finally {
                 first.close();
@@ -166,7 +169,38 @@ class ConnectionLimitHandlerTest {
 
             // the server is not full any more, and the next peer to arrive is served
             try (Socket third = waitingForASlot(server.port())) {
-                Assertions.assertEquals('x', echo(third), "the slot which was given back was not reused");
+                Assertions.assertEquals('x', echo(third), "The slot which was given back was not reused");
+            }
+        }
+    }
+
+    @Test
+    public void andReportsWhatItRefusedToTheObserverTheBuilderWasGiven() throws Exception {
+        // without a memory budget this is the only account of a refusal there is: nothing is written back,
+        // so on the peer's side a full server and a dead one look the same
+        final CountDownLatch refused = new CountDownLatch(1);
+
+        try (NettyServer server = new NettyServerBuilder()
+                .port(0)
+                .host(HOST)
+                .maxConnections(1)
+                .connectionObserver(new ConnectionObserver() {
+                    @Override
+                    public void onConnectionRefused(final Channel channel) {
+                        refused.countDown();
+                    }
+                })
+                .pipeline(pipeline -> pipeline.addLast(new ChannelInboundHandlerAdapter()))
+                .start()) {
+
+            try (Socket first = new Socket(HOST, server.port());
+                    Socket second = new Socket(HOST, server.port())) {
+                second.setSoTimeout(10_000);
+                Assertions.assertEquals(-1, second.getInputStream().read(),
+                        "A connection past the limit was held rather than closed");
+                Assertions.assertTrue(refused.await(10, TimeUnit.SECONDS),
+                        "The refusal was never reported");
+                Assertions.assertTrue(first.isConnected());
             }
         }
     }

@@ -373,6 +373,7 @@ configure(websocketProject) {
 }
 
 configure(allProject) {
+    apply plugin: 'checkstyle'
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
     apply plugin: 'com.github.johnrengelman.shadow'
@@ -381,6 +382,106 @@ configure(allProject) {
         api commonProject
         api restProject
         api websocketProject
+
+        testImplementation "org.junit.jupiter:junit-jupiter:${jupiterVersion}"
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+        checkstyle "com.puppycrawl.tools:checkstyle:${checkstyleVersion}"
+    }
+
+    checkstyle {
+        toolVersion = "${checkstyleVersion}"
+    }
+
+    test {
+        useJUnitPlatform()
+
+        // the only tests which see all three servers at once, so they get the same net the modules do
+        systemProperty 'io.netty.leakDetection.level', 'paranoid'
+        systemProperty 'io.netty.leakDetection.targetRecords', '32'
+    }
+
+    // What the unit tests cannot say: that a budget handed a percentage of a real ceiling refuses
+    // connections instead of letting the JVM die. These run the servers in a memory-capped container and
+    // flood them from here, so they need a Docker daemon and are never part of 'build'. Testcontainers is
+    // Java 17 bytecode while the module itself is released on Java 11, so the source set exists only on a
+    // JDK which can compile against it - the same conditional newa-performance gets in settings.gradle.
+    if (JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_17)) {
+        sourceSets {
+            intTest
+        }
+
+        configurations {
+            intTestImplementation.extendsFrom testImplementation
+            intTestRuntimeOnly.extendsFrom testRuntimeOnly
+        }
+
+        dependencies {
+            intTestImplementation commonProject
+            intTestImplementation restProject
+            intTestImplementation websocketProject
+            intTestImplementation "org.testcontainers:testcontainers:${testcontainersVersion}"
+            // testcontainers speaks through slf4j; without a binding its container output is invisible
+            intTestRuntimeOnly "org.slf4j:slf4j-simple:${slf4jSimpleVersion}"
+        }
+
+        compileIntTestJava {
+            options.release = 17
+            options.encoding = newaSourceEncoding
+        }
+
+        // The harness the container runs. newa-all's shadowJar carries the three modules but deliberately
+        // not Netty, so the container's classpath is this jar next to the module's own runtime classpath.
+        tasks.register('harnessJar', Jar) {
+            archiveClassifier = 'harness'
+            from sourceSets.intTest.output
+            include 'io/github/green4j/newa/budget/harness/**'
+        }
+
+        tasks.register('harnessLibs', Sync) {
+            into layout.buildDirectory.dir('harness/lib')
+            from configurations.runtimeClasspath
+            from tasks.named('harnessJar')
+        }
+
+        tasks.register('intTest', Test) {
+            group = 'verification'
+            description = 'Runs the memory budget integration tests. Needs a Docker daemon.'
+
+            dependsOn 'harnessLibs'
+
+            useJUnitPlatform {
+                // The control test kills its container on purpose. It is what gives the others their
+                // meaning, and it is slow and load-sensitive, so it is asked for rather than assumed.
+                if (!project.hasProperty('includeControl')) {
+                    excludeTags 'control'
+                }
+            }
+
+            testClassesDirs = sourceSets.intTest.output.classesDirs
+            classpath = sourceSets.intTest.runtimeClasspath
+
+            systemProperty 'newa.harness.lib',
+                    layout.buildDirectory.dir('harness/lib').get().asFile.absolutePath
+            systemProperty 'newa.soak.duration', project.findProperty('soak') ?: '60s'
+
+            testLogging {
+                events 'skipped', 'failed'
+                showStandardStreams = true
+                exceptionFormat = 'full'
+            }
+
+            // Colima has no /var/run/docker.sock, so testcontainers cannot find the daemon on its own.
+            // A no-op wherever DOCKER_HOST is already set or the socket is absent.
+            def colimaSocket = file("${System.getProperty('user.home')}/.colima/default/docker.sock")
+            if (!System.getenv('DOCKER_HOST') && colimaSocket.exists()) {
+                environment 'DOCKER_HOST', "unix://${colimaSocket}"
+                environment 'TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE', '/var/run/docker.sock'
+                // the reaper is unreachable through the virtual machine's port forwarding; every
+                // container here is stopped by the test which started it
+                environment 'TESTCONTAINERS_RYUK_DISABLED', 'true'
+            }
+        }
     }
 
     shadowJar {
