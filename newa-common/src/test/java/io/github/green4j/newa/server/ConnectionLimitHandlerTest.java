@@ -190,17 +190,34 @@ class ConnectionLimitHandlerTest {
                         refused.countDown();
                     }
                 })
-                .pipeline(pipeline -> pipeline.addLast(new ChannelInboundHandlerAdapter()))
+                .pipeline(pipeline -> pipeline.addLast(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRead(final ChannelHandlerContext ctx,
+                                            final Object msg) {
+                        ctx.writeAndFlush(msg); // an echo, so a test can tell that a connection is really up
+                    }
+                }))
                 .start()) {
 
-            try (Socket first = new Socket(HOST, server.port());
-                    Socket second = new Socket(HOST, server.port())) {
-                second.setSoTimeout(10_000);
-                Assertions.assertEquals(-1, second.getInputStream().read(),
-                        "A connection past the limit was held rather than closed");
-                Assertions.assertTrue(refused.await(10, TimeUnit.SECONDS),
-                        "The refusal was never reported");
-                Assertions.assertTrue(first.isConnected());
+            final Socket first = new Socket(HOST, server.port());
+            try {
+                // the slot has to be taken before the second one arrives. Two connections opened back to
+                // back are accepted onto two event loops, and which of them reaches channelActive first -
+                // which is to say which of the two is the one refused - is a race between those threads.
+                // Waiting for the echo is what makes this connection the one within the limit
+                Assertions.assertEquals('x', echo(first),
+                        "The connection which was within the limit was not served");
+
+                try (Socket second = new Socket(HOST, server.port())) {
+                    second.setSoTimeout(10_000);
+                    Assertions.assertEquals(-1, second.getInputStream().read(),
+                            "A connection past the limit was held rather than closed");
+                    Assertions.assertTrue(refused.await(10, TimeUnit.SECONDS),
+                            "The refusal was never reported");
+                    Assertions.assertTrue(first.isConnected());
+                }
+            } finally {
+                first.close();
             }
         }
     }
