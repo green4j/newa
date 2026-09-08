@@ -64,6 +64,12 @@ jobs:
             exit 1
           fi
 
+          # A tag is what a release is found by afterwards, so it has to name what was actually published.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version.txt: expected v${version}"
+            exit 1
+          fi
+
           if [[ -z "${SONATYPE_USERNAME}" || -z "${SONATYPE_PASSWORD}" ]]; then
             echo "Missing SONATYPE_USERNAME or SONATYPE_PASSWORD secret"
             exit 1
@@ -95,7 +101,7 @@ jobs:
           SIGNING_GPG_PASSWORD: ${{ secrets.SIGNING_GPG_PASSWORD }}
         run: |
           if [[ "${PUBLISH_MODE}" == "snapshot" ]]; then
-            ./gradlew --no-daemon --stacktrace clean publish
+            ./gradlew --no-daemon --stacktrace clean build publish
           else
-            ./gradlew --no-daemon --stacktrace clean publish uploadArtifactsToSonatypeCentralPortal
+            ./gradlew --no-daemon --stacktrace clean build publish uploadArtifactsToSonatypeCentralPortal
           fi

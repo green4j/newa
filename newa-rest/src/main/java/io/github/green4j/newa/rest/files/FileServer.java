@@ -10,6 +10,8 @@ package io.github.green4j.newa.rest.files;
 import io.github.green4j.newa.rest.AbstractHttpServer;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.server.ServerMemoryBudget;
+import io.github.green4j.newa.server.ServerMemoryEstimate;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.HttpContentCompressor;
 
@@ -30,9 +32,9 @@ import java.util.concurrent.Executor;
  * It assembles this pipeline, out of the same public handlers a pipeline written by hand is made of:
  * <pre>
  * Client --&gt; [IdleConnectionHandler] --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt;
- *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt;
- *            [CorsHandler] --&gt; [HttpContentCompressor] --&gt; FileServerHandler --&gt; [your handlers] --&gt;
- *            FilesOnlyHandler
+ *            SingleHttpExchangeHandler --&gt; [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt;
+ *            DecoderFailureHandler --&gt; [CorsHandler] --&gt; [HttpContentCompressor] --&gt;
+ *            FileServerHandler --&gt; [your handlers] --&gt; FilesOnlyHandler
  * </pre>
  * Nothing is hidden and nothing is one-way: {@link #pipeline()} hands the same initializer to a
  * {@link io.netty.bootstrap.ServerBootstrap} of your own, and everything below the pipeline - the transport,
@@ -130,6 +132,19 @@ public final class FileServer extends AbstractHttpServer<FileServer> {
     }
 
     /**
+     * Dynamically shares the configured percentages of this process's heap and direct-memory maxima with
+     * every other server using the same budget. The estimate is derived from this server's final request,
+     * chunk and transport settings.
+     *
+     * @param budget shared process-wide admission budget
+     * @return this builder
+     */
+    public FileServer withMemoryBudget(final ServerMemoryBudget budget) {
+        setMemoryBudget(budget);
+        return this;
+    }
+
+    /**
      * The file handler, with everything which decides how a file is written in front of it and everything
      * which answers what the files do not own behind it.
      *
@@ -173,5 +188,23 @@ public final class FileServer extends AbstractHttpServer<FileServer> {
         // end of the pipeline, discarded in silence, holding a connection which nothing is on a timer to
         // close
         pipeline.addLast(new FilesOnlyHandler(errorHandler(), observers()));
+    }
+
+    @Override
+    protected String memoryBudgetName() {
+        return "file";
+    }
+
+    @Override
+    protected ServerMemoryEstimate memoryEstimate(final NettyServerBuilder bootstrap) {
+        return FileServerMemoryEstimator.builder()
+                .request(maxContentLength(), maxInitialLineLength(), maxHeaderSize())
+                .file(chunkSize)
+                .transport(bootstrap.writeBufferWaterMarkHigh(), compression())
+                .additional(
+                        additionalHeapBytesPerConnection(),
+                        additionalDirectMemoryBytesPerConnection()
+                )
+                .estimate();
     }
 }

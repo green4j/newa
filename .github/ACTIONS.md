@@ -46,14 +46,17 @@ The publish workflow runs on **JDK 11** to keep release artifacts built from the
 - Snapshot mode:
 
 ```bash
-./gradlew --no-daemon --stacktrace clean publish
+./gradlew --no-daemon --stacktrace clean build publish
 ```
 
 - Release mode:
 
 ```bash
-./gradlew --no-daemon --stacktrace clean publish uploadArtifactsToSonatypeCentralPortal
+./gradlew --no-daemon --stacktrace clean build publish uploadArtifactsToSonatypeCentralPortal
 ```
+
+Both run `build` first - nothing is published which has not passed the tests, Checkstyle and JaCoCo of the
+build itself, rather than trusting an earlier run on another commit.
 
 ## An example of release
 
@@ -106,7 +109,8 @@ Version is read from `version.txt`.
 - Snapshot mode requires version ending with `-SNAPSHOT`.
 - Release mode requires version **without** `-SNAPSHOT`.
 
-The workflow validates this before running Gradle.
+The workflow validates this before running Gradle. A tag push is validated further: the tag has to be
+`v<version>` of the same `version.txt`, so a tag names what was actually published.
 
 ## Recommended Release Procedure
 

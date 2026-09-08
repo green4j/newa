@@ -55,7 +55,8 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * A {@link #RESPONSE_STALLED} event is fired down the pipeline before the close, so a handler which knows
  * what it was writing can report that the response was given up on rather than let it look like an ordinary
- * disconnect. Nothing is written back: the peer is not reading, which is the whole finding.
+ * disconnect, and a {@link ConnectionObserver} is told the same thing from outside any request. Nothing is
+ * written back: the peer is not reading, which is the whole finding.
  */
 public class ResponseDeadlineHandler extends ChannelDuplexHandler implements ChannelFutureListener {
     /**
@@ -94,6 +95,7 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
     private final long windowMs;
     private final long periodMillis;
     private final int unit;
+    private final ConnectionObserver observer;
 
     private long[] sizes = new long[INITIAL_PENDING];
     private Object[] messages = new Object[INITIAL_PENDING];
@@ -120,6 +122,17 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
      */
     public ResponseDeadlineHandler(final long windowMs,
                                    final int unit) {
+        this(windowMs, unit, null);
+    }
+
+    /**
+     * @param windowMs one unit of a response has to reach the peer within.
+     * @param unit of progress, {@link #DEFAULT_UNIT} by default.
+     * @param observer told before each close, or null to say nothing.
+     */
+    public ResponseDeadlineHandler(final long windowMs,
+                                   final int unit,
+                                   final ConnectionObserver observer) {
         if (windowMs < 1) {
             throw new IllegalArgumentException("A window which has already passed would close every "
                     + "connection which is written to: " + windowMs);
@@ -131,6 +144,7 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
         this.windowMs = windowMs;
         this.periodMillis = Math.max(1, windowMs / POLLS_PER_WINDOW);
         this.unit = unit;
+        this.observer = observer;
     }
 
     @Override
@@ -218,6 +232,7 @@ public class ResponseDeadlineHandler extends ChannelDuplexHandler implements Cha
         cancel();
         ctx.fireUserEventTriggered(RESPONSE_STALLED); // said before the close, while whatever was being
         // written is still there to hear it
+        Observed.by(observer, told -> told.onResponseStalled(ctx.channel()));
         ctx.close();
     }
 

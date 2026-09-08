@@ -7,10 +7,15 @@
 
 package io.github.green4j.newa.example.rest.pipeline;
 
+import io.github.green4j.newa.example.StdOutConnectionObserver;
+import io.github.green4j.newa.example.rest.StdOutRestApiObserver;
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.Life;
 import io.github.green4j.newa.rest.HttpErrorHandler;
+import io.github.green4j.newa.rest.HttpObserverFactory;
 import io.github.green4j.newa.rest.JsonErrorHandler;
+import io.github.green4j.newa.rest.RefusedRequestReporter;
+import io.github.green4j.newa.rest.ResponseChunks;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
 import io.github.green4j.newa.rest.RestApiHandler;
@@ -18,10 +23,14 @@ import io.github.green4j.newa.rest.RestServer;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.github.green4j.newa.rest.handles.JsonHelp;
+import io.github.green4j.newa.server.ConnectionLimitHandler;
+import io.github.green4j.newa.server.ConnectionObserver;
 import io.github.green4j.newa.server.DecoderFailureHandler;
 import io.github.green4j.newa.server.IdleConnectionHandler;
+import io.github.green4j.newa.server.ObservedHttpObjectAggregator;
 import io.github.green4j.newa.server.RequestDeadlineHandler;
 import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -34,7 +43,6 @@ import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.cors.CorsConfigBuilder;
 import io.netty.handler.codec.http.cors.CorsHandler;
@@ -81,8 +89,17 @@ import java.nio.file.Path;
  *       messages, and a decoder still waiting for the rest of one has nothing to hand on;</li>
  *   <li>the {@link DecoderFailureHandler} goes in front of everything which answers, so that a request line
  *       or a header block past the limits above is answered {@code 414} or {@code 431} rather than reaching
- *       the api as the substitute request the decoder emits and being answered {@code 404}.</li>
+ *       the api as the substitute request the decoder emits and being answered {@code 404};</li>
+ *   <li>and the {@link SingleHttpExchangeHandler} goes directly behind the aggregator, so that what it
+ *       counts is whole requests and whole responses. It holds this connection to one unfinished response,
+ *       which is what a per-connection estimate of any of these servers assumes; a pipeline written out
+ *       from the codec upwards and missing it is charged for one exchange and serves as many as a client
+ *       cares to pipeline.</li>
  * </ul>
+ * The observers are hand-wired for the same reason: {@link RestServer} gives its handlers a
+ * {@link ConnectionObserver} and a {@link RefusedRequestReporter} by itself, and a pipeline written out has
+ * to hand them over or the events go nowhere. Give the reporter the factory the api is given, or one server
+ * is counted as two.
  */
 public class PipelineRestServer {
     public static final String API_NAME = "Pipeline API";
@@ -101,6 +118,7 @@ public class PipelineRestServer {
     private static final int WATER_MARK_HIGH = 128 * 1024;
     private static final int BACKLOG = 1024;
     private static final int IDLE_SECONDS = 60;
+    private static final int MAX_CONNECTIONS = 1024;
 
     /** Half of it, in each direction: what a connection which is doing something is given to do it. */
     private static final int DEADLINE_SECONDS = 30;
@@ -112,6 +130,11 @@ public class PipelineRestServer {
         final Path root = createContent();
         final FileSet files = buildFileSet(root);
         final RestApi api = buildApi();
+
+        // one of each for the whole server, so they are built here rather than per channel
+        final ConnectionObserver connections = new StdOutConnectionObserver();
+        final HttpObserverFactory requests = StdOutRestApiObserver.factory();
+        final ConnectionLimitHandler connectionLimit = new ConnectionLimitHandler(MAX_CONNECTIONS, connections);
 
         final EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         final EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
@@ -126,7 +149,7 @@ public class PipelineRestServer {
                 .childHandler(new ChannelInitializer<>() {
                     @Override
                     protected void initChannel(final Channel ch) {
-                        initPipeline(ch.pipeline(), files, api);
+                        initPipeline(ch.pipeline(), files, api, connectionLimit, connections, requests);
                     }
                 });
 
@@ -157,30 +180,48 @@ public class PipelineRestServer {
 
     private static void initPipeline(final ChannelPipeline pipeline,
                                      final FileSet files,
-                                     final RestApi api) {
+                                     final RestApi api,
+                                     final ConnectionLimitHandler connectionLimit,
+                                     final ConnectionObserver connections,
+                                     final HttpObserverFactory requests) {
+        // first of all: nothing further in has anything to do until the connection is one this server is
+        // keeping. Shared by every channel - the count is what it holds - so it is built outside this method
+        pipeline.addLast(connectionLimit);
+
         // nothing reads or writes for a minute: a connection nobody is using costs a file descriptor, and
         // this is the only thing which will ever take it back. Note which handler this is - Netty's own
         // IdleStateHandler fires an event and closes nothing, so a pipeline with one and no handler for
         // that event holds the connection exactly as long as it would have without it
-        pipeline.addLast(new IdleConnectionHandler(IDLE_SECONDS * 1000L));
+        pipeline.addLast(new IdleConnectionHandler(IDLE_SECONDS * 1000L, connections));
 
         // the request line and the header block, written out rather than inherited. Netty's defaults are
         // these very numbers, and so are RestServer.withMaxInitialLineLength and withMaxHeaderSize - the
         // point of saying them here is that on this side of the fence they are a decision, not an assumption
         pipeline.addLast(new HttpServerCodec(MAX_INITIAL_LINE_BYTES, MAX_HEADER_BYTES, MAX_REQUEST_BYTES));
-        pipeline.addLast(new HttpObjectAggregator(MAX_REQUEST_BYTES, true));
+
+        // Netty's aggregator answers a body past the limit from here, in front of every handler below - so
+        // this is the one which says that it did, and a 413 is counted among the requests it belongs to
+        pipeline.addLast(new ObservedHttpObjectAggregator(
+                MAX_REQUEST_BYTES, true, new RefusedRequestReporter(requests)));
+
+        // directly behind the aggregator, so that what it counts is whole requests and whole responses: it
+        // holds this connection to one unfinished response, which is what the per-connection estimates of
+        // this server assume and what a pipeline written from HttpServerCodec upwards has to say itself.
+        // RestServer puts one in by itself
+        pipeline.addLast(new SingleHttpExchangeHandler(connections));
 
         // the two the idle handler above cannot be. It only knows that bytes moved, so a request dribbled in
         // a byte at a time and a response taken a byte at a time both look busy to it; these count what
         // actually arrived, and they go behind the aggregator because that is where a burst of bytes can be
         // told apart from a message
-        pipeline.addLast(new RequestDeadlineHandler(DEADLINE_SECONDS * 1000L));
-        pipeline.addLast(new ResponseDeadlineHandler(DEADLINE_SECONDS * 1000L));
+        pipeline.addLast(new RequestDeadlineHandler(DEADLINE_SECONDS * 1000L, connections));
+        pipeline.addLast(new ResponseDeadlineHandler(
+                DEADLINE_SECONDS * 1000L, ResponseDeadlineHandler.DEFAULT_UNIT, connections));
 
         // what the codec above refused arrives here as a substitute request - GET /bad-request, carrying the
         // real cause - and would be answered 404 by the api. This turns it into the 414 or the 431 it is,
         // and closes the connection the decoder has already given up on. RestServer puts one in by itself
-        pipeline.addLast(new DecoderFailureHandler());
+        pipeline.addLast(new DecoderFailureHandler(new RefusedRequestReporter(requests)));
 
         // in front of the file handler, which is where it has to be for a file to carry the headers too:
         // FileServerHandler writes its response head from its own place in the pipeline, so only a handler
@@ -204,12 +245,15 @@ public class PipelineRestServer {
 
         pipeline.addLast(new FileServerHandler(files, errors, channelErrors, null));
 
-        // no ChunkedWriteHandler: the first response which needs one puts it in front of the handler below
+        // no ChunkedWriteHandler: the first response which needs one puts it in front of the handler below.
+        // The same factory the reporters above were given: it is one server, so it is one count
         pipeline.addLast(
                 new RestApiHandler(
                         api,
                         errors,
-                        channelErrors
+                        channelErrors,
+                        ResponseChunks.defaults(),
+                        requests
                 )
         );
     }

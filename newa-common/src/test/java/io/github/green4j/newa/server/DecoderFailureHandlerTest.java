@@ -15,7 +15,10 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpDecoderConfig;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.TooLongHttpLineException;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -48,7 +51,30 @@ class DecoderFailureHandlerTest {
         }
     }
 
+    /**
+     * Stands in for whatever reports: what reaches it is what nothing further in could ever have said,
+     * because nothing further in is given the request at all.
+     */
+    private static final class Refusals implements RefusedRequestObserver {
+        private final List<String> statuses = new ArrayList<>();
+        private final List<Throwable> causes = new ArrayList<>();
+        private final List<String> uris = new ArrayList<>();
+        private final List<Boolean> carriedTheFailure = new ArrayList<>();
+
+        @Override
+        public void onRequestRefused(final ChannelHandlerContext ctx,
+                                     final HttpRequest request,
+                                     final HttpResponseStatus status,
+                                     final Throwable cause) {
+            statuses.add(String.valueOf(status.code()));
+            causes.add(cause);
+            uris.add(request.uri());
+            carriedTheFailure.add(request.decoderResult().isFailure());
+        }
+    }
+
     private final Received received = new Received();
+    private final Refusals refusals = new Refusals();
 
     private EmbeddedChannel channelWithTheHandler() {
         return new EmbeddedChannel(
@@ -56,7 +82,7 @@ class DecoderFailureHandlerTest {
                         .setMaxInitialLineLength(MAX_INITIAL_LINE_LENGTH)
                         .setMaxHeaderSize(MAX_HEADER_SIZE)),
                 new HttpObjectAggregator(1024, true),
-                new DecoderFailureHandler(),
+                new DecoderFailureHandler(refusals),
                 received
         );
     }
@@ -96,14 +122,14 @@ class DecoderFailureHandlerTest {
      */
     private static Stream<Arguments> whatTheDecoderRefuses() {
         return Stream.of(
-                Arguments.of("a request line past the limit",
+                Arguments.of("A request line past the limit",
                         "GET /" + repeated('a', MAX_INITIAL_LINE_LENGTH) + " HTTP/1.1\r\nHost: h\r\n\r\n",
                         "414", true),
-                Arguments.of("a header block past the limit",
+                Arguments.of("A header block past the limit",
                         "GET / HTTP/1.1\r\nHost: h\r\nX-Big: "
                                 + repeated('a', MAX_HEADER_SIZE) + "\r\n\r\n",
                         "431", true),
-                Arguments.of("a request line which is not one", "GET\r\n\r\n", "400", false));
+                Arguments.of("A request line which is not one", "GET\r\n\r\n", "400", false));
     }
 
     @ParameterizedTest(name = "{0} is answered {2}")
@@ -125,6 +151,36 @@ class DecoderFailureHandlerTest {
         // would ever be read from again
         Assertions.assertFalse(channel.isOpen(), what);
         Assertions.assertTrue(received.uris.isEmpty(), received.uris.toString());
+        // the same status, said to this side: what is answered here is answered in front of everything
+        // which would otherwise have counted it
+        Assertions.assertEquals(List.of(status), refusals.statuses, what);
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void aRefusalIsReportedWithTheCauseTheDecoderRecorded() {
+        // the status alone says a request line was too long; the cause is what a log wants
+        final EmbeddedChannel channel = channelWithTheHandler();
+
+        send(channel, "GET /" + repeated('a', MAX_INITIAL_LINE_LENGTH) + " HTTP/1.1\r\nHost: h\r\n\r\n");
+
+        Assertions.assertEquals(1, refusals.causes.size());
+        Assertions.assertInstanceOf(TooLongHttpLineException.class, refusals.causes.get(0));
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void whatIsReportedIsTheSubstituteTheDecoderBuilt() {
+        // the one thing an observer has to know about these: the uri is not what the peer sent, and the
+        // failed decoderResult is what says so
+        final EmbeddedChannel channel = channelWithTheHandler();
+
+        send(channel, "GET /" + repeated('a', MAX_INITIAL_LINE_LENGTH) + " HTTP/1.1\r\nHost: h\r\n\r\n");
+
+        Assertions.assertEquals(List.of("/bad-request"), refusals.uris);
+        Assertions.assertEquals(List.of(true), refusals.carriedTheFailure);
 
         channel.finishAndReleaseAll();
     }
@@ -138,6 +194,8 @@ class DecoderFailureHandlerTest {
         Assertions.assertEquals("", answerOf(channel));
         Assertions.assertTrue(channel.isOpen());
         Assertions.assertEquals(List.of("/ok"), received.uris);
+        Assertions.assertEquals(List.of(), refusals.statuses, "A request which was served was reported "
+                + "refused");
 
         channel.finishAndReleaseAll();
     }

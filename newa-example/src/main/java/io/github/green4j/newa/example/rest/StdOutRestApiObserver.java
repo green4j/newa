@@ -53,36 +53,44 @@ public class StdOutRestApiObserver implements RestApiObserver {
     @Override
     public void onHandlingStarted(final RestContext context) {
         pathExpression = context.pathExpression();
-        System.out.printf("   handling %s%n", pathExpression);
+        System.out.printf("   Handling %s%n", pathExpression);
     }
 
     @Override
     public void onHandlingFinished(final HttpResponseStatus status,
                                    final long bytes,
                                    final long durationNanos) {
-        System.out.printf("   handled %s: %s, %d bytes in %d us%n",
+        System.out.printf("   Handled %s: %s, %d bytes in %d us%n",
                 pathExpression, status, bytes, durationNanos / 1000);
     }
 
     @Override
+    public void onRequestRefused(final HttpResponseStatus status,
+                                 final Throwable cause) {
+        // a limit in front of the api answered it: nothing routed, no handle ran, and for a 414 or a 431
+        // the uri above is the decoder's substitute rather than what the peer asked for
+        System.out.printf("   Refused before routing: %s %s%n", status, cause);
+    }
+
+    @Override
     public void onRequestNotRouted(final HttpException cause) {
-        System.out.printf("   not routed: %s %s%n", method, uri);
+        System.out.printf("   Not routed: %s %s%n", method, uri);
     }
 
     @Override
     public void onResponseFailed(final HttpResponseStatus status,
                                  final Throwable error) {
-        System.out.printf("   failed %s: %s %s%n", name(), status, error);
+        System.out.printf("   Failed %s: %s %s%n", name(), status, error);
     }
 
     @Override
     public void onCursorOpened(final int openCursors) {
-        System.out.printf("   cursor opened for %s, %d open%n", name(), openCursors);
+        System.out.printf("   Cursor opened for %s, %d open%n", name(), openCursors);
     }
 
     @Override
     public void onCursorRefused(final int openCursors) {
-        System.out.printf("   cursor refused for %s, %d already open%n", name(), openCursors);
+        System.out.printf("   Cursor refused for %s, %d already open%n", name(), openCursors);
     }
 
     @Override
@@ -90,7 +98,7 @@ public class StdOutRestApiObserver implements RestApiObserver {
                                final long bytes,
                                final long durationNanos,
                                final Outcome outcome) {
-        System.out.printf("   cursor %s for %s: %d bytes in %.1f ms, %d left%n",
+        System.out.printf("   Cursor %s for %s: %d bytes in %.1f ms, %d left%n",
                 outcome, name(), bytes, durationNanos / 1e6, openCursors);
     }
 

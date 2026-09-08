@@ -21,15 +21,17 @@ import io.netty.handler.codec.http.HttpResponseStatus;
  * shared one has taken on that problem knowingly.
  * <p>
  * {@link #onRequestCompleted} fires exactly once, whatever form the response took - written in one piece,
- * rendered as an error, or pulled chunk by chunk from a cursor. Counting requests never means adding two
- * different events up.
+ * rendered as an error, refused by a limit at the front of the pipeline, or pulled chunk by chunk from a
+ * cursor. Counting requests never means adding two different events up, and never means missing a kind.
  * <p>
  * Anything which ends as an error response is reported here exactly once, by the stage which knows most
- * about it: {@link #onRequestNotRouted} when nothing served the request, {@link #onResponseFailed} otherwise.
- * That is where the cause of a {@code 500} is to be found - the response itself says only the status,
- * whatever the {@link HttpErrorHandler} would have rendered. A failure of the channel rather than of a
- * request goes to the {@link io.github.green4j.newa.lang.ChannelErrorHandler} instead, and a body larger than the pipeline
- * accepts is answered {@code 413} by Netty's aggregator, ahead of any of this.
+ * about it: {@link #onRequestRefused} when a limit answered it before anything read it,
+ * {@link #onRequestNotRouted} when nothing served it, {@link #onResponseFailed} otherwise. That is where the
+ * cause of a {@code 500} is to be found - the response itself says only the status, whatever the
+ * {@link HttpErrorHandler} would have rendered. A failure of the channel rather than of a request goes to
+ * the {@link io.github.green4j.newa.lang.ChannelErrorHandler} instead, and a connection closed by a rule of
+ * its own - an idle timeout, a deadline, a connection limit - belongs to no request at all and goes to a
+ * {@link io.github.green4j.newa.server.ConnectionObserver}.
  * <p>
  * {@link RestApiObserver} extends this with the stages of a request which reached an endpoint. Those nest
  * inside these and never cross them: {@link RestApiObserver#onHandlingFinished} closes the handling bracket
@@ -48,6 +50,24 @@ public interface HttpObserver {
      */
     default void onRequestReceived(ChannelHandlerContext ctx,
                                    HttpRequest request) {
+    }
+
+    /**
+     * Answered by a limit at the front of the pipeline and passed on to nothing - a body past
+     * {@code maxContentLength} ({@code 413}), a request line past {@code maxInitialLineLength}
+     * ({@code 414}), a header block past {@code maxHeaderSize} ({@code 431}), anything else the decoder
+     * refused ({@code 400}). The connection is closed with the answer.
+     * <p>
+     * The bracket is the usual one: {@link #onRequestReceived} first, {@link #onRequestCompleted} last,
+     * nothing in between belonging to a handler. For a <b>decoder</b> refusal the request handed over is
+     * the substitute it built - {@code GET /bad-request} - and {@code request.decoderResult().isFailure()}
+     * tells that apart from a real path of the same name.
+     *
+     * @param status it is answered with
+     * @param cause as the decoder or the aggregator recorded it, never null
+     */
+    default void onRequestRefused(HttpResponseStatus status,
+                                  Throwable cause) {
     }
 
     /**
@@ -86,7 +106,8 @@ public interface HttpObserver {
      * @param status responded with
      * @param bytes of content - for a chunked response, the body as the cursor produced it, without the
      *              framing the transfer encoding adds
-     * @param durationNanos from the request arriving to the last byte reaching the channel
+     * @param durationNanos from the request arriving to the last byte reaching the channel, and zero for a
+     *                      refused one: nothing at the front of the pipeline knows when it began arriving
      */
     default void onRequestCompleted(HttpResponseStatus status,
                                     long bytes,

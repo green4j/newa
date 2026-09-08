@@ -16,6 +16,7 @@ import io.github.green4j.newa.rest.RestApiHandler;
 import io.github.green4j.newa.server.DecoderFailureHandler;
 import io.github.green4j.newa.server.RequestDeadlineHandler;
 import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.github.green4j.newa.websocket.HandshakeOnlyHandler;
 import io.github.green4j.newa.websocket.OriginCheckHandler;
 import io.github.green4j.newa.websocket.OriginPolicy;
@@ -58,6 +59,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * The rest of it is what a server facing the open internet is assembled like, written out here because a
  * hand-assembled pipeline gets none of it for free:
  * <ul>
+ *   <li>a {@link SingleHttpExchangeHandler} directly behind the aggregator, which holds this connection
+ *       to one unfinished response. It is what makes a per-connection estimate of this server true, and
+ *       here it is also what keeps the two halves of the port apart: without one, a handshake sent behind a
+ *       request the stats api has not answered yet reaches {@link WsApiHandler} while that answer is still
+ *       being written, and an upgrade takes the aggregator out of this pipeline and swaps the response
+ *       encoder under it. {@code WsServer} puts one in by itself;</li>
  *   <li>a {@link RequestDeadlineHandler} and a {@link ResponseDeadlineHandler}, which
  *       {@code WsServer.withRequestDeadlineMs} and {@code withResponseDeadlineMs} install by default and a
  *       hand-assembled pipeline gets only by saying so. The first guards the window before a session exists
@@ -177,6 +184,12 @@ public class PipelineWsServer {
                                      final RestApi stats) {
         pipeline.addLast(new HttpServerCodec(MAX_INITIAL_LINE_BYTES, MAX_HEADER_BYTES, MAX_REQUEST_BYTES));
         pipeline.addLast(new HttpObjectAggregator(MAX_REQUEST_BYTES, true));
+
+        // directly behind the aggregator, and in front of the handshake handler below: it holds this
+        // connection to one unfinished response, so the stats api further down answers one request at a
+        // time, and a handshake arriving while it is answering waits here rather than swapping the response
+        // encoder in the middle of that answer. WsServer puts one in by itself
+        pipeline.addLast(new SingleHttpExchangeHandler());
 
         // behind the aggregator, which is where both of them belong: what the first tells apart is bytes
         // which became a message from bytes which did not, and in front of a decoder every read looks the

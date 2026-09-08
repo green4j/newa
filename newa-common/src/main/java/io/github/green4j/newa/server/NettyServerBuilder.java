@@ -9,6 +9,7 @@ package io.github.green4j.newa.server;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
@@ -97,9 +98,14 @@ public final class NettyServerBuilder {
     private int waterMarkLow = DEFAULT_WATER_MARK_LOW;
     private int waterMarkHigh = DEFAULT_WATER_MARK_HIGH;
     private int backlog;
+    private int minConnections;
     private int maxConnections;
 
     private ChannelInitializer<? extends Channel> childHandler;
+    private ServerMemoryBudget memoryBudget;
+    private ServerMemoryEstimate memoryEstimate;
+    private String memoryBudgetName;
+    private ConnectionObserver connectionObserver;
 
     public NettyServerBuilder() {
     }
@@ -162,6 +168,13 @@ public final class NettyServerBuilder {
     }
 
     /**
+     * @return the configured number of worker threads
+     */
+    public int workerThreads() {
+        return workerThreads;
+    }
+
+    /**
      * Where a channel stops reporting itself writable, which is where a handler producing a large response,
      * a chunked one, or a fan-out reads its backpressure signal from.
      *
@@ -174,6 +187,20 @@ public final class NettyServerBuilder {
         this.waterMarkLow = lowBytes;
         this.waterMarkHigh = highBytes;
         return this;
+    }
+
+    /**
+     * @return the configured low write-buffer watermark
+     */
+    public int writeBufferWaterMarkLow() {
+        return effectiveWriteBufferWaterMark().low();
+    }
+
+    /**
+     * @return the configured high write-buffer watermark
+     */
+    public int writeBufferWaterMarkHigh() {
+        return effectiveWriteBufferWaterMark().high();
     }
 
     /**
@@ -203,14 +230,99 @@ public final class NettyServerBuilder {
      * the code; a number picked here instead would cut working traffic quietly, which is worse than the
      * failure it prevents. Set it where that number is known.
      *
-     * <p>What it defends is the file descriptor, and what it costs is that a refused peer is told nothing -
-     * {@link ConnectionLimitHandler}, which this builds, says why, and counts what it refused.
+     * <p>What it defends is the file descriptor, and what it costs is that a refused peer is told nothing.
+     * This side is told either way: without a memory budget {@link ConnectionLimitHandler} counts the
+     * refusals and reports each to the {@link #connectionObserver(ConnectionObserver)}; with one, the
+     * ceiling is enforced by the registration and reported to the budget's observer as
+     * {@link ServerMemoryBudget.RefusalReason#CONNECTION_LIMIT}.
      *
      * @param connections to hold at once, 0 for as many as the machine will give.
      * @return this builder.
      */
     public NettyServerBuilder maxConnections(final int connections) {
+        if (connections < 0) {
+            throw new IllegalArgumentException(
+                    "maxConnections must not be negative: " + connections);
+        }
         this.maxConnections = connections;
+        return this;
+    }
+
+    /**
+     * @return the configured per-server connection ceiling, 0 when unset
+     */
+    public int maxConnections() {
+        return maxConnections;
+    }
+
+    /**
+     * Guarantees that this server can admit this many connections from its configured memory budget. Their
+     * estimated heap and direct-memory cost is reserved when the server registers, so other servers cannot
+     * consume it. The floor does not override {@link #maxConnections(int)}.
+     *
+     * <p>Unset by default. A positive floor requires {@link #memoryBudget(String, ServerMemoryBudget,
+     * ServerMemoryEstimate)}; without a shared capacity to reserve it would provide no guarantee.
+     *
+     * @param connections to guarantee, 0 for no reserved floor
+     * @return this builder
+     */
+    public NettyServerBuilder minConnections(final int connections) {
+        if (connections < 0) {
+            throw new IllegalArgumentException(
+                    "minConnections must not be negative: " + connections);
+        }
+        this.minConnections = connections;
+        return this;
+    }
+
+    /**
+     * @return the configured per-server guaranteed connection floor, 0 when unset
+     */
+    public int minConnections() {
+        return minConnections;
+    }
+
+    /**
+     * Admits this server's connections against a process-wide memory budget. The estimate is accounting, not
+     * an allocator limit: the server which derived it is responsible for keeping it representative of the
+     * configuration it starts with. {@link #minConnections(int)} and {@link #maxConnections(int)} are
+     * optional per-server bounds on that admission.
+     *
+     * @param name identifying this server in budget statistics
+     * @param budget shared with every server drawing from the same heap and direct-memory limits
+     * @param estimate reserved by each accepted connection
+     * @return this builder
+     */
+    public NettyServerBuilder memoryBudget(final String name,
+                                           final ServerMemoryBudget budget,
+                                           final ServerMemoryEstimate estimate) {
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("A server memory budget registration requires a name");
+        }
+        if (budget == null) {
+            throw new IllegalArgumentException("A server memory budget is required");
+        }
+        if (estimate == null) {
+            throw new IllegalArgumentException("A server memory estimate is required");
+        }
+        this.memoryBudgetName = name;
+        this.memoryBudget = budget;
+        this.memoryEstimate = estimate;
+        return this;
+    }
+
+    /**
+     * Sets where a connection refused by {@link #maxConnections(int)} is reported. Nothing is reported
+     * without one, and a refusal leaves no other trace.
+     *
+     * <p>The servers of the modules above set this from their own {@code withConnectionObserver}, so one
+     * observer covers the limit here and their deadlines too.
+     *
+     * @param observer told about refused connections, null to say nothing. One serves the whole server.
+     * @return this builder.
+     */
+    public NettyServerBuilder connectionObserver(final ConnectionObserver observer) {
+        this.connectionObserver = observer;
         return this;
     }
 
@@ -279,13 +391,26 @@ public final class NettyServerBuilder {
             throw new IllegalStateException(
                     "No child handler: nothing would serve the connections this server accepts");
         }
+        if (minConnections > 0 && memoryBudget == null) {
+            throw new IllegalStateException(
+                    "minConnections requires a memory budget");
+        }
 
-        final EventLoopGroup bossGroup =
-                new MultiThreadIoEventLoopGroup(bossThreads, transport.ioHandlerFactory());
-        final EventLoopGroup workerGroup =
-                new MultiThreadIoEventLoopGroup(workerThreads, transport.ioHandlerFactory());
+        final ServerMemoryBudget.Registration memoryRegistration = memoryBudget == null
+                ? null
+                : memoryBudget.register(
+                        memoryBudgetName,
+                        memoryEstimate,
+                        minConnections,
+                        maxConnections
+                );
+        EventLoopGroup bossGroup = null;
+        EventLoopGroup workerGroup = null;
 
         try {
+            bossGroup = new MultiThreadIoEventLoopGroup(bossThreads, transport.ioHandlerFactory());
+            workerGroup = new MultiThreadIoEventLoopGroup(workerThreads, transport.ioHandlerFactory());
+
             final ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channel(transport.serverSocketChannel())
@@ -301,7 +426,7 @@ public final class NettyServerBuilder {
             applyOptions(bootstrap, false);
             applyOptions(bootstrap, true);
 
-            bootstrap.childHandler(limited(childHandler));
+            bootstrap.childHandler(limited(childHandler, memoryRegistration));
 
             // ANY_HOST goes through bind(port) rather than through an address of that name: the wildcard
             // Netty binds there covers every family this machine has, where 0.0.0.0 resolved is IPv4 alone
@@ -311,12 +436,14 @@ public final class NettyServerBuilder {
                     .sync()
                     .channel();
 
-            return new NettyServer(bossGroup, workerGroup, channel);
+            return new NettyServer(bossGroup, workerGroup, channel, memoryRegistration);
         } catch (final InterruptedException interrupted) {
             shutdown(bossGroup, workerGroup);
+            close(memoryRegistration);
             throw interrupted;
         } catch (final Exception failed) {
             shutdown(bossGroup, workerGroup);
+            close(memoryRegistration);
             throw new IllegalStateException(
                     "Could not bind to " + host + ":" + port, failed);
         }
@@ -329,20 +456,53 @@ public final class NettyServerBuilder {
      * composes: it runs and removes itself, leaving the handlers it added.
      *
      * @param handler of every accepted channel.
+     * @param memoryRegistration process-wide admission, null when it is not configured
      * @return it, or an initializer which counts the connection first.
      */
-    private ChannelInitializer<? extends Channel> limited(final ChannelInitializer<? extends Channel> handler) {
-        if (maxConnections < 1) {
+    private ChannelInitializer<? extends Channel> limited(
+            final ChannelInitializer<? extends Channel> handler,
+            final ServerMemoryBudget.Registration memoryRegistration) {
+        if (memoryRegistration == null && maxConnections < 1) {
             return handler;
         }
-        final ConnectionLimitHandler limit = new ConnectionLimitHandler(maxConnections);
+        final ChannelHandler limit = memoryRegistration == null
+                ? new ConnectionLimitHandler(maxConnections, connectionObserver) : null;
         return new ChannelInitializer<Channel>() {
             @Override
             protected void initChannel(final Channel ch) {
-                ch.pipeline().addLast(limit);
+                if (memoryRegistration != null) {
+                    final ServerMemoryBudget.Lease lease = memoryRegistration.tryAcquire();
+                    if (lease == null) {
+                        ch.close();
+                        return;
+                    }
+                    ch.closeFuture().addListener(closed -> lease.close());
+                } else {
+                    ch.pipeline().addLast(limit);
+                }
                 ch.pipeline().addLast(handler);
             }
         };
+    }
+
+    @SuppressWarnings("deprecation")
+    private WriteBufferWaterMark effectiveWriteBufferWaterMark() {
+        int low = waterMarkLow;
+        int high = waterMarkHigh;
+        for (final Map.Entry<ChannelOption<?>, Object> entry : childOptions.entrySet()) {
+            final ChannelOption<?> option = entry.getKey();
+            if (option.equals(ChannelOption.WRITE_BUFFER_WATER_MARK)) {
+                final WriteBufferWaterMark waterMark =
+                        (WriteBufferWaterMark) entry.getValue();
+                low = waterMark.low();
+                high = waterMark.high();
+            } else if (option.equals(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK)) {
+                low = (Integer) entry.getValue();
+            } else if (option.equals(ChannelOption.WRITE_BUFFER_HIGH_WATER_MARK)) {
+                high = (Integer) entry.getValue();
+            }
+        }
+        return new WriteBufferWaterMark(low, high);
     }
 
     @SuppressWarnings("unchecked") // the maps are only ever filled through option()/childOption(), which
@@ -362,7 +522,17 @@ public final class NettyServerBuilder {
 
     private static void shutdown(final EventLoopGroup bossGroup,
                                  final EventLoopGroup workerGroup) {
-        bossGroup.shutdownGracefully();
-        workerGroup.shutdownGracefully();
+        if (bossGroup != null) {
+            bossGroup.shutdownGracefully();
+        }
+        if (workerGroup != null) {
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    private static void close(final ServerMemoryBudget.Registration registration) {
+        if (registration != null) {
+            registration.close();
+        }
     }
 }

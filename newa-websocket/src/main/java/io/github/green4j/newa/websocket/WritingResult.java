@@ -17,10 +17,31 @@ package io.github.green4j.newa.websocket;
  */
 public interface WritingResult {
 
+    /**
+     * The frame was handed to the channel, which is not the same as having reached the peer: the write
+     * future is deliberately not listened to, because a listener per frame is an allocation per frame on a
+     * fan-out path. A write which then fails at the socket is found on the next {@link ClientSession#send}
+     * instead, as back pressure or as a closed channel, and reported through the two methods below.
+     *
+     * @param session which wrote.
+     */
     void onWriteSuccess(ClientSession session);
 
+    /**
+     * The channel is no longer writable, so nothing was written and the frame was released. The session is
+     * behind, and what to do about it - close it, mark it lagging, let it resync - is this method's.
+     *
+     * @param session which could not write.
+     */
     void onWriteBackPressure(ClientSession session);
 
+    /**
+     * The write could not be made at all - the channel was closed, or something on the way to it threw.
+     * There is nothing left to send on, so this reports and the session goes.
+     *
+     * @param session which failed.
+     * @param error which ended it.
+     */
     void onWriteError(ClientSession session, Throwable error);
 
 }

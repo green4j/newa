@@ -9,6 +9,8 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.server.ServerMemoryBudget;
+import io.github.green4j.newa.server.ServerMemoryEstimate;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.HttpContentCompressor;
 
@@ -28,8 +30,9 @@ import io.netty.handler.codec.http.HttpContentCompressor;
  * It assembles this pipeline, out of the same public handlers a pipeline written by hand is made of:
  * <pre>
  * Client --&gt; [IdleConnectionHandler] --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt;
- *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt;
- *            [CorsHandler] --&gt; [your handlers] --&gt; [HttpContentCompressor] --&gt; RestApiHandler
+ *            SingleHttpExchangeHandler --&gt; [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt;
+ *            DecoderFailureHandler --&gt; [CorsHandler] --&gt; [your handlers] --&gt;
+ *            [HttpContentCompressor] --&gt; RestApiHandler
  * </pre>
  * Nothing is hidden and nothing is one-way: {@link #pipeline()} hands the same initializer to a
  * {@link io.netty.bootstrap.ServerBootstrap} of your own, and everything below the pipeline - the transport,
@@ -82,12 +85,23 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
         return new RestServer(api);
     }
 
+    /**
+     * How large the <b>body</b> of a request may be, unless {@link #withMaxContentLength(int)} says
+     * otherwise - a JSON document a handler parses, which is what a REST api is sent and what the file
+     * server's own default is deliberately too small for. It is charged twice per connection by a memory
+     * budget, the request being answered and the one held behind it, so a server which really does accept
+     * uploads is better off saying the number than inheriting it.
+     */
+    public static final int DEFAULT_MAX_CONTENT_LENGTH = 1024 * 1024;
+
     private final RestRouter api;
 
     private ResponseChunks responseChunks = ResponseChunks.defaults();
+    private int maxResponseSizeEstimate;
 
     private RestServer(final RestRouter api) {
         this.api = api;
+        withMaxContentLength(DEFAULT_MAX_CONTENT_LENGTH);
     }
 
     /**
@@ -96,6 +110,28 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
      */
     public RestServer withResponseChunks(final ResponseChunks responseChunks) {
         this.responseChunks = responseChunks;
+        return this;
+    }
+
+    /**
+     * Dynamically shares the configured percentages of this process's heap and direct-memory maxima with
+     * every other server using the same budget. The response size is an estimate rather than an output limit:
+     * a handler remains free to answer more, and admission remains based on the value given here.
+     *
+     * @param budget shared process-wide admission budget
+     * @param maxResponseSizeEstimate estimated largest application response before built-in compression
+     * @return this builder
+     */
+    public RestServer withMemoryBudget(
+            final ServerMemoryBudget budget,
+            final int maxResponseSizeEstimate) {
+        if (maxResponseSizeEstimate < 1) {
+            throw new IllegalArgumentException(
+                    "A maximum response size estimate must be positive: "
+                            + maxResponseSizeEstimate);
+        }
+        setMemoryBudget(budget);
+        this.maxResponseSizeEstimate = maxResponseSizeEstimate;
         return this;
     }
 
@@ -134,5 +170,23 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
                         observers()
                 )
         );
+    }
+
+    @Override
+    protected String memoryBudgetName() {
+        return "rest";
+    }
+
+    @Override
+    protected ServerMemoryEstimate memoryEstimate(final NettyServerBuilder bootstrap) {
+        return RestServerMemoryEstimator.builder()
+                .request(maxContentLength(), maxInitialLineLength(), maxHeaderSize())
+                .response(maxResponseSizeEstimate, responseChunks.size())
+                .transport(bootstrap.writeBufferWaterMarkHigh(), compression())
+                .additional(
+                        additionalHeapBytesPerConnection(),
+                        additionalDirectMemoryBytesPerConnection()
+                )
+                .estimate();
     }
 }

@@ -11,6 +11,8 @@ import io.github.green4j.newa.lang.Ender;
 import io.github.green4j.newa.lang.SelfEnding;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.Future;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
@@ -32,8 +34,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class NettyServer implements SelfEnding {
     /**
-     * The bound on every wait here. Load-bearing only for a caller which closes from an event loop of this
-     * server: that wait can never be satisfied, so it has to end by itself.
+     * The bound on every wait here. A net under a loop which will not stop rather than a working part: the
+     * one wait which could never be satisfied - a caller closing from an event loop of this server - is
+     * recognised instead of waited out.
      */
     private static final long CLOSE_TIMEOUT_MILLIS = 5_000L;
 
@@ -50,16 +53,22 @@ public final class NettyServer implements SelfEnding {
     private final EventLoopGroup workerGroup;
     private final Channel channel;
     private final int port;
+    private final ServerMemoryBudget.Registration memoryRegistration;
 
     private final AtomicBoolean closed = new AtomicBoolean();
 
     NettyServer(final EventLoopGroup bossGroup,
                 final EventLoopGroup workerGroup,
-                final Channel channel) {
+                final Channel channel,
+                final ServerMemoryBudget.Registration memoryRegistration) {
         this.bossGroup = bossGroup;
         this.workerGroup = workerGroup;
         this.channel = channel;
         this.port = ((InetSocketAddress) channel.localAddress()).getPort();
+        this.memoryRegistration = memoryRegistration;
+        if (memoryRegistration != null) {
+            channel.closeFuture().addListener(closed -> memoryRegistration.close());
+        }
     }
 
     /**
@@ -91,6 +100,13 @@ public final class NettyServer implements SelfEnding {
     }
 
     /**
+     * @return a read-only view of this server's memory registration, null when it was started without one
+     */
+    public ServerMemoryBudget.RegistrationSnapshot memoryRegistrationSnapshot() {
+        return memoryRegistration == null ? null : memoryRegistration.snapshot();
+    }
+
+    /**
      * Tells the ender when this server's listening channel closes, which is the only end a server has: a
      * bound port lost under it looks like nothing at all from the outside, and a {@code main} waiting for
      * the end would go on waiting. {@link io.github.green4j.newa.lang.Life#run} registers itself here, so
@@ -114,25 +130,58 @@ public final class NettyServer implements SelfEnding {
      * written a moment to drain first. A second call does nothing.
      *
      * <p>Call it from a thread which exists to wait - {@link io.github.green4j.newa.lang.Life#run} does.
-     * Calling it from one of this server's own event loops is bounded rather than fatal, but it costs the
-     * full timeout every time: a loop cannot confirm the shutdown it is being asked to wait for while one
-     * of its own threads is the one waiting.
+     * Called from one of this server's own event loops it waits for nothing at all: a loop cannot confirm
+     * the shutdown it is being asked to wait for while one of its own threads is the one waiting, so that
+     * wait is not made. The close and both shutdowns are still asked for, and this returns before they have
+     * finished - which is the only outcome there is on that thread.
      */
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        channel.close().awaitUninterruptibly(CLOSE_TIMEOUT_MILLIS);
-        shutdown(bossGroup);
-        shutdown(workerGroup);
+        final boolean waiting = !inOwnEventLoop();
+        try {
+            if (waiting) {
+                channel.close().awaitUninterruptibly(CLOSE_TIMEOUT_MILLIS);
+            } else {
+                channel.close();
+            }
+            shutdown(bossGroup, waiting);
+            shutdown(workerGroup, waiting);
+        } finally {
+            if (memoryRegistration != null) {
+                memoryRegistration.close();
+            }
+        }
     }
 
-    private static void shutdown(final EventLoopGroup group) {
-        group.shutdownGracefully(
+    /**
+     * @return whether the calling thread is one this server would be waiting for.
+     */
+    private boolean inOwnEventLoop() {
+        return inEventLoop(bossGroup) || inEventLoop(workerGroup);
+    }
+
+    private static boolean inEventLoop(final EventLoopGroup group) {
+        // once per server, on the way out: the iterator this walks is not on anybody's hot path
+        for (final EventExecutor executor : group) {
+            if (executor.inEventLoop()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void shutdown(final EventLoopGroup group,
+                                 final boolean waiting) {
+        final Future<?> terminated = group.shutdownGracefully(
                 SHUTDOWN_QUIET_PERIOD_MILLIS,
                 SHUTDOWN_TIMEOUT_MILLIS,
                 TimeUnit.MILLISECONDS
-        ).awaitUninterruptibly(CLOSE_TIMEOUT_MILLIS);
+        );
+        if (waiting) {
+            terminated.awaitUninterruptibly(CLOSE_TIMEOUT_MILLIS);
+        }
     }
 }

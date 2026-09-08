@@ -173,7 +173,7 @@ public final class LoadClient implements AutoCloseable {
         for (int i = 0; i < clients; i++) {
             final Connection connection = new Connection(loops[i % loops.length]);
             connections.add(connection);
-            futures.add(connection.connect());
+            futures.add(connection.connect(true));
         }
         for (int i = 0; i < futures.size(); i++) {
             final ChannelFuture future = futures.get(i).await();
@@ -185,6 +185,13 @@ public final class LoadClient implements AutoCloseable {
     }
 
     private void start() {
+        if (mode == Mode.LATENCY) {
+            // before the loops run, so nothing else can be offering these connections at the same time:
+            // a reconnect returns without touching them until running is set
+            for (int i = 0; i < connections.size(); i++) {
+                connections.get(i).markIdle();
+            }
+        }
         for (final Loop loop : loops) {
             loop.running = true;
         }
@@ -410,6 +417,7 @@ public final class LoadClient implements AutoCloseable {
 
         private Channel channel;
         private boolean busy;
+        private boolean queued;
         private long intendedNanos;
         private long dueNanos;
         private long pendingBytes;
@@ -431,7 +439,14 @@ public final class LoadClient implements AutoCloseable {
                     .set(HttpHeaderNames.CONTENT_LENGTH, 0);
         }
 
-        private ChannelFuture connect() {
+        /**
+         * @param initial whether this is the connect every run begins with, whose first request belongs to
+         *                {@link LoadClient#start()}. A reconnect has no such caller, so it starts itself.
+         * @return the connect future. The channel is taken from it here rather than in the listener:
+         *         {@code await()} on that future returns before the listener has run, so a caller which
+         *         waited for the connect would otherwise find no channel on the connection.
+         */
+        private ChannelFuture connect(final boolean initial) {
             final Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(loop.eventLoop)
                     .channel(Transport.socketChannel())
@@ -447,10 +462,12 @@ public final class LoadClient implements AutoCloseable {
                         }
                     });
             final ChannelFuture future = bootstrap.connect(host, port);
+            channel = future.channel();
             future.addListener(f -> {
                 if (f.isSuccess()) {
-                    channel = future.channel();
-                    onConnected();
+                    if (!initial) {
+                        onConnected();
+                    }
                     return;
                 }
                 loop.ioErrors++;
@@ -465,12 +482,13 @@ public final class LoadClient implements AutoCloseable {
          * like a server that stopped answering.
          */
         private void reconnect() {
+            busy = false; // whatever was in flight died with the channel, on every path which lands here
             if (!loop.running) {
                 return;
             }
             try {
                 loop.reconnects++;
-                connect();
+                connect(false);
             } catch (final RejectedExecutionException e) {
                 // the run is being wound up and the loop is no longer taking work
                 loop.running = false;
@@ -484,6 +502,20 @@ public final class LoadClient implements AutoCloseable {
                 }
                 return;
             }
+            markIdle();
+        }
+
+        /**
+         * Offers this connection to the pacer, once. The flag is read and written on this connection's
+         * event loop alone - the pacer clears it by running {@link #run()} there - so a reconnect which
+         * lands while the pacer is between {@code poll()} and {@code run()} cannot queue it a second time
+         * and have one connection dispatched twice.
+         */
+        private void markIdle() {
+            if (queued) {
+                return;
+            }
+            queued = true;
             idle.add(this);
         }
 
@@ -504,11 +536,12 @@ public final class LoadClient implements AutoCloseable {
 
         @Override
         public void run() {
+            queued = false;
             if (loop.running && channel != null && channel.isActive()) {
                 send(dueNanos);
                 return;
             }
-            idle.add(this);
+            markIdle();
         }
 
         private void send(final long intended) {
@@ -570,7 +603,7 @@ public final class LoadClient implements AutoCloseable {
                 }
                 return;
             }
-            idle.add(this);
+            markIdle();
         }
 
         @Override

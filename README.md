@@ -1,12 +1,14 @@
 ## Netty-based Web API (NeWA)
 
-A minimalistic REST and WebSocket server framework, built to serve a large number of clients at the
-performance Netty makes possible.
-
-On the WebSocket side it also carries what a general purpose stack leaves to the application: channels and
-subscriptions. A subscriber joins an entity, is given its snapshot if there is one, and is then promised
-every publication after it - in order, with no holes, and with an explicit policy for a subscriber which
-cannot keep up. That is what an event subscription protocol of your own is built out of.
+A minimalistic REST and WebSocket server framework, built to:
+* Serve a large number of clients at the performance Netty makes possible (~2.9x. as many HTTP requests per second per CPU 
+core comparing to Spring Boot; see [newa-performance](newa-performance/README.md))
+* Provide a general purpose WebSocket stack leaves to the application: channels and
+subscriptions. A subscriber joins an entity, is given its snapshot if there is one, 
+and is then promised every publication after it - in order, with no holes, and with an explicit policy for 
+a subscriber which cannot keep up
+* Prevent OOM on server side with memory admission/budgeting: REST, file and WebSocket servers estimate their heap and 
+direct-memory cost per connection and may draw it from one process-wide budget
 
 ### Quick start
 
@@ -104,31 +106,79 @@ machine it will run on:
 `newa-all` is a shaded jar of the three newa modules only - Netty and green-jelly stay where they are, named
 by its POM, so nothing is duplicated on a classpath which already has them.
 
-### Against Spring Boot
+### Memory budget
 
-Measured in [newa-performance](newa-performance/README.md), with each side written the way its own framework
-is normally written - newa rendering into a reused buffer, Spring returning objects for Jackson to serialise.
+Several servers in one JVM may draw their connections from one estimated heap/direct-memory budget instead
+of partitioning fixed `maxConnections` values between them:
 
-Everything below is measured over the loopback, so read the ratios rather than the absolute rates.
+The runnable [shared-budget example](newa-example/src/main/java/io/github/green4j/newa/example/budget/SharedMemoryBudgetServers.java)
+starts one REST, file and WebSocket server on the same budget.
 
-- **REST**: about **2.9x** as many requests per second of server processor time, at a seventh of the
-  allocation per request, written the way the project writes ordinary code. At 20 000 req/s offered, p99 is
-  191 us against 627 us.
-- **WebSocket fan-out**: a higher sustained rate per subscription, and the gap widens with the number of
-  subscribers. From a hundred subscribers to a thousand newa goes from 250 000 to 300 000 events a second
-  while Spring's own handler falls from 200 000 to under 120 000 - 2 500 events a second per subscription
-  against 2 000, and 300 against 121.
-- **STOMP**: Spring's simple broker is the only subscription mechanism it ships, and it delivers an ordered
-  stream only with its outbound channel pinned to one thread, which caps it at 100 000 events a second
-  whatever the number of subscribers. Left at Boot's default pool it is faster and delivers a destination
-  out of order, which is not a subscription at all.
+```java
+ServerMemoryBudget memory = ServerMemoryBudget.builder()
+        .heapPercentage(70)                  // of Runtime.maxMemory()
+        .directMemoryPercentage(70)          // of Netty's effective direct-memory maximum
+        .build();
+
+RestServer.of(restApi)
+        .withMaxContentLength(256 * 1024)     // inbound: the largest body a client may upload
+        .withMemoryBudget(memory, 512 * 1024) // outbound: the largest answer a handler renders
+        .start(new NettyServerBuilder()
+                .port(9009)
+                .minConnections(10)           // optional guaranteed floor
+                .maxConnections(500));        // optional fairness ceiling
+
+FileServer.of(files)
+        .withChunkSize(32 * 1024)
+        .withMemoryBudget(memory)
+        .start(new NettyServerBuilder().port(9010).maxConnections(500));
+
+WsServer.of(wsApi)
+        .withMaxFramePayloadLength(16 * 1024) // inbound: the largest frame a session may send
+        .withMemoryBudget(memory, 16 * 1024)  // outbound: the largest frame this server publishes
+        .start(new NettyServerBuilder().port(9011).maxConnections(5_000));
+```
+
+The two sizes on a server are two different directions and nothing ties them together: a two-hundred-byte
+`GET` renders a megabyte of listing, and an upload endpoint answers it with `201`. Each is the size of a
+buffer this server may hold, and the numbers above are only what one deployment happened to measure.
+
+The same `ServerMemoryBudget` instance is the process-wide pool. A connection reserves the estimate derived
+from the final REST, file or WebSocket settings and returns it when it closes, so capacity which is not
+guaranteed follows traffic rather than belonging permanently to one port. `minConnections` and
+`maxConnections` are both optional (`0` leaves that bound unset): a floor reserves `min × estimate` when the
+server registers, while a ceiling remains an independent fairness limit. Admissions above the floor share
+the remainder, and registration fails if its floor does not fit the capacity remaining at that moment.
+
+This is admission accounting, not a memory sampler or an allocator limit. The percentages leave a safety
+margin, but the guarantee is only as accurate as the protocol estimates and application state supplied to
+it; `withAdditionalMemoryEstimate(heap, direct)` accounts for session, observer and custom-handler state a
+server cannot infer. A floor deliberately trades some of the pool's elasticity for guaranteed admissions.
+
+`ServerMemoryBudget.Builder.observer(...)` reports server registration/closure and every admission, refusal
+and release. Refusal events distinguish the local connection limit, heap, direct memory, both capacities and
+a closed registration; every event carries the server's `Registration`, current process reservations and
+server connection count. A ceiling refusal is reported as `CONNECTION_LIMIT`. The budget keeps no historical
+counters: logs, counters and gauges belong in the observer. Callbacks run outside the accounting lock, may be
+concurrent, and an exception from one is caught and logged at debug through Netty's `InternalLogger`: it
+cannot be allowed out, because an admission is already accounted for by the time its observer is told.
+
+### Integration tests
+
+What the budget promises can only be shown against a JVM which is able to run out of memory, so the checks
+for it live apart from the unit tests: `newa-all/src/intTest` runs the three servers in a container held to
+a real `--memory`, `-Xmx` and `-XX:MaxDirectMemorySize`, floods them from the test JVM, and asks whether the
+process refused connections or died. They need a Docker daemon and a JDK 17 or newer - `gradle build` runs
+neither them nor anything Docker-dependent.
+
+```shell
+./gradlew :newa-all:intTest                   # capacities from container limits, flood, one minute of soak
+./gradlew :newa-all:intTest -Psoak=10m        # a soak worth the name
+./gradlew :newa-all:intTest -PincludeControl  # and the same flood with no budget, which kills its container
+```
 
 ### Module documentation
 
 - [newa-rest/README.md](newa-rest/README.md) - HTTP REST routing and handlers on Netty.
 - [newa-websocket/README.md](newa-websocket/README.md) - WebSocket sessions, broadcasting and subscription channels on Netty.
 - [newa-performance/README.md](newa-performance/README.md) - the benchmarks the numbers above come from.
-
-`newa-common` and `newa-all` are documented by the two above and listed under [Binaries](#binaries).
-`newa-example` is not published - it holds twelve runnable demo servers, ten started with the helpers above
-and two with the Netty pipeline written out by hand.

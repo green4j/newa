@@ -9,18 +9,23 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.StdErrChannelErrorHandler;
+import io.github.green4j.newa.server.ConnectionObserver;
 import io.github.green4j.newa.server.DecoderFailureHandler;
 import io.github.green4j.newa.server.IdleConnectionHandler;
 import io.github.green4j.newa.server.NettyServer;
 import io.github.green4j.newa.server.NettyServerBuilder;
+import io.github.green4j.newa.server.ObservedHttpObjectAggregator;
+import io.github.green4j.newa.server.RefusedRequestObserver;
 import io.github.green4j.newa.server.RequestDeadlineHandler;
 import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.github.green4j.newa.server.ServerMemoryBudget;
+import io.github.green4j.newa.server.ServerMemoryEstimate;
+import io.github.green4j.newa.server.SingleHttpExchangeHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.HttpDecoderConfig;
-import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpObjectDecoder;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.cors.CorsConfig;
@@ -36,9 +41,9 @@ import java.util.function.Supplier;
  * {@link io.github.green4j.newa.rest.files.FileServer} are the two, and they differ only in what stands at
  * the end:
  * <pre>
- * Client --&gt; [IdleConnectionHandler] --&gt; HttpServerCodec --&gt; HttpObjectAggregator --&gt;
- *            [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt; DecoderFailureHandler --&gt;
- *            [CorsHandler] --&gt; ... whatever the server answers with
+ * Client --&gt; [IdleConnectionHandler] --&gt; HttpServerCodec --&gt; ObservedHttpObjectAggregator --&gt;
+ *            SingleHttpExchangeHandler --&gt; [RequestDeadlineHandler] --&gt; [ResponseDeadlineHandler] --&gt;
+ *            DecoderFailureHandler --&gt; [CorsHandler] --&gt; ... whatever the server answers with
  * </pre>
  * That head is assembled here so that the two cannot drift apart in it, and the tail is
  * {@link #initTail(ChannelPipeline)} - the one method a server of this kind has to write, and the one place
@@ -55,8 +60,9 @@ import java.util.function.Supplier;
  */
 public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     /**
-     * How large the <b>body</b> of a request may be. Enough for a form or a JSON body; a server which uploads
-     * needs more, and one which never reads a body wants less.
+     * How large the <b>body</b> of a request may be on a server which does not say otherwise - a file
+     * server, whose requests are {@code GET}s with nothing in them. A REST api is answered by
+     * {@link RestServer#DEFAULT_MAX_CONTENT_LENGTH}, which is where a body is expected.
      *
      * <p>The body and nothing else: the request line and the headers are bounded by the codec instead -
      * {@link #withMaxInitialLineLength(int)} and {@link #withMaxHeaderSize(int)} - and nothing here bounds a
@@ -102,6 +108,8 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     private HttpErrorHandler errorHandler = new JsonErrorHandler();
     private ChannelErrorHandler channelErrorHandler = new StdErrChannelErrorHandler();
     private HttpObserverFactory observers;
+    private RefusedRequestObserver refusedRequests;
+    private ConnectionObserver connectionObserver;
     private CorsConfig cors;
     private int maxContentLength = DEFAULT_MAX_CONTENT_LENGTH;
     private int maxInitialLineLength = DEFAULT_MAX_INITIAL_LINE_LENGTH;
@@ -110,6 +118,9 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
     private int requestDeadlineMs = DEFAULT_DEADLINE_MS;
     private int responseDeadlineMs = DEFAULT_DEADLINE_MS;
     private boolean compression;
+    private ServerMemoryBudget memoryBudget;
+    private long additionalHeapBytesPerConnection;
+    private long additionalDirectMemoryBytesPerConnection;
 
     /**
      * Compresses what this server answers with. Off by default: it costs CPU per response, and a payload
@@ -185,8 +196,11 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
 
     /**
      * Answers the browser's cross-origin protocol - the preflight and the {@code Access-Control-} headers -
-     * with Netty's own {@link CorsHandler}. Nothing is answered without one, which is right for a server a
-     * browser never calls directly and wrong for one it does.
+     * with Netty's own {@link CorsHandler}. Without one a cross-origin request is still served, and a simple
+     * {@code GET} or {@code POST} has had its effect by the time the response is written; what is missing is
+     * the {@code Access-Control-} headers on it, so the browser refuses to let the page read the answer, and
+     * a request which needs a preflight is not sent at all. That is right for a server a browser never calls
+     * directly and wrong for one it does.
      * <pre>{@code
      * RestServer.of(api)
      *           .withCors(CorsConfigBuilder.forOrigin("https://app.example.com")
@@ -243,12 +257,59 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
      */
     public S withObservers(final HttpObserverFactory observers) {
         this.observers = observers;
+        this.refusedRequests = observers == null ? null : new RefusedRequestReporter(observers);
         return self();
     }
 
     /**
-     * @param bytes the body of a request may be, {@link #DEFAULT_MAX_CONTENT_LENGTH} by default. Headers are
-     *              not counted in it, and a response is not bounded by it at all.
+     * Sets where the connections this server closes by a rule of its own are reported - an idle timeout, a
+     * request or response deadline, a connection limit, a client pipelining too deep. None of them belongs
+     * to a request, so none reaches {@link #withObservers(HttpObserverFactory)}, and all are silent on the
+     * wire. Handed to the bootstrap's connection limit too, so one observer covers the whole server.
+     *
+     * @param observer told about them, null to say nothing. One serves the whole server and must not block.
+     * @return this builder.
+     */
+    public S withConnectionObserver(final ConnectionObserver observer) {
+        this.connectionObserver = observer;
+        return self();
+    }
+
+    /**
+     * Adds application-owned state which the built-in estimate cannot see: observer fields, custom handler
+     * state, buffers retained by an application, or work mounted behind this server.
+     *
+     * @param heapBytesPerConnection additional estimated heap bytes per connection
+     * @param directMemoryBytesPerConnection additional estimated direct-memory bytes per connection
+     * @return this builder
+     */
+    public S withAdditionalMemoryEstimate(final long heapBytesPerConnection,
+                                          final long directMemoryBytesPerConnection) {
+        if (heapBytesPerConnection < 0) {
+            throw new IllegalArgumentException(
+                    "heapBytesPerConnection must not be negative: " + heapBytesPerConnection);
+        }
+        if (directMemoryBytesPerConnection < 0) {
+            throw new IllegalArgumentException(
+                    "directMemoryBytesPerConnection must not be negative: "
+                            + directMemoryBytesPerConnection);
+        }
+        this.additionalHeapBytesPerConnection = heapBytesPerConnection;
+        this.additionalDirectMemoryBytesPerConnection = directMemoryBytesPerConnection;
+        return self();
+    }
+
+    /**
+     * Sets how large the body of a request may be - and, since this server aggregates, the largest buffer
+     * it holds at once. A body past it is answered {@code 413} and the connection closed.
+     *
+     * <p>Nothing inflates a request body: {@link #withCompression()} is outbound only. A decompressor added
+     * through {@link #withHandler(Supplier)} lands behind the aggregator, so this would then bound the
+     * compressed body alone and the inflated one needs a maximum allocation of its own.
+     *
+     * @param bytes the body of a request may be, {@link #DEFAULT_MAX_CONTENT_LENGTH} by default and
+     *              {@link RestServer#DEFAULT_MAX_CONTENT_LENGTH} on a REST server. Headers are not counted
+     *              in it, and a response is not bounded by it at all.
      * @return this builder.
      */
     public S withMaxContentLength(final int bytes) {
@@ -356,8 +417,26 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
      * @throws InterruptedException if the calling thread is interrupted while binding.
      */
     public final NettyServer start(final NettyServerBuilder bootstrap) throws InterruptedException {
+        if (memoryBudget != null) {
+            bootstrap.memoryBudget(memoryBudgetName(), memoryBudget, memoryEstimate(bootstrap));
+        }
+        if (connectionObserver != null) {
+            // the connection limit lives on the bootstrap, in front of the pipeline assembled here
+            bootstrap.connectionObserver(connectionObserver);
+        }
         return bootstrap.childHandler(pipeline()).start();
     }
+
+    /**
+     * @return the name this kind of server uses in memory-budget statistics
+     */
+    protected abstract String memoryBudgetName();
+
+    /**
+     * @param bootstrap carrying the final transport settings
+     * @return the estimated memory reserved by one connection
+     */
+    protected abstract ServerMemoryEstimate memoryEstimate(NettyServerBuilder bootstrap);
 
     /**
      * Whatever this server answers with, added behind the head every one of them shares.
@@ -394,6 +473,33 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
         return compression;
     }
 
+    protected final int maxContentLength() {
+        return maxContentLength;
+    }
+
+    protected final int maxInitialLineLength() {
+        return maxInitialLineLength;
+    }
+
+    protected final int maxHeaderSize() {
+        return maxHeaderSize;
+    }
+
+    protected final long additionalHeapBytesPerConnection() {
+        return additionalHeapBytesPerConnection;
+    }
+
+    protected final long additionalDirectMemoryBytesPerConnection() {
+        return additionalDirectMemoryBytesPerConnection;
+    }
+
+    protected final void setMemoryBudget(final ServerMemoryBudget budget) {
+        if (budget == null) {
+            throw new IllegalArgumentException("A server memory budget is required");
+        }
+        this.memoryBudget = budget;
+    }
+
     /**
      * Adds the handlers {@link #withHandler(Supplier)} was given, in the order they were added, wherever
      * the tail being assembled has decided they belong.
@@ -410,31 +516,41 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
         if (idleTimeoutMs > 0) {
             // first, in front of the codec: what it measures is traffic, not messages, and a decoder still
             // waiting for the rest of one has nothing to hand on
-            pipeline.addLast(new IdleConnectionHandler(idleTimeoutMs));
+            pipeline.addLast(new IdleConnectionHandler(idleTimeoutMs, connectionObserver));
         }
 
         pipeline.addLast(new HttpServerCodec(new HttpDecoderConfig()
                 .setMaxInitialLineLength(maxInitialLineLength)
                 .setMaxHeaderSize(maxHeaderSize)));
-        pipeline.addLast(new HttpObjectAggregator(maxContentLength, true));
+        // Netty's aggregator answers an oversized body from here, in front of everything which would have
+        // reported it - which is why it is this one, which says so
+        pipeline.addLast(new ObservedHttpObjectAggregator(maxContentLength, true, refusedRequests));
+        // directly behind the aggregator, so that what it counts is whole requests and whole responses:
+        // it holds this connection to one unfinished response, replaying a request the codec had already
+        // decoded once that response is written
+        pipeline.addLast(new SingleHttpExchangeHandler(connectionObserver));
 
         if (requestDeadlineMs > 0) {
             // behind the aggregator, which is the only place this rule can be expressed at all: what it has
             // to tell apart is bytes which became a request from bytes which did not, and in front of a
             // decoder every read looks the same
-            pipeline.addLast(new RequestDeadlineHandler(requestDeadlineMs));
+            pipeline.addLast(new RequestDeadlineHandler(requestDeadlineMs, connectionObserver));
         }
 
         if (responseDeadlineMs > 0) {
             // in front of everything which answers, so that every response passes through it, and behind the
             // codec, so that what it counts is the payload rather than the frame put around it
-            pipeline.addLast(new ResponseDeadlineHandler(responseDeadlineMs));
+            pipeline.addLast(new ResponseDeadlineHandler(
+                    responseDeadlineMs,
+                    ResponseDeadlineHandler.DEFAULT_UNIT,
+                    connectionObserver
+            ));
         }
 
         // in front of everything which answers, so that nothing behind it has to ask whether the request it
         // was given is a real one: what the codec refused arrives as a substitute request, and would be
         // answered 404 by the api rather than 414 or 431 by anybody
-        pipeline.addLast(new DecoderFailureHandler());
+        pipeline.addLast(new DecoderFailureHandler(refusedRequests));
 
         if (cors != null) {
             // in front of everything which answers: a handler which writes its response head from its own

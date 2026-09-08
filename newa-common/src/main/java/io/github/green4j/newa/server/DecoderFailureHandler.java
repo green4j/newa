@@ -16,6 +16,7 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.TooLongHttpHeaderException;
@@ -45,8 +46,24 @@ import io.netty.util.ReferenceCountUtil;
  * It goes behind the aggregator - a refusal is a message like any other, and in front of a decoder there is
  * nothing to see - and in front of everything which answers, so no handler downstream has to ask whether the
  * request it was given was a real one.
+ * <p>
+ * Standing in front of everything which answers means standing in front of everything which reports, which
+ * is why it carries a {@link RefusedRequestObserver}.
  */
 public class DecoderFailureHandler extends ChannelInboundHandlerAdapter {
+    private final RefusedRequestObserver observer;
+
+    public DecoderFailureHandler() {
+        this(null);
+    }
+
+    /**
+     * @param observer told about each refused request, or null to say nothing.
+     */
+    public DecoderFailureHandler(final RefusedRequestObserver observer) {
+        this.observer = observer;
+    }
+
     @Override
     public void channelRead(final ChannelHandlerContext ctx,
                             final Object msg) throws Exception {
@@ -62,7 +79,7 @@ public class DecoderFailureHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        refuse(ctx, msg, statusOf(cause));
+        refuse(ctx, msg, statusOf(cause), cause);
     }
 
     private static HttpResponseStatus statusOf(final Throwable cause) {
@@ -75,11 +92,10 @@ public class DecoderFailureHandler extends ChannelInboundHandlerAdapter {
         return HttpResponseStatus.BAD_REQUEST;
     }
 
-    private static void refuse(final ChannelHandlerContext ctx,
-                               final Object msg,
-                               final HttpResponseStatus status) {
-        ReferenceCountUtil.release(msg);
-
+    private void refuse(final ChannelHandlerContext ctx,
+                        final Object msg,
+                        final HttpResponseStatus status,
+                        final Throwable cause) {
         final FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1, // the refused request has whatever version the substitute was built
                 status,               // with, and answering in it would be answering the substitute
@@ -89,5 +105,14 @@ public class DecoderFailureHandler extends ChannelInboundHandlerAdapter {
         response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
 
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+
+        // between the answer and the release: the observer cannot hold the answer back, and what it is
+        // handed is still whole. A response a decoder refused is not this server's to report
+        if (msg instanceof HttpRequest) {
+            final HttpRequest refused = (HttpRequest) msg;
+            Observed.by(observer, told -> told.onRequestRefused(ctx, refused, status, cause));
+        }
+
+        ReferenceCountUtil.release(msg);
     }
 }
