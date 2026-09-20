@@ -155,6 +155,92 @@ margin, but the guarantee is only as accurate as the protocol estimates and appl
 it; `withAdditionalMemoryEstimate(heap, direct)` accounts for session, observer and custom-handler state a
 server cannot infer. A floor deliberately trades some of the pool's elasticity for guaranteed admissions.
 
+#### Set the process limits first
+
+newa is a library in the application's JVM, not a server binary with its own launcher. Heap and direct-memory
+limits therefore belong on the command which starts that JVM, before `-jar` or the main class, or in the
+equivalent JVM-options field of the service manager. `JAVA_TOOL_OPTIONS` is a JVM-recognised way to supply
+them where the command is not exposed; `JAVA_OPTS` is only effective when a particular launch script reads
+it.
+
+For a process with fixed limits, for example:
+
+```shell
+java -Xmx512m \
+     -XX:MaxDirectMemorySize=256m \
+     -Dio.netty.maxDirectMemory=268435456 \
+     -XX:+ExitOnOutOfMemoryError \
+     -jar application.jar
+```
+
+In a container, either keep an explicit `-Xmx` or derive the heap from the cgroup limit:
+
+```shell
+docker run --memory=1g application-image \
+  java -XX:MaxRAMPercentage=50 \
+       -XX:MaxDirectMemorySize=256m \
+       -Dio.netty.maxDirectMemory=268435456 \
+       -XX:+ExitOnOutOfMemoryError \
+       -jar application.jar
+```
+
+`-Xmx` is the heap ceiling. `-Xms` only chooses its initial size. Without an explicit `-Xmx`, a
+container-aware JVM applies `MaxRAMPercentage` to the cgroup limit; `ServerMemoryBudget` sees the result as
+`Runtime.maxMemory()`. It does not read cgroups itself.
+
+Direct memory has two related but independent controls. `-XX:MaxDirectMemorySize` is the JVM's direct-buffer
+limit and is what Netty detects by default. A positive `io.netty.maxDirectMemory` sets Netty's own limit and
+the value returned by `PlatformDependent.maxDirectMemory()`; its value is a raw byte count, so the two
+options above deliberately express the same 256 MiB in different forms. Setting them alike makes the
+admission base unambiguous, but does not turn them into one process-wide off-heap limit: JDK direct buffers,
+Netty allocations and other native allocations may use different paths.
+
+The container or service-manager limit is the hard bound on the whole process. It must cover the heap, every
+direct/native pool, metaspace, code cache, thread stacks and allocator slack. In particular, `-Xmx` does not
+cover the off-heap copies and transport backlog of responses, and a container sized as heap plus one nominal
+direct limit can still be killed for RSS.
+
+The JVM and Netty read these limits at startup. `ServerMemoryBudget.builder()` captures its two maximums,
+then `build()` applies `heapPercentage` and `directMemoryPercentage` (70% each by default). Changing process
+limits requires a restart; changing the percentages requires a new budget and re-registration of its
+servers. Pass the same budget object to every server which is meant to share one process capacity.
+
+#### Guarantee and known limits
+
+The precise guarantee is deliberately narrow: for registrations in one `ServerMemoryBudget`, the sum of
+their active-connection estimates and unused guaranteed floors never exceeds that budget's heap or
+direct-memory capacity. It does **not** guarantee that actual heap, direct memory or RSS stays below a JVM or
+container limit:
+
+- Admission uses configured per-connection estimates, not current allocation. Memory already in use is not
+  sampled, and an admitted connection is not rechecked or evicted if it later grows.
+- Only registrations sharing this exact budget object are counted. Another budget instance, an unbudgeted
+  server, application caches, other libraries and allocations made before or outside a connection all
+  consume the same process without reserving from it.
+- The REST response size and WebSocket outbound frame passed to `withMemoryBudget` are estimates, not output
+  limits. A handler may produce more. The built-in inbound request and frame limits are hard bounds only for
+  the built-in pipeline stages which enforce them.
+- Protocol estimates assume the pipeline assembled by the corresponding server helper. In particular, a
+  hand-written HTTP pipeline without `SingleHttpExchangeHandler` may serve several unfinished exchanges
+  while its connection is charged for the helper's bounded depth.
+- Built-in estimates cannot see application session/observer state, retained buffers, custom-handler
+  staging, a custom decompressor's inflated body or an application which collects WebSocket fragments.
+  Include their worst per-connection cost with `withAdditionalMemoryEstimate`.
+- Per-worker render buffers, event-loop and global state, and Netty pool chunks, arenas and fragmentation do
+  not rise and fall with budget leases. They need explicit headroom; a small direct budget does not prevent
+  the pooled allocator from reserving memory in multi-megabyte chunks.
+- The direct capacity is Netty's effective direct-memory maximum, not a ceiling on all off-heap/native
+  memory. Metaspace, code cache, stacks, JNI/native allocations and JVM direct allocations can still exhaust
+  the process or its cgroup.
+- `-XX:+ExitOnOutOfMemoryError` handles JVM out-of-memory failures, but is not a substitute for admission and
+  does not make a cgroup OOM kill graceful; Netty direct-allocation failures also need to reach the
+  application's fatal-error policy.
+
+Keep safety margin in all three layers, expose `memory.snapshot()` and the budget observer for accounting and
+refusals, and monitor actual heap, direct memory and container RSS separately. Validate the estimates under
+the deployment's worst request, response, frame and slow-reader load. The REST and WebSocket module guides
+spell out their protocol-specific terms and blind spots.
+
 `ServerMemoryBudget.Builder.observer(...)` reports server registration/closure and every admission, refusal
 and release. Refusal events distinguish the local connection limit, heap, direct memory, both capacities and
 a closed registration; every event carries the server's `Registration`, current process reservations and
@@ -169,7 +255,9 @@ What the budget promises can only be shown against a JVM which is able to run ou
 for it live apart from the unit tests: `newa-all/src/intTest` runs the three servers in a container held to
 a real `--memory`, `-Xmx` and `-XX:MaxDirectMemorySize`, floods them from the test JVM, and asks whether the
 process refused connections or died. They need a Docker daemon and a JDK 17 or newer - `gradle build` runs
-neither them nor anything Docker-dependent.
+neither them nor anything Docker-dependent. They demonstrate capacity detection, refusal under one
+worst-sized-body flood and accounting under a soak; they do not prove that an application's custom
+pipelines, state or workload fit their estimates.
 
 ```shell
 ./gradlew :newa-all:intTest                   # capacities from container limits, flood, one minute of soak

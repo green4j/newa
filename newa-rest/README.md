@@ -439,13 +439,19 @@ limit the process is dead, by `OutOfMemoryError` or by the cgroup killer. So bou
 largest exchange you are willing to serve, and refuse what does not fit:
 
 ```
-peak  ~  N x (largest request + largest response)     in flight, direct
-       + workers x render buffer                      per event loop, max(64 KB, largest response x 1.5)
-N     =  (budget - workers x render buffer) / (largest request + largest response)
+direct / connection  ~  2 x largest request + largest ordinary response
+                        or the larger configured chunked-response backlog
+heap / connection    ~  2 x (request line + headers) + response estimate + application state
+render-buffer heap   ~  workers x max(64 KB, recently rendered response x 1.5)
+N                    <= min(heap capacity / heap estimate, direct capacity / direct estimate)
 ```
 
-At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the render buffers are 4 x 12 MB =
-48 MB, leaving 464 MB, so `N` is about 46 exchanges in flight. What enforces it:
+At 2 MB of request and 8 MB of ordinary response, with neither compression nor a larger chunked backlog, one
+connection is charged about 12 MB of direct memory. A 358 MB direct admission capacity (70% of a 512 MB
+Netty maximum) therefore admits about 29 before the heap side is considered. Four workers may meanwhile
+retain about 4 x 12 MB = 48 MB of heap in their render buffers after responses of that size. The estimator
+charges a rendered response to every admitted connection deliberately conservatively, but the per-worker
+residue can outlive those leases and still needs process headroom. What enforces the terms:
 
 - **The request body** - `HttpObjectAggregator` caps it and nothing else does; a body past the cap is
   answered `413` and the connection closed. A REST server caps it at 1 MB, a file server at 64 KB, since a
@@ -486,13 +492,19 @@ At 2 MB of request, 8 MB of response, 4 workers and a 512 MB direct budget: the 
   ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
   ```
 
-- **Then size the process for it.** The limit has to cover heap plus direct memory plus metaspace, code
-  cache and thread stacks:
+- **Then size the process for it.** The limit has to cover heap plus every direct/native pool, metaspace,
+  code cache, thread stacks and allocator slack. For one workload that might be:
 
   ```
   -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
   -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError
   ```
+
+  These are JVM-launch options, not `RestServer` settings or defaults: use `-Xmx` instead of
+  `MaxRAMPercentage` when the heap should not be derived from a container limit, and calculate the direct
+  number from this deployment's exchange sizes. See the root guide to
+  [setting the process limits](../README.md#set-the-process-limits-first), including why the JVM and Netty
+  direct-memory options are related but do not form one limit on all off-heap memory.
 
 Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
 
@@ -525,10 +537,10 @@ FileServer.of(files)
                 .maxConnections(500));
 ```
 
-The percentages are applied to `Runtime.maxMemory()` and Netty's effective direct-memory maximum once, when
-the budget is built. Every active connection is covered by both estimates atomically; whichever capacity
-would be crossed refuses admission. Closing returns both reservations, so capacity which is not guaranteed
-to a server follows traffic between them.
+`ServerMemoryBudget.builder()` captures `Runtime.maxMemory()` and Netty's effective direct-memory maximum;
+`build()` applies the percentages. Every active connection is covered by both estimates atomically;
+whichever capacity would be crossed refuses admission. Closing returns both reservations, so capacity which
+is not guaranteed to a server follows traffic between them.
 
 For REST the estimate includes the configured request maximum twice - the request being answered and the
 one the exchange gate may be holding behind it - and the larger of the ordinary response estimate passed
@@ -542,6 +554,40 @@ estimator adds the source and a conservative encoded-size bound when built-in co
 Staging introduced by custom handlers still belongs in `withAdditionalMemoryEstimate`.
 `withAdditionalMemoryEstimate` adds observer, handler and application-owned memory which neither server can
 derive.
+
+### Where the REST and file estimates can be exceeded
+
+The budget guarantees only that the sum of these estimates fits its capacities; it does not turn them into
+allocation limits. In particular:
+
+- `maxResponseSizeEstimate` does not cap a REST response. A handler, output transformation or error path
+  which renders more holds the real response while admission still charges the estimate. Enforce an
+  application output limit or include the worst case in the estimate.
+- `withMaxContentLength` caps the body held by the built-in aggregator. A custom decompressor placed after it
+  sees a bounded compressed body but may create a larger inflated one; give that decompressor its own
+  allocation limit and account for the coexisting buffers.
+- The estimate assumes the helper's `SingleHttpExchangeHandler`, which limits a connection to one unfinished
+  response and one request held behind it. A hand-written pipeline without that gate can hold more exchanges
+  than the connection was charged for.
+- `ResponseChunks.maxOpenCursors` is unlimited by default and counts the pull handlers only.
+  `PushedResponseBody` and a `ChunkedInput` handed directly to `Result.ok` are outside it. Set the pull cap,
+  independently limit pushed/in-flight producers with connection or application limits, and include the
+  state each suspended source retains.
+- Custom handlers, observers, asynchronous work, retained buffers and application objects are invisible.
+  Put their worst per-connection heap and direct cost in `withAdditionalMemoryEstimate`. Global caches and
+  other process state are not per-connection and instead need room outside the budget percentages.
+- JSON and text render buffers are per worker, not per connection. They can hold 1.5 times a recently
+  rendered large response until their observation window expires and never shrink below the configured
+  base. `newa.rest.baseBufferSize` and `newa.rest.bufferObservationWindowMillis` control that residue, not
+  the peak of a response being rendered.
+- Direct allocations use a pooled allocator whose chunks, arenas and fragmentation do not follow connection
+  leases byte for byte. The file estimate covers the built-in watermark, read-ahead chunks and compression
+  staging, but allocator slack and any custom file pipeline still need headroom.
+
+Consequently, a released lease does not say that all memory used by that connection has immediately returned
+to the OS. Observe budget snapshots as admission accounting, monitor actual JVM/direct/RSS figures
+separately, and load-test the largest request, response, chunked backlog and slow-reader case. The common
+[guarantee and known limits](../README.md#guarantee-and-known-limits) apply to every server in the process.
 
 `minConnections` and `maxConnections` are both optional (`0` leaves that bound unset). A minimum reserves
 `minConnections × estimate` when the server registers, guaranteeing that many admissions but making the

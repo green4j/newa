@@ -695,23 +695,29 @@ sessions  = (budget - peak) / per-session overhead       what is left over caps 
 ```
 
 The example above - 100 sessions, 2 000 x 200 B, 100 ms - needs 40 KB per session and 4 MB in the worst case.
-What enforces it - the library bounds what one session may hold, not how many sessions there are:
+The watermark bounds one session's transport backlog and `maxConnections` bounds how many such sessions the
+server admits:
 
 ```java
-bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
-        new WriteBufferWaterMark(20 * 1024, 40 * 1024));              // low = high / 2
-
-if (open.incrementAndGet() > 100) { ch.close(); return; }             // AtomicInteger open
-ch.closeFuture().addListener(f -> open.decrementAndGet());
+NettyServerBuilder bootstrap = new NettyServerBuilder()
+        .writeBufferWaterMark(20 * 1024, 40 * 1024)                   // low = high / 2
+        .maxConnections(100);
 ```
 
-Outbound frames live off-heap, where `-Xmx` does not bound them and the cgroup limit does, so the limit has
-to cover heap plus direct memory plus metaspace, code cache and thread stacks:
+Outbound frames live off-heap, where `-Xmx` does not bound them and the cgroup limit does, so the process
+limit has to cover heap, every direct/native pool, metaspace, code cache, thread stacks and allocator slack.
+For this workload that might be:
 
 ```
 -XX:MaxRAMPercentage=50 -XX:MaxDirectMemorySize=64m
 -Dio.netty.maxDirectMemory=67108864 -XX:+ExitOnOutOfMemoryError
 ```
+
+These are JVM-launch options, not WebSocket defaults. Use `-Xmx` when the heap should not be derived from a
+container limit, and derive the direct value from the disjoint-stream case rather than copying 64 MiB into
+another deployment. The root guide explains
+[how the process limits are set](../README.md#set-the-process-limits-first) and why the JVM and Netty
+direct-memory controls do not cover all off-heap memory between them.
 
 Refusing a connection is the cheap failure.
 
@@ -747,6 +753,33 @@ and the buffer it inflates into, plus the outbound source and a conservative enc
 A message costs one frame however many frames it is - nothing here collects the fragments. Collecting them
 yourself, staging added by custom handlers, retained frames and session state belong in
 `withAdditionalMemoryEstimate`.
+
+### Where the WebSocket estimate can be exceeded
+
+The budget reserves the configured worst path when a connection is admitted; it does not police what the
+session allocates afterwards:
+
+- `withMaxFramePayloadLength` is a hard limit on each inbound frame in the built-in decoder, not on a
+  fragmented message an application chooses to assemble. The assembled message and any retained fragments
+  need their own limit and an additional estimate.
+- The outbound frame value passed to `withMemoryBudget` is not a send limit. The high watermark may be
+  crossed by one write, so the built-in estimate includes one outbound frame beyond it; sending a larger
+  frame than estimated or queuing messages in application code invalidates that assumption.
+- Built-in compression accounts for the arriving frame and the bounded buffer it inflates into, plus an
+  encoded outbound bound. Custom codecs, transformations, retained `ByteBuf`s and other pipeline staging are
+  not visible and belong in `withAdditionalMemoryEstimate`.
+- Subscription, receiver, observer and user-data state can differ per session. Account its worst
+  per-connection heap/direct cost explicitly; shared publication buffers may reduce actual use, but the
+  budget must remain safe for disjoint lagging streams.
+- Netty channel/session objects and pooled-allocator chunks, arenas and fragmentation are not reclaimed in
+  lockstep with a connection lease. Leave process headroom even when the calculated watermark backlog fits
+  exactly.
+
+Use `maxConnections` as the independent session ceiling and `minConnections` only for a floor the shared
+budget can really reserve. Treat snapshots and observer events as admission gauges, while monitoring actual
+heap, direct memory and container RSS separately. Test the largest inbound frame, outbound frame, fragmented
+message policy and slowest allowed subscriber; the common
+[guarantee and known limits](../README.md#guarantee-and-known-limits) apply as well.
 
 Pass the same `ServerMemoryBudget` object to every server in the process. A WebSocket connection then competes
 by its estimated bytes rather than counting as the same-sized slot as a REST or file connection. Its local

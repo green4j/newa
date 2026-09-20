@@ -14,18 +14,31 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * A process-wide admission budget shared by any number of servers. Each accepted connection reserves the
- * estimate of its server, and gives it back when the channel closes. A server may reserve a guaranteed
- * connection floor when it registers. A connection is refused when either the heap or the direct-memory
- * capacity would be crossed.
+ * An admission budget shared by any number of servers in one process. Each accepted connection reserves the
+ * estimate of its server and gives it back when the channel closes. A server may reserve a guaranteed
+ * connection floor when it registers. For registrations in this instance, the sum of active estimates and
+ * unused guaranteed floors never crosses either capacity.
  * <p>
- * The capacities are percentages of the maxima visible to this JVM: {@link Runtime#maxMemory()} for heap and
- * Netty's estimate of the effective direct-memory limit for direct buffers. The unbudgeted percentages are
- * where application state, allocator slack, metaspace and estimation error belong.
+ * {@link #builder()} captures the maxima visible at that call: {@link Runtime#maxMemory()} for heap and
+ * {@link PlatformDependent#maxDirectMemory()} for Netty direct memory. The former follows an explicit
+ * {@code -Xmx}, or the JVM's container ergonomics such as {@code -XX:MaxRAMPercentage}; the latter follows a
+ * positive, raw-byte {@code -Dio.netty.maxDirectMemory}, or Netty's estimate of the JVM
+ * {@code -XX:MaxDirectMemorySize}. This class does not read cgroups. Their memory limit remains the hard
+ * bound on heap, all direct and native pools, metaspace, code cache and thread stacks together.
  * <p>
- * This does not promise that an estimate is right and does not sample current memory use. It makes the
- * arithmetic a deployment would otherwise turn into one fixed limit reusable: a slot released by a REST
- * server may immediately be consumed by a file or WebSocket server with a different per-connection cost.
+ * This is not a memory sampler or an allocator limit. It does not subtract memory already used, recheck a
+ * connection which grows after admission, or account for another budget instance, an unregistered server,
+ * global application state, other libraries, allocator pooling and fragmentation, or native memory outside
+ * Netty's effective direct limit. A response or outbound-frame estimate is not by itself a hard output
+ * limit. An estimate also relies on the concurrency bounds of the pipeline it was derived from. Application
+ * state, retained buffers and custom pipeline staging have to be included in the server's additional
+ * estimate; process-global costs and estimation error need headroom outside the percentages.
+ * <p>
+ * Consequently this class does not promise that actual heap, direct memory or process RSS stays under its
+ * external limit. Its snapshots and observer events report admission accounting, not allocation. The value
+ * of the arithmetic is that a slot released by a REST server may immediately be consumed by a file or
+ * WebSocket server with a different per-connection cost while all registrations on this instance remain
+ * within their configured estimates.
  */
 public final class ServerMemoryBudget {
     private static final InternalLogger LOGGER =
@@ -34,6 +47,12 @@ public final class ServerMemoryBudget {
     private static final int FULL_PERCENTAGE = 100;
     private static final int DEFAULT_PERCENTAGE = 70;
 
+    /**
+     * Captures the JVM heap and Netty direct-memory maxima which the returned builder will divide. Later
+     * changes to deployment limits are not reflected in this builder or a budget built from it.
+     *
+     * @return a builder over the maxima visible at this call
+     */
     public static Builder builder() {
         return new Builder(
                 Runtime.getRuntime().maxMemory(),
