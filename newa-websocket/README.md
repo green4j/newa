@@ -61,9 +61,9 @@ NettyServer server = WsServer.start(api, "10.0.0.5", 9010);    // on one network
 NettyServer server = WsServer.start(api, ANY_HOST, 9010);      // on every interface
 ```
 
-**A server binds the loopback until it is told otherwise** - the safe default, since a session this end
-never meant to offer is one nobody can open. Naming an address, or `NettyServerBuilder.ANY_HOST` for every
-interface, is what makes it reachable; a null host is refused rather than read as either.
+**A server binds the loopback until told otherwise.** Making it reachable requires an explicit address or
+`NettyServerBuilder.ANY_HOST` for every interface. A null host is refused instead of being interpreted as
+either.
 
 Past that there are **two builders**, and they are about two different things. `WsServer` is what runs
 *above* the socket; `NettyServerBuilder` is the socket itself. What belongs to the api - the path, the ping
@@ -112,9 +112,8 @@ NettyServerBuilder bootstrap = new NettyServerBuilder()
 NettyServer server = ws.start(bootstrap);
 ```
 
-`maxConnections` bounds the file descriptors this server holds, which a fan-out server is the likeliest of
-these to run out of: a session costs one for as long as it is subscribed. It is off unless a number is given -
-that number belongs to the deployment - and a connection above it is closed as it arrives, counted by
+`maxConnections` bounds the server's file descriptors; a subscribed session holds one for its lifetime. It
+is off until the deployment sets it. A connection above the limit is closed on arrival, counted by
 `ConnectionLimitHandler.refused()` and told nothing.
 
 **One port for both.** `withHandler` puts a handler *behind* `WsApiHandler`, which is where a request that is
@@ -125,12 +124,10 @@ whatever you add stands a `HandshakeOnlyHandler`, which closes a connection noth
 [Errors](#errors).
 
 What that api serves is served one exchange at a time, by the same `SingleHttpExchangeHandler` the REST
-servers have and for the same reasons - see [Memory budget](../newa-rest/README.md#memory-budget). It sits in
-front of the handshake here as well as in front of your handlers, which is the placement the one-port
-composition needs: a handshake sent without waiting for the answer to a request in front of it would
-otherwise reach the handshaker mid-response, and an upgrade takes the aggregator out of the pipeline and
-swaps the response encoder. Held instead, it is answered after that response and the connection upgrades as
-any other would. A `101` retires the handler: what follows one is frames, and a frame is nobody's exchange.
+servers have; see [Connection concurrency and pipelining](../newa-rest/README.md#connection-concurrency-and-pipelining).
+It sits in front of the handshake and custom handlers. Otherwise a pipelined handshake could reach the
+handshaker mid-response, just as the upgrade removes the aggregator and swaps the response encoder. The gate
+holds it until the response finishes, then retires after `101`, when frames replace HTTP exchanges.
 
 `NettyServer` is what you get back, an `AutoCloseable` and nothing more: `port()`, `channel()`, `close()`,
 and `workerGroup()` - which is where a periodic broadcast belongs, on the loops the sessions it writes to
@@ -231,8 +228,8 @@ after it, so `withMaxContentLength` is not this and this is not it.
 frames is handed over fragment by fragment and nothing here collects them, so a long message costs what a
 short one does. An api which collects them itself is what bounds that - the size it accepts is its own
 policy, and `last` is what it counts with. This is why an inbound limit means a frame here and a whole
-request in [newa-rest](../newa-rest/README.md#memory-budget): each bounds the largest buffer its server
-holds at once, and an HTTP server holds the message.
+request in [newa-rest](../newa-rest/README.md#the-request-body): each bounds the largest buffer its server
+holds at once, and an HTTP server holds the whole request.
 
 Neither number is what an outbound frame is measured against.
 
@@ -706,20 +703,10 @@ NettyServerBuilder bootstrap = new NettyServerBuilder()
 
 Outbound frames live off-heap, where `-Xmx` does not bound them and the cgroup limit does, so the process
 limit has to cover heap, every direct/native pool, metaspace, code cache, thread stacks and allocator slack.
-For this workload that might be:
-
-```
--XX:MaxRAMPercentage=50 -XX:MaxDirectMemorySize=64m
--Dio.netty.maxDirectMemory=67108864 -XX:+ExitOnOutOfMemoryError
-```
-
-These are JVM-launch options, not WebSocket defaults. Use `-Xmx` when the heap should not be derived from a
-container limit, and derive the direct value from the disjoint-stream case rather than copying 64 MiB into
-another deployment. The root guide explains
-[how the process limits are set](../README.md#set-the-process-limits-first) and why the JVM and Netty
-direct-memory controls do not cover all off-heap memory between them.
-
-Refusing a connection is the cheap failure.
+Derive the direct value from the disjoint-stream case rather than copying another deployment's number. The
+[process-limit guide](../docs/memory-budget.md#set-the-process-limits-first) explains `-Xmx`,
+`MaxRAMPercentage`, the JVM and Netty direct-memory controls, and their separate scopes. Refusing a
+connection is cheaper than losing the process.
 
 ### Sharing the process budget
 
@@ -779,21 +766,10 @@ Use `maxConnections` as the independent session ceiling and `minConnections` onl
 budget can really reserve. Treat snapshots and observer events as admission gauges, while monitoring actual
 heap, direct memory and container RSS separately. Test the largest inbound frame, outbound frame, fragmented
 message policy and slowest allowed subscriber; the common
-[guarantee and known limits](../README.md#guarantee-and-known-limits) apply as well.
-
-Pass the same `ServerMemoryBudget` object to every server in the process. A WebSocket connection then competes
-by its estimated bytes rather than counting as the same-sized slot as a REST or file connection. Its local
-`minConnections` and `maxConnections` are both optional (`0` leaves that bound unset). A minimum reserves
-`minConnections × estimate` at registration, guaranteeing those admissions at the cost of keeping unused
-capacity from the other servers; registration fails if the floor does not fit the capacity remaining at
-that moment. A maximum remains an independent fairness ceiling, and connections above the floor share the
-remaining pool.
-
-`memory.snapshot()` reports current process totals and `NettyServer.memoryRegistrationSnapshot()` reports
-this server's current state. The optional budget observer emits lifecycle, admission, release and reasoned
-refusal events; each event carries the server's `ServerMemoryBudget.Registration`, and a local ceiling is
-reported as `CONNECTION_LIMIT`. The observer is the place to maintain logs and metrics because the budget
-stores no historical counters.
+[guarantee and known limits](../docs/memory-budget.md#guarantee-and-known-limits) apply as well. The common
+pool, floor and ceiling semantics are in [Sharing one process budget](../docs/memory-budget.md#sharing-one-process-budget);
+current gauges and events are under
+[Snapshots and the budget observer](../docs/memory-budget.md#snapshots-and-the-budget-observer).
 
 ## Tuning for high load
 

@@ -1,22 +1,20 @@
 # newa-performance
 
-What a REST endpoint costs on newa and on Spring Boot, with each side written the way its own framework is
-normally written. The question is not what either can be tuned into: it is what you get by default, from
-ordinary code, on the same machine and the same load.
+This compares ordinary, default-style newa and Spring Boot implementations under the same load on the same
+machine. It measures what each framework gives ordinary code, not what either can be tuned into.
 
-**DISCLAIMER: Read the ratios, not the absolute numbers.** Everything here runs on one laptop over the loopback: client
-and server share its cores and its kernel, and both scenarios end up against a limit which belongs to neither
-of them - about 160 000 request-response round trips a second, about 200 000 to 300 000 delivered events a
-second. Those figures are properties of this machine and would move on another one, or across a real network.
-What carries over is what one side got out of a core against the other, and what each allocated to do it.
+**Read the ratios, not the absolute numbers.** Everything runs on one laptop over loopback: client and server
+share its cores and kernel, and both hit limits which belong to neither server - about 160 000
+request-response round trips or 200 000 to 300 000 delivered events a second. Those figures move on another
+machine or a real network. The useful comparison is work per core and allocation per operation.
 
 **The machine both scenarios were measured on.** Apple M1 Pro, 10 cores (8 performance, 2 efficiency), 32 GB,
 macOS 26.4.1, Corretto 21.0.3 on arm64, Netty 4.2.17, Spring Boot 3.5.16, 1 GB of heap fixed at both ends. Ten
 cores here are not ten of the same thing, and which kind a thread lands on is the scheduler's business.
 
-Not published, and not part of `check`. Builds only on JDK 17 and later, so `settings.gradle` leaves it out
-of the build on an older JDK. It is the one module compiled at 17 rather than at newa's own 11, which is why
-records appear here and nowhere else.
+This module is not published or part of `check`. It builds only on JDK 17 and later, so `settings.gradle`
+omits it on an older JDK. It is compiled at 17 rather than newa's own 11, which is why records appear here
+and nowhere else.
 
 ## REST
 
@@ -87,7 +85,7 @@ each way, is what this machine's loopback does.
 Client and server therefore share a limit that belongs to neither. To see past it, drive the server from
 another host.
 
-## Websocket
+## WebSocket
 
 ### The experiment
 
@@ -134,7 +132,7 @@ The highest rate each server served within 100 ms, and how that moves with the w
 | 1000 | 300 000 /s | under 200 000 /s | 100 000 /s |
 
 
-### Running it
+## Running it
 
 ```
 ./gradlew :newa-performance:restBenchmark -Pworkers=3 -Pclients=1,100,1000

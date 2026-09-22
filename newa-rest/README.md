@@ -32,7 +32,7 @@ RestApi api = builder.build();                       // or buildWithHelp(JsonHel
 new Life().run(() -> RestServer.start(api, 9009));   // serving GET /v1/hello/world
 ```
 
-`getJson` / `getTxt` / `postJson` / ... register handles which render a response and return. `get` / `post` /
+`getJson` / `getTxt` / `postJson` / ... register handlers which render a response and return. `get` / `post` /
 ... register a full `RestHandle`, which is given the `Result` and may finish it later.
 
 ## Starting a server
@@ -45,12 +45,9 @@ NettyServer server = RestServer.start(api, "10.0.0.5", 9009);    // on one netwo
 NettyServer server = RestServer.start(api, ANY_HOST, 9009);      // on every interface
 ```
 
-**A server binds the loopback until it is told otherwise**, and that default is about safety rather than
-convenience: a service nobody opened up is one no other machine can reach, so exposing it is a line
-somebody has to write - the address to listen on, or `NettyServerBuilder.ANY_HOST` for every interface,
-which is what Netty's own `bind(int)` would have done from the start. A null host is refused rather than
-read as either: whichever way it was taken, the server would be listening somewhere nobody chose, and one
-of the two answers is the whole machine.
+**A server binds the loopback until told otherwise.** Exposing it requires an explicit address or
+`NettyServerBuilder.ANY_HOST` for every interface. A null host is refused instead of being interpreted as
+either.
 
 Past that there are **two builders**, and they are about two different things. `RestServer` is what runs
 *above* the socket; `NettyServerBuilder` is the socket itself.
@@ -106,15 +103,12 @@ NettyServer server = rest.start(bootstrap);
 The other direction is open too: `pipeline()` hands the same initializer to a `ServerBootstrap` of Netty's
 own, which is what `rest.pipeline.PipelineRestServer` does.
 
-`maxConnections` is what bounds file descriptors, and it is off unless you say a number: the right one is
-what the process may open minus everything else it holds, which the deployment knows and this library does
-not - a number invented here would cut working traffic quietly. A connection arriving above it is closed as
-it arrives, without a byte written back, because writing a `503` means holding the descriptor through a write
-and a flush at the moment there are none to spare, and it would not arrive reliably either. Overload is
-therefore invisible to the peer and visible here: `ConnectionLimitHandler.refused()` counts it, and a
-hand-written pipeline can put that handler at its own head. `backlog` is `SO_BACKLOG`, how deep the kernel
-queues what has not been accepted yet; unset it is whatever the operating system allows, which is also the
-most it allows.
+`maxConnections` bounds file descriptors and is off until configured. Its value is the process limit minus
+everything else the deployment opens; the library cannot choose it safely. A connection above it is closed
+on arrival without a `503`, because a response would retain the descriptor while the server is out of them.
+`ConnectionLimitHandler.refused()` makes that overload visible locally, and a hand-written pipeline may put
+the handler at its head. `backlog` is `SO_BACKLOG`, the kernel queue for connections not yet accepted;
+unset, it uses the operating system's maximum.
 
 `withHandler` puts a handler *in front of* `RestApiHandler`, which is the only place one can still act:
 the api handler answers every request it sees, with a 404 when nothing routed, so nothing behind it would
@@ -438,6 +432,8 @@ CPU divides itself: give a container fewer cores and everything simply gets slow
 limit the process is dead, by `OutOfMemoryError` or by the cgroup killer. So bound it explicitly, from the
 largest exchange you are willing to serve, and refuse what does not fit:
 
+### Per-connection sizing
+
 ```
 direct / connection  ~  2 x largest request + largest ordinary response
                         or the larger configured chunked-response backlog
@@ -453,60 +449,53 @@ retain about 4 x 12 MB = 48 MB of heap in their render buffers after responses o
 charges a rendered response to every admitted connection deliberately conservatively, but the per-worker
 residue can outlive those leases and still needs process headroom. What enforces the terms:
 
-- **The request body** - `HttpObjectAggregator` caps it and nothing else does; a body past the cap is
-  answered `413` and the connection closed. A REST server caps it at 1 MB, a file server at 64 KB, since a
-  file server is sent `GET`s with nothing in them. The request line and the header block are the codec's own
-  limits, 4096 and 8192 bytes, and each has its own knob - past them the answer is `414` or `431`:
+### The request body
 
-  ```java
-  RestServer.of(api).withMaxContentLength(2 * 1024 * 1024)             // largest request
-                    .withMaxInitialLineLength(16 * 1024)               // longest uri
-                    .withMaxHeaderSize(32 * 1024);                     // largest header block
-  pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the body, by hand
-  ```
+`HttpObjectAggregator` caps the body; a body past the cap is answered `413` and the connection closed. A
+REST server caps it at 1 MB, a file server at 64 KB, since a file server is sent `GET`s with nothing in them.
+The request line and header block have separate codec limits, 4096 and 8192 bytes; exceeding them answers
+`414` or `431`:
 
-  An inbound limit bounds the largest buffer held at once. This server aggregates, so that buffer is the
-  whole request; a WebSocket server holds a frame, so
-  [its number is a frame](../newa-websocket/README.md#frame-and-handshake-limits).
+```java
+RestServer.of(api).withMaxContentLength(2 * 1024 * 1024)             // largest request
+                  .withMaxInitialLineLength(16 * 1024)               // longest uri
+                  .withMaxHeaderSize(32 * 1024);                     // largest header block
+pipeline.addLast(new HttpObjectAggregator(2 * 1024 * 1024, true));   // the body, by hand
+```
 
-  **A request body is never inflated** - `withCompression()` is outbound only. An `HttpContentDecompressor`
-  added through `withHandler` lands behind the aggregator, so `maxContentLength` would then bound the
-  compressed body alone: give the decompressor a maximum allocation and count it in the budget.
+An inbound limit bounds the largest buffer held at once. This server aggregates the whole request; a
+WebSocket server holds a frame, so [its number is a frame](../newa-websocket/README.md#frame-and-handshake-limits).
 
-- **`N` is the connection count**, because every server built by `RestServer` or `FileServer` holds a
-  connection to one unfinished response. HTTP/1.1 permits a client to send the next request without waiting
-  for the answer to the previous one, and that is served to a depth of one: reads are paused until the final
-  response content is written, and the one request the codec had already decoded from the same network read
-  is kept and replayed after it, in order. A further request on top of that one closes the connection, which
-  is what a pipelining client has to be ready for anyway. So a connection is charged two requests and one
-  response, not one of each - which is what the estimates below count. The handler is
-  `SingleHttpExchangeHandler`, public and in `newa-common` like the deadline handlers above it: a pipeline
-  written out from `HttpServerCodec` upwards adds one itself, directly behind the aggregator. `WsServer` has
-  one too, so an api sharing a port with a websocket is held to the same invariant - see
-  [newa-websocket](../newa-websocket/README.md#starting-a-server).
+`withCompression()` is outbound only, so a request body is never inflated by the built-in pipeline. An
+`HttpContentDecompressor` added through `withHandler` lands behind the aggregator:
+`maxContentLength` then bounds only the compressed body. Give the decompressor an allocation limit and count
+the inflated buffer in the budget.
 
-- **Chunked responses** remain bounded globally too: cap the cursors so application work cannot open more
-  producers than intended - a request past the cap is answered `503` before its cursor is opened:
+### Connection concurrency and pipelining
 
-  ```java
-  ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
-  ```
+`N` is the connection count because every server built by `RestServer` or `FileServer` holds a connection to
+one unfinished response. HTTP/1.1 permits the next request before the previous answer. Reads pause until the
+final response content is written, while one request already decoded from the same network read is kept and
+replayed in order. A further pipelined request closes the connection.
 
-- **Then size the process for it.** The limit has to cover heap plus every direct/native pool, metaspace,
-  code cache, thread stacks and allocator slack. For one workload that might be:
+The estimate therefore charges two requests and one response per connection. `SingleHttpExchangeHandler`,
+public in `newa-common`, enforces that depth; a hand-written pipeline adds it directly behind
+`HttpObjectAggregator`. `WsServer` uses the same handler, so a REST api on its port has the same invariant.
 
-  ```
-  -XX:MaxDirectMemorySize=512m -Dio.netty.maxDirectMemory=536870912
-  -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError
-  ```
+### Chunked response limits
 
-  These are JVM-launch options, not `RestServer` settings or defaults: use `-Xmx` instead of
-  `MaxRAMPercentage` when the heap should not be derived from a container limit, and calculate the direct
-  number from this deployment's exchange sizes. See the root guide to
-  [setting the process limits](../README.md#set-the-process-limits-first), including why the JVM and Netty
-  direct-memory options are related but do not form one limit on all off-heap memory.
+Cap cursors so application work cannot open more producers than intended. A request past the cap is answered
+`503` before its cursor is opened:
 
-Refusing a connection is the cheap failure; being killed with every in-flight response is the expensive one.
+```java
+ResponseChunks.builder().size(64 * 1024).maxOpenCursors(256).build();
+```
+
+### Process limits
+
+Size JVM, Netty and container limits from these estimates, leaving room for native pools and process
+overhead. The [process-limit guide](../docs/memory-budget.md#set-the-process-limits-first) explains the
+controls and their separate scopes. Refusing a connection is cheaper than losing every in-flight response.
 
 ### A shared process budget
 
@@ -537,10 +526,8 @@ FileServer.of(files)
                 .maxConnections(500));
 ```
 
-`ServerMemoryBudget.builder()` captures `Runtime.maxMemory()` and Netty's effective direct-memory maximum;
-`build()` applies the percentages. Every active connection is covered by both estimates atomically;
-whichever capacity would be crossed refuses admission. Closing returns both reservations, so capacity which
-is not guaranteed to a server follows traffic between them.
+The [shared-budget guide](../docs/memory-budget.md#sharing-one-process-budget) covers capacity capture,
+atomic admission, floors and ceilings. This section describes only the REST and file estimates.
 
 For REST the estimate includes the configured request maximum twice - the request being answered and the
 one the exchange gate may be holding behind it - and the larger of the ordinary response estimate passed
@@ -587,19 +574,9 @@ allocation limits. In particular:
 Consequently, a released lease does not say that all memory used by that connection has immediately returned
 to the OS. Observe budget snapshots as admission accounting, monitor actual JVM/direct/RSS figures
 separately, and load-test the largest request, response, chunked backlog and slow-reader case. The common
-[guarantee and known limits](../README.md#guarantee-and-known-limits) apply to every server in the process.
-
-`minConnections` and `maxConnections` are both optional (`0` leaves that bound unset). A minimum reserves
-`minConnections × estimate` when the server registers, guaranteeing that many admissions but making the
-unused reservation unavailable to the other servers; registration fails if the floor does not fit the
-capacity remaining at that moment. A maximum remains an independent fairness ceiling. Admissions above the
-floor share whatever capacity remains.
-
-Current totals are available from `memory.snapshot()`, and current per-server figures from
-`NettyServer.memoryRegistrationSnapshot()`. The optional budget observer reports lifecycle, admission,
-release and reasoned refusal events for logs and metrics. Each event carries the server's
-`ServerMemoryBudget.Registration`; connection-limit refusals use `CONNECTION_LIMIT`. The budget deliberately
-retains no historical counters.
+[guarantee and known limits](../docs/memory-budget.md#guarantee-and-known-limits) apply to every server in
+the process. Current gauges and refusal events are documented under
+[snapshots and the budget observer](../docs/memory-budget.md#snapshots-and-the-budget-observer).
 
 ## Large responses
 
@@ -617,7 +594,8 @@ copying. Keeping it *low* is yours:
 - **Cap** the size in the handler and answer `413`/`507` rather than degrading quietly.
 - **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx`
   does not bound them and the cgroup limit does, so a container sized from the heap alone is killed for its
-  RSS instead of failing with `OutOfMemoryError` - the flags are in [Memory budget](#memory-budget) above.
+  RSS instead of failing with `OutOfMemoryError` - see
+  [Set the process limits first](../docs/memory-budget.md#set-the-process-limits-first).
 
 When none of that is enough, do not build the response at all.
 

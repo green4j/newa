@@ -58,25 +58,6 @@ The publish workflow runs on **JDK 11** to keep release artifacts built from the
 Both run `build` first - nothing is published which has not passed the tests, Checkstyle and JaCoCo of the
 build itself, rather than trusting an earlier run on another commit.
 
-## An example of release
-
-1. Set release version
-```
-echo 0.4.0 > version.txt                                                                                                                                                                                              
-git add version.txt && git commit -m "Release 0.4.0"                                                                                                                                                                  
-git push
-```
-2. Initiate release pushing the tag
-```
-git tag v0.4.0                                                                                                                                                                                                        
-git push origin v0.4.0
-```
-3. Increment version to next snapshot
-```
-echo 0.4.1-SNAPSHOT > version.txt                                                                                                                                                                                     
-git add version.txt && git commit -m "Back to snapshot" && git push
-```
-
 ## Published Artifacts
 
 Group `io.github.green4j`:
@@ -119,6 +100,25 @@ The workflow validates this before running Gradle. A tag push is validated furth
 3. Push the release commit and create/push tag `v0.4.0` (or run `release.yml` manually with `publish_mode=release`).
 4. Wait for `release.yml` to publish and finalize artifacts.
 5. After release, bump `version.txt` to next snapshot (for example `0.4.1-SNAPSHOT`).
+
+## An example of release
+
+1. Set release version
+```
+echo 0.4.0 > version.txt                                                                                                                                                                                              
+git add version.txt && git commit -m "Release 0.4.0"                                                                                                                                                                  
+git push
+```
+2. Initiate release pushing the tag
+```
+git tag v0.4.0                                                                                                                                                                                                        
+git push origin v0.4.0
+```
+3. Increment version to next snapshot
+```
+echo 0.4.1-SNAPSHOT > version.txt                                                                                                                                                                                     
+git add version.txt && git commit -m "Back to snapshot" && git push
+```
 
 ## Troubleshooting
 
