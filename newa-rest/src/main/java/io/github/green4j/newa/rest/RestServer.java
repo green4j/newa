@@ -167,7 +167,8 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
                         errorHandler(),
                         channelErrorHandler(),
                         responseChunks,
-                        observers()
+                        observers(),
+                        memoryBudget()
                 )
         );
     }

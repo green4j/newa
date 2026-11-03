@@ -373,6 +373,57 @@ class ServerMemoryBudgetTest {
     }
 
     @Test
+    void aReservationCompetesWithConnectionsForBothCapacities() {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Registration rest = budget.register(
+                "rest",
+                ServerMemoryEstimate.of(60, 10),
+                0
+        );
+
+        final ServerMemoryBudget.Lease work = budget.tryReserve(50, 0);
+        Assertions.assertNotNull(work);
+        Assertions.assertNull(rest.tryAcquire(), "A connection was admitted into reserved heap");
+
+        work.close();
+        work.close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+
+        final ServerMemoryBudget.Lease connection = rest.tryAcquire();
+        Assertions.assertNotNull(connection);
+        Assertions.assertNull(budget.tryReserve(41, 0), "The heap was oversubscribed");
+        Assertions.assertNull(budget.tryReserve(0, 91), "The direct memory was oversubscribed");
+
+        final ServerMemoryBudget.Lease remainder = budget.tryReserve(40, 90);
+        Assertions.assertNotNull(remainder);
+        Assertions.assertEquals(100, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(100, budget.snapshot().reservedDirectMemoryBytes());
+
+        remainder.close();
+        connection.close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @Test
+    void aReservationCannotSpendAConnectionFloor() {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Registration rest = budget.register(
+                "rest",
+                ServerMemoryEstimate.of(40, 40),
+                2,
+                0
+        );
+
+        Assertions.assertNull(budget.tryReserve(21, 0));
+
+        final ServerMemoryBudget.Lease work = budget.tryReserve(20, 20);
+        Assertions.assertNotNull(work);
+        Assertions.assertNotNull(rest.tryAcquire());
+        Assertions.assertNotNull(rest.tryAcquire());
+    }
+
+    @Test
     void invalidConfigurationIsRefused() {
         Assertions.assertThrows(IllegalArgumentException.class,
                 () -> ServerMemoryBudget.builder(1, 1).heapPercentage(0));
@@ -383,6 +434,8 @@ class ServerMemoryBudgetTest {
         Assertions.assertThrows(IllegalArgumentException.class,
                 () -> ServerMemoryEstimate.of(0, 0));
         final ServerMemoryBudget budget = ServerMemoryBudget.builder(Long.MAX_VALUE, 10).build();
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserve(-1, 0));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserve(0, -1));
         Assertions.assertThrows(
                 IllegalArgumentException.class,
                 () -> budget.register(

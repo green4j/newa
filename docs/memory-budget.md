@@ -121,10 +121,28 @@ introduced by custom handlers. Add their worst per-connection heap and direct co
 `withAdditionalMemoryEstimate(heap, direct)`. Global caches and other process state are not per-connection;
 leave room for them outside the budget percentages.
 
+Work which is heavy only on some requests is better reserved for as long as it runs.
+`tryReserve(heap, direct)` draws on the same capacity as connections, cannot spend a floor, and returns `null`
+when there is no room. A REST handle reserves through its context instead, which answers `503` for it and,
+on a server without a budget, returns `Lease.EMPTY`:
+
+```java
+builder.getJson("/rows", (context, output) -> {
+    try (ServerMemoryBudget.Lease rows = context.reserveMemory(limit * rowBytes, 0)) {   // the forecast
+        // render the rows
+    }
+});
+```
+
+Close the lease when the work has really ended, which is not the moment the peer disconnects. The budget
+observer is not told about a reservation; its bytes show in snapshots and event gauges, and a refused REST
+request is reported to the request observer as its `503`. A `RestApiHandler` added by hand, to a `WsServer`
+for example, reserves from the budget given to its constructor.
+
 ## Guarantee and known limits
 
-For registrations in one `ServerMemoryBudget`, the sum of their active-connection estimates and unused
-guaranteed floors never exceeds that budget's heap or direct-memory capacity. It does **not** guarantee that
+In one `ServerMemoryBudget`, the sum of active-connection estimates, unused guaranteed floors and open
+`tryReserve` leases never exceeds its heap or direct-memory capacity. It does **not** guarantee that
 actual heap, direct memory or RSS stays below a JVM or container limit:
 
 - Admission uses configured per-connection estimates, not current allocation. Memory already in use is not

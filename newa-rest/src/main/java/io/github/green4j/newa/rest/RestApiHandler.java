@@ -9,6 +9,7 @@ package io.github.green4j.newa.rest;
 
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.server.ResponseDeadlineHandler;
+import io.github.green4j.newa.server.ServerMemoryBudget;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -33,6 +34,7 @@ public class RestApiHandler
     private final ResponseChunks responseChunks;
     private final HttpObserverFactory observers;
     private final RestApiObserverFactory restObservers;
+    private final ServerMemoryBudget memoryBudget;
 
     private ChunkedResponseBody stalling;
 
@@ -61,6 +63,31 @@ public class RestApiHandler
                           final ChannelErrorHandler channelErrorHandler,
                           final ResponseChunks responseChunks,
                           final HttpObserverFactory observers) {
+        this(
+                restApi,
+                errorHandler,
+                channelErrorHandler,
+                responseChunks,
+                observers,
+                null
+        );
+    }
+
+    /**
+     * @param restApi to route requests with
+     * @param errorHandler to render error responses with
+     * @param channelErrorHandler to report channel failures to
+     * @param responseChunks policy and accounting shared by every channel of this server, so build it once
+     * @param observers asked for an observer per request, or null to observe nothing. A
+     *                  {@link RestApiObserverFactory} additionally gets the stages after routing
+     * @param memoryBudget what {@link RestContext#reserveMemory(long, long)} reserves from, or null for none
+     */
+    public RestApiHandler(final RestRouter restApi,
+                          final HttpErrorHandler errorHandler,
+                          final ChannelErrorHandler channelErrorHandler,
+                          final ResponseChunks responseChunks,
+                          final HttpObserverFactory observers,
+                          final ServerMemoryBudget memoryBudget) {
         this.api = restApi;
         this.errorHandler = errorHandler;
         this.channelErrorHandler = channelErrorHandler;
@@ -70,6 +97,7 @@ public class RestApiHandler
         this.restObservers = observers instanceof RestApiObserverFactory
                 ? (RestApiObserverFactory) observers
                 : null;
+        this.memoryBudget = memoryBudget;
     }
 
     /**
@@ -160,7 +188,8 @@ public class RestApiHandler
                 handling,
                 result.responseHeaders(),
                 responseChunks,
-                restObserver
+                restObserver,
+                memoryBudget
         );
 
         if (restObserver != null) {
