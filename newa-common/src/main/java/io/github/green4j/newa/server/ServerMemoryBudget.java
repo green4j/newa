@@ -16,8 +16,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * An admission budget shared by any number of servers in one process. Each accepted connection reserves the
  * estimate of its server and gives it back when the channel closes. A server may reserve a guaranteed
- * connection floor when it registers. For registrations in this instance, the sum of active estimates and
- * unused guaranteed floors never crosses either capacity.
+ * connection floor when it registers, and application work may reserve its own bytes with
+ * {@link #tryReserve(long, long)}. In this instance, the sum of active estimates, unused guaranteed floors
+ * and those reservations never crosses either capacity.
  * <p>
  * {@link #builder()} captures the maxima visible at that call: {@link Runtime#maxMemory()} for heap and
  * {@link PlatformDependent#maxDirectMemory()} for Netty direct memory. The former follows an explicit
@@ -87,7 +88,7 @@ public final class ServerMemoryBudget {
         }
 
         /**
-         * @param percentage of the maximum JVM heap available to admitted connections, in [1, 100]
+         * @param percentage of the maximum JVM heap this budget divides, in [1, 100]
          * @return this builder
          */
         public Builder heapPercentage(final int percentage) {
@@ -97,8 +98,7 @@ public final class ServerMemoryBudget {
         }
 
         /**
-         * @param percentage of the effective direct-memory maximum available to admitted connections,
-         *                   in [1, 100]
+         * @param percentage of the effective direct-memory maximum this budget divides, in [1, 100]
          * @return this builder
          */
         public Builder directMemoryPercentage(final int percentage) {
@@ -156,9 +156,11 @@ public final class ServerMemoryBudget {
     }
 
     /**
-     * Receives point-in-time views of every change to the budget. Calls happen after the accounting lock has
-     * been released and may arrive concurrently from the event loops of different servers. Gauge values in
-     * an event do not change; its registration reference is the live identity of the server concerned.
+     * Receives point-in-time views of every change a server makes to the budget. Calls happen after the
+     * accounting lock has been released and may arrive concurrently from the event loops of different
+     * servers. Gauge values in an event do not change; its registration reference is the live identity of the
+     * server concerned. A {@link ServerMemoryBudget#tryReserve(long, long)} is not reported: its caller has
+     * the answer, and its bytes show in the gauges.
      */
     public interface Observer {
         default void onServerRegistered(final Event event) {
@@ -261,8 +263,9 @@ public final class ServerMemoryBudget {
     }
 
     /**
-     * An immutable process-wide view of the accounting. Reserved bytes include active connections and
-     * capacity held for guaranteed connection floors which has not been used yet.
+     * An immutable process-wide view of the accounting. Reserved bytes include active connections, capacity
+     * held for guaranteed connection floors which has not been used yet, and open
+     * {@link ServerMemoryBudget#tryReserve(long, long)} reservations.
      */
     public static final class Snapshot {
         private final long maximumHeapBytes;
@@ -358,20 +361,27 @@ public final class ServerMemoryBudget {
     }
 
     /**
-     * The reservation held by one connection.
+     * The reservation held by one connection or taken by {@link ServerMemoryBudget#tryReserve(long, long)}.
+     * It may be closed from any thread, and only the first close returns it.
      */
     public static final class Lease implements AutoCloseable {
-        private final Registration registration;
+        /**
+         * Reserves nothing: what code which reserves memory is given where there is no budget to reserve from.
+         */
+        public static final Lease EMPTY = new Lease(() -> {
+        });
+
+        private final Runnable release;
         private final AtomicBoolean closed = new AtomicBoolean();
 
-        private Lease(final Registration registration) {
-            this.registration = registration;
+        private Lease(final Runnable release) {
+            this.release = release;
         }
 
         @Override
         public void close() {
             if (closed.compareAndSet(false, true)) {
-                registration.budget.release(registration);
+                release.run();
             }
         }
     }
@@ -525,6 +535,36 @@ public final class ServerMemoryBudget {
         return registration;
     }
 
+    /**
+     * Tries to reserve memory for one piece of application work, for the time a request holds its rows, say.
+     * It draws on the capacity left by connections and floors, and until it is closed connections cannot
+     * have those bytes. The sizes are the caller's forecast: nothing measures or limits what the work then
+     * allocates, and a lease which is never closed keeps its bytes for the life of this budget.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return a lease to close when the work has ended, or null when either capacity has no room for it
+     */
+    public Lease tryReserve(final long heapBytes,
+                            final long directMemoryBytes) {
+        if (heapBytes < 0) {
+            throw new IllegalArgumentException("heapBytes must not be negative: " + heapBytes);
+        }
+        if (directMemoryBytes < 0) {
+            throw new IllegalArgumentException(
+                    "directMemoryBytes must not be negative: " + directMemoryBytes);
+        }
+        synchronized (this) {
+            if (heapBytes > heapCapacityBytes - reservedHeapBytes
+                    || directMemoryBytes > directMemoryCapacityBytes - reservedDirectMemoryBytes) {
+                return null;
+            }
+            reservedHeapBytes += heapBytes;
+            reservedDirectMemoryBytes += directMemoryBytes;
+        }
+        return new Lease(() -> unreserve(heapBytes, directMemoryBytes));
+    }
+
     public synchronized Snapshot snapshot() {
         return new Snapshot(this);
     }
@@ -562,7 +602,7 @@ public final class ServerMemoryBudget {
                     }
                     connections++;
                     registration.connections++;
-                    lease = new Lease(registration);
+                    lease = new Lease(() -> release(registration));
                     refusal = null;
                 }
             }
@@ -595,6 +635,12 @@ public final class ServerMemoryBudget {
             event = event(registration, null);
         }
         notifyConnectionReleased(event);
+    }
+
+    private synchronized void unreserve(final long heapBytes,
+                                        final long directMemoryBytes) {
+        reservedHeapBytes -= heapBytes;
+        reservedDirectMemoryBytes -= directMemoryBytes;
     }
 
     private synchronized RegistrationSnapshot snapshot(final Registration registration) {

@@ -493,6 +493,13 @@ public abstract class AbstractHttpServer<S extends AbstractHttpServer<S>> {
         return additionalDirectMemoryBytesPerConnection;
     }
 
+    /**
+     * @return the budget this server is admitted from, or null when it has none.
+     */
+    protected final ServerMemoryBudget memoryBudget() {
+        return memoryBudget;
+    }
+
     protected final void setMemoryBudget(final ServerMemoryBudget budget) {
         if (budget == null) {
             throw new IllegalArgumentException("A server memory budget is required");

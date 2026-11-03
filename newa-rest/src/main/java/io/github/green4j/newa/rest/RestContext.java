@@ -7,11 +7,13 @@
 
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.newa.server.ServerMemoryBudget;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.util.concurrent.EventExecutor;
 
@@ -39,6 +41,7 @@ public class RestContext {
     private final HttpHeaders responseHeaders;
     private final ResponseChunks responseChunks;
     private final RestApiObserver observer;
+    private final ServerMemoryBudget memoryBudget;
 
     private boolean handled;
 
@@ -52,13 +55,15 @@ public class RestContext {
                 final RestHandling handling,
                 final HttpHeaders responseHeaders,
                 final ResponseChunks responseChunks,
-                final RestApiObserver observer) {
+                final RestApiObserver observer,
+                final ServerMemoryBudget memoryBudget) {
         this.handlerContext = handlerContext;
         this.request = request;
         this.handling = handling;
         this.responseHeaders = responseHeaders;
         this.responseChunks = responseChunks;
         this.observer = observer;
+        this.memoryBudget = memoryBudget;
     }
 
     /**
@@ -113,6 +118,38 @@ public class RestContext {
      */
     public ResponseChunks responseChunks() {
         return responseChunks;
+    }
+
+    /**
+     * Reserves memory for the work of this request from the budget its server is admitted from, so that a
+     * request which does not fit is answered {@code 503} before the work starts:
+     * <pre>{@code
+     * try (ServerMemoryBudget.Lease rows = context.reserveMemory(limit * rowBytes, 0)) {
+     *     // render the rows
+     * }
+     * }</pre>
+     * The sizes are the handle's forecast, and nothing limits what the work then allocates. The lease is
+     * closed when the work has ended, which for a handle answering later is not when it returns. A lease
+     * which is never closed keeps its bytes for the life of the budget.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return the lease to close, {@link ServerMemoryBudget.Lease#EMPTY} when the server has no budget
+     * @throws HttpException {@code 503} when the budget has no room for it
+     */
+    public ServerMemoryBudget.Lease reserveMemory(final long heapBytes,
+                                                  final long directMemoryBytes) throws HttpException {
+        if (memoryBudget == null) {
+            return ServerMemoryBudget.Lease.EMPTY;
+        }
+        final ServerMemoryBudget.Lease lease = memoryBudget.tryReserve(heapBytes, directMemoryBytes);
+        if (lease == null) {
+            throw new HttpException(
+                    HttpResponseStatus.SERVICE_UNAVAILABLE,
+                    "No memory left in the budget for this request"
+            );
+        }
+        return lease;
     }
 
     /**
