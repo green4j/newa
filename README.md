@@ -111,8 +111,9 @@ Four artifacts are published, all under `io.github.green4j`:
 
 newa is built for Java 11 and pulls in two things, both as `compile` dependencies of the artifacts above:
 [Netty](https://netty.io) 4.2 - `netty-transport`, `netty-handler`, `netty-codec`, `netty-codec-http` and
-`netty-buffer` - and [green-jelly](https://github.com/green4j/green-jelly), the allocation-free JSON
-generator responses are rendered with. Nothing else: no logging framework, no dependency injection
+`netty-buffer` - and [green-jelly](https://github.com/green4j/green-jelly), the allocation-free JSON library
+responses are rendered with and JSON is read with, `Utf8JsonReader` reading it right from a `ByteBuf` or a
+stream and `Utf8JsonWriter` writing it into one. Nothing else: no logging framework, no dependency injection
 container, no annotation processing.
 
 The native transports are deliberately **not** among them. `Transport.auto()` looks for

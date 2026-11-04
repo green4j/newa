@@ -792,6 +792,14 @@ ByteBuf encoded = allocator.buffer();
 entity.publishTextAndRelease(encoded);   // rendered once, a duplicate per session, released here
 ```
 
+A JSON frame is rendered with `Utf8JsonWriter`: into a buffer of the thread, then into a buffer of the
+allocator exactly its size, with no `String` and no heap buffer of its own. A rendering which captures
+nothing is one object for all the frames:
+
+```java
+entity.publishTextAndRelease(Utf8JsonWriter.write(ByteBufAllocator.DEFAULT, update, Updates::render));
+```
+
 It is `broadcastTextAndRelease(ByteBuf)` for one entity instead of every open session. `publishText(ByteBuf)`
 is the same fan-out without taking the buffer over - for a frame the publisher keeps, pools or sends to more
 than one entity. `publishBinary` and `publishBinaryAndRelease` are the binary twins of both. Each has a
