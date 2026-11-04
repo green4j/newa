@@ -8,6 +8,8 @@
 
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.jelly.simple.JsonValue;
+import io.github.green4j.jelly.simple.JsonValueException;
 import io.github.green4j.newa.rest.files.FileServerHandler;
 import io.github.green4j.newa.rest.files.FileSet;
 import io.netty.channel.ChannelHandler;
@@ -168,6 +170,17 @@ class ErrorReportingTest {
         Assertions.assertEquals(1, observed.failed.size());
         Assertions.assertSame(refused, observed.failed.get(0));
         Assertions.assertEquals(HttpResponseStatus.SERVICE_UNAVAILABLE, observed.failedWith.get(0));
+    }
+
+    @Test
+    public void testAValueADocumentOfTheServerHasNotGotIsReportedAsThrownAndAnsweredAsAFailure() {
+        getFromApi("/v1/thing", (context, result) -> {
+            JsonValue.newString("x").asObjectRequired();
+        });
+
+        Assertions.assertEquals(1, observed.failed.size());
+        Assertions.assertTrue(observed.failed.get(0) instanceof JsonValueException, observed.failed.get(0).toString());
+        Assertions.assertEquals(HttpResponseStatus.INTERNAL_SERVER_ERROR, observed.failedWith.get(0));
     }
 
     @Test

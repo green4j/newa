@@ -358,13 +358,36 @@ One thing stays yours, because it is not a `Life`'s business:
 ## RestContext
 
 Every handler is given one: `channel()`, `executor()`, `request()`, `pathExpression()`, `method()`, `uri()`,
-`pathParameters()`, `queryParameters()`, `formParameters()`, `headers()`, `responseHeaders()`. Query
-parameters, form parameters and headers are parsed on first access.
+`pathParameters()`, `queryParameters()`, `formParameters()`, `jsonBody()`, `jsonBodyAs()`, `headers()`,
+`responseHeaders()`. Query parameters, form parameters and headers are parsed on first access.
 
-Two of these do not outlive the handler. The request's body goes back to the pool when `handle` returns, and
-`pathParameters()` is a matcher flyweight the next request on that thread overwrites - it throws
-`IllegalStateException` rather than answering with somebody else's values. Everything else, including
-`pathExpression()`, stays valid.
+`jsonBody()` reads the body as a JSON document in UTF-8 right from its buffer, with no `String` of it made
+first, into a green-jelly `JsonValue`; `jsonBody(listener)` reads it into a `JsonParserListener` and builds
+no tree at all. A body which is not JSON in UTF-8 is a `400` saying where it broke. An empty one is a `400`
+for `jsonBody()` and a document with no value for a listener, which is the judge of what that means.
+
+`jsonBodyAs(reader)` is the tree read into what the handler needs. A value the reader requires and the body
+has not got - the `JsonValueException` of a `...Required` accessor - is a `400` there, naming the member or
+the item and what is there instead. The same exception anywhere else is a `500` like any other failure,
+since a tree of the handler's own - a file, the response of another service - is not the client's to be told
+about:
+
+```java
+builder.postJson("/instruments", (context, output) -> {
+    final String symbol = context.jsonBodyAs(body -> body
+            .asObjectRequired()             // 400 if it's not an object
+            .getStringRequired("symbol"));  // 400 if there's no string
+    // ...
+});
+```
+
+The same reading outside a handler - a `ByteBuf` of your own, or the `InputStream` of a response a client
+got - is `Utf8JsonReader`.
+
+Two of these do not outlive the handler. The request's body goes back to the pool when `handle` returns -
+`jsonBody()` throws `IllegalStateException` after that - and `pathParameters()` is a matcher flyweight the
+next request on that thread overwrites - it throws `IllegalStateException` rather than answering with
+somebody else's values. Everything else, including `pathExpression()`, stays valid.
 
 ## Response headers
 
@@ -828,7 +851,9 @@ all declare `throws HttpException`. The four this library throws itself are ordi
 `InternalServerErrorException` (500).
 
 Anything thrown which is *not* an `HttpException` is a failure: it is wrapped, answered `500`, and nothing of
-it is said. The safe answer is what the type system gives you, not what you remembered to do.
+it is said. The safe answer is what the type system gives you, not what you remembered to do. A
+`JsonValueException` is no exception to it: the one place it is a `400` is the reader of
+[`jsonBodyAs`](#restcontext), which says the tree is the request's.
 
 ### What is reported, and where
 
