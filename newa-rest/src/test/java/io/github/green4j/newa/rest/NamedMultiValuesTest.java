@@ -70,6 +70,17 @@ class NamedMultiValuesTest {
         Assertions.assertEquals("fallback", mv.value("missing", 0, "fallback"));
     }
 
+    @Test
+    public void allTheValuesOfANameAreAViewOfThem() {
+        final NamedMultiValues mv = of("ids", "a", "b", "c");
+
+        Assertions.assertEquals(List.of("a", "b", "c"), mv.values("ids"));
+        Assertions.assertEquals(List.of("a", "b", "c"), mv.values(mv.nameToIndex("ids")));
+        Assertions.assertEquals(List.of(), mv.values("missing"), "A name which is not there has values");
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> mv.values("ids").get(3));
+        Assertions.assertThrows(UnsupportedOperationException.class, () -> mv.values("ids").add("d"));
+    }
+
     /**
      * @return one case per type: what it is called, the values under the name, what the value at index 0
      *         converts to, how it is asked for, how an index past the end is asked for, and what that
