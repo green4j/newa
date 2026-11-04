@@ -78,7 +78,8 @@ RestServer rest = RestServer.of(api)
         // when a connection is given up on
         .withIdleTimeoutMs(60_000)               // on by default, see Idle connections
         .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
-        .withResponseDeadlineMs(30_000);         // on by default, see Deadlines
+        .withResponseDeadlineMs(30_000)          // on by default, see Deadlines
+        .withHandlingDeadlineMs(10_000);         // off by default, see Deadlines
 ```
 
 **Two: the socket.** The transport, the threads, the port and every channel option:
@@ -215,6 +216,25 @@ and in front of a decoder every read looks the same.
 
 Both close silently, and both report to a `ConnectionObserver` first. For the request half that is the only
 report there can be: no request arrived, so no observer of requests has anything to be told about.
+
+Between the two there is a third wait, and it is this server's own: a `RestHandle` which keeps its `Result`
+to answer later - after a database, a remote call - may never answer at all. **`withHandlingDeadlineMs`**
+bounds that, off by default:
+
+```java
+RestServer.of(api)
+        .withHandlingDeadlineMs(10_000)   // off by default; keep it below withIdleTimeoutMs
+        .start(9009);
+```
+
+Past it the request is answered `503`, an observer is told `onResponseFailed`, and the connection serves the
+next request; what the handle says afterwards is dropped, as a late answer rather than a mistake, so the
+`ChannelErrorHandler` is not told. Only a handle which returned without answering is put on a timer - one
+which answers in the call, which is every `JsonRestHandle`, `TxtRestHandle` and chunked one, costs no timer.
+A connection which closes while the handle is still working takes its timer with it.
+Nothing moves on the connection while it waits, so the idle timeout runs too: set above it, this never gets
+to answer, and the connection is closed with nothing said. A `RestApiHandler` assembled by hand - beside a
+`WsServer` or a `FileServer` - takes the same deadline as its last constructor argument.
 
 ### Cross-origin requests
 
@@ -630,15 +650,15 @@ are in flight.
 
 Two shapes, differing in who decides that the next piece exists:
 
-|                             | **Pull**                                                               | **Push**                                  |
-|-----------------------------|------------------------------------------------------------------------|-------------------------------------------|
-| The source                  | always has more                                                        | has nothing until something happens       |
-| Next piece                  | the framework asks, the cursor answers                                 | the source produces it, then flushes      |
-| Ends when                   | the cursor says so                                                     | the peer goes away                        |
-| Paced by                    | the channel's write watermark                                          | whatever produces the content             |
-| Counted by `maxOpenCursors` | yes                                                                    | no                                        |
-| Written as                  | `ChunkedJsonRestHandler`, `ChunkedTxtRestHandler`, `ChunkedRestHandler` | `PushedResponseBody` given to `Result.ok` |
-| Typically                   | rows from a database, a report                                         | a clock, a queue, a feed                  |
+|                             | **Pull**                                                                | **Push**                                        |
+|-----------------------------|-------------------------------------------------------------------------|-------------------------------------------------|
+| The source                  | always has more                                                         | has nothing until something happens             |
+| Next piece                  | the framework asks, the cursor answers                                  | the source produces it, then flushes            |
+| Ends when                   | the cursor says so                                                      | the source calls `end()`, or the peer goes away |
+| Paced by                    | the channel's write watermark                                           | whatever produces the content                   |
+| Counted by `maxOpenCursors` | yes                                                                     | no                                              |
+| Written as                  | `ChunkedJsonRestHandler`, `ChunkedTxtRestHandler`, `ChunkedRestHandler` | `PushedResponseBody` given to `Result.ok`       |
+| Typically                   | rows from a database, a report                                          | a clock, a queue, a feed, a decoder             |
 
 `ChunkedWriteHandler` is put in front of `RestApiHandler` by the first chunked response on a channel: nothing
 to add to the pipeline, nothing to forget.
@@ -707,8 +727,38 @@ final class ClockBody extends PushedResponseBody {
 builder.get("/clock", (context, result) -> result.ok(TEXT_EVENT_STREAM, new ClockBody(context)));
 ```
 
-`PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, the end which never comes by
-itself, and the progress an observer is told.
+A source which does run out - rows decoded from a file on a thread of its own, say - calls `end()` once the
+last piece is produced, from any thread, and flushes as after any other piece. What `next` still gives out
+goes first; the response ends when it answers `null` after that.
+
+The decoder below keeps one piece in flight: it decodes the next only once `next` has taken this one, so a
+piece is never put where another still waits, and a source faster than the peer does not pile its pieces up
+in memory - it waits for the peer instead:
+
+```java
+private void onDecoded(ByteBuf piece, boolean last) {   // on the decoder's thread
+    ready.set(piece);                                     // the slot is empty: next() has taken the last one
+    if (last) {
+        end();
+    }
+    channel.flush();
+}
+
+@Override
+protected ByteBuf next(ByteBufAllocator allocator) {
+    final ByteBuf piece = ready.getAndSet(null);
+    if (piece != null) {
+        decodeNext();                                     // only now: one piece in flight
+    }
+    return piece;
+}
+```
+
+The full source, with the close which releases a piece nobody took, is `ScheduledChunkedRestServer` in
+`newa-example`.
+
+`PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, whether it has ended, and
+the progress an observer is told.
 
 One difference from pull: `maxOpenCursors` does not count these - it counts what `ChunkedRestHandler` and its
 siblings open, not what you hand to `Result.ok`. The gap between two ticks needs no thought at all, however
