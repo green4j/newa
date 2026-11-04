@@ -7,10 +7,11 @@
 
 package io.github.green4j.newa.websocket;
 
+import io.github.green4j.jelly.CopyingStringBuilder;
+import io.github.green4j.newa.json.Utf8JsonReader;
 import io.github.green4j.newa.lang.ChannelErrorHandler;
 import io.github.green4j.newa.lang.CloseHelper;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.ContinuationWebSocketFrame;
@@ -18,7 +19,6 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolConfig;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
-import io.netty.util.CharsetUtil;
 
 import java.util.List;
 
@@ -52,6 +52,21 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
     // which finishes it. A character is four bytes at most, so three is the most which is ever unfinished.
     private final byte[] textTail = new byte[3];
     private int textTailLength;
+
+    /**
+     * The longest text frame whose decoded chars are kept by the thread for the next frame.
+     */
+    static final int RETAINED_TEXT_BYTES = 64 * 1024;
+
+    // One per thread rather than per channel: a channel would keep the chars of its largest frame for its
+    // whole life, and there are many more channels than threads. A receiver which makes another channel of
+    // this thread read a frame - an embedded one, say - is handed a buffer of its own rather than this one.
+    private static final ThreadLocal<TextBuffer> TEXT_BUFFER = ThreadLocal.withInitial(TextBuffer::new);
+
+    private static final class TextBuffer {
+        private final CopyingStringBuilder text = new CopyingStringBuilder();
+        private boolean busy;
+    }
 
     /**
      * One per channel - this handler keeps the session of its own channel, so it is neither sharable nor
@@ -189,51 +204,68 @@ public class WsApiHandler extends WebSocketServerProtocolHandler {
      * fragments - but it does not put a cut character back together, so this does: the unfinished bytes,
      * three at most, wait here for the fragment which finishes them.
      *
+     * <p>The bytes are decoded into a buffer of the thread rather than into a {@link String}, and that buffer
+     * is what the receiver is handed: once it has grown to fit frames of that size, nothing is allocated per
+     * frame. A frame longer than {@link #RETAINED_TEXT_BYTES} is decoded into a buffer of its own, which is
+     * not kept.
+     *
      * @param content of the frame, the decoder's to release once this returns.
      * @param last whether the message ends with this frame.
      */
     private void receiveText(final ByteBuf content,
                              final boolean last) {
-        ByteBuf whole = content;
+        final int carried = textTailLength;
+        final int length = content.readableBytes();
 
-        if (textTailLength > 0) { // only on a seam, and only then is anything copied
-            final int carried = textTailLength;
-            final byte[] combined = new byte[carried + content.readableBytes()];
-            System.arraycopy(textTail, 0, combined, 0, carried);
-            content.getBytes(content.readerIndex(), combined, carried, content.readableBytes());
-            textTailLength = 0;
-            whole = Unpooled.wrappedBuffer(combined);
-        }
-
-        final int tail = last ? 0 : unfinishedTailLength(whole); // a message which ends here has nothing
+        final int tail = last ? 0 : unfinishedTailLength(content); // a message which ends here has nothing
         // left to wait for: whatever is unfinished at the end of it is a broken message, and that is the
         // validator's to refuse rather than ours to hold
-        if (tail > 0) {
-            whole.getBytes(whole.writerIndex() - tail, textTail, 0, tail);
+        if (carried + length == tail && !last) { // the whole fragment was part of one character, so there
+            // is not a character to hand over yet
+            content.getBytes(content.readerIndex(), textTail, carried, length);
             textTailLength = tail;
+            return;
         }
 
-        final int length = whole.readableBytes() - tail;
-        if (length == 0 && !last) {
-            return; // the whole fragment was part of one character, so there is not a character to hand
-            // over yet
+        final TextBuffer buffer = TEXT_BUFFER.get();
+        final boolean retained = !buffer.busy && carried + length <= RETAINED_TEXT_BYTES;
+        final CopyingStringBuilder text = retained ? buffer.text : new CopyingStringBuilder();
+        if (retained) {
+            buffer.busy = true;
         }
+        try {
+            text.start();
+            text.append(textTail, 0, carried); // the start of the character the fragment finishes
+            Utf8JsonReader.append(text, content, content.readerIndex(), length - tail);
+            text.complete();
 
-        session.receive(whole.toString(whole.readerIndex(), length, CharsetUtil.UTF_8), last);
+            // the character a fragment ends in is always its own: one begun by the bytes carried would have
+            // left nothing to hand over above
+            content.getBytes(content.writerIndex() - tail, textTail, 0, tail);
+            textTailLength = tail;
+
+            session.receive(text, last);
+        } finally {
+            if (retained) {
+                buffer.busy = false;
+            }
+        }
     }
 
     /**
-     * @param content to look at the end of.
-     * @return how many bytes at the end of it belong to a character which is not complete yet, 0 when it
-     *         ends on a character boundary.
+     * @param content to look at the end of, after the bytes carried over from the fragment before it.
+     * @return how many bytes at the end of the two belong to a character which is not complete yet, 0 when
+     *         they end on a character boundary.
      */
-    private static int unfinishedTailLength(final ByteBuf content) {
-        final int start = content.readerIndex();
+    private int unfinishedTailLength(final ByteBuf content) {
+        final int contentStart = content.readerIndex();
+        final int start = contentStart - textTailLength; // the carried bytes are read as if they were in front
+        // of the content
         final int end = content.writerIndex();
         final int limit = Math.max(start, end - 4); // no character of UTF-8 is longer than four bytes
 
         for (int i = end - 1; i >= limit; i--) {
-            final int b = content.getByte(i) & 0xFF;
+            final int b = (i < contentStart ? textTail[i - start] : content.getByte(i)) & 0xFF;
             if ((b & 0xC0) == 0x80) { // a continuation byte: the character it belongs to starts earlier
                 continue;
             }

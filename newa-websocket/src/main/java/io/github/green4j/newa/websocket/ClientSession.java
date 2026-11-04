@@ -14,6 +14,7 @@ import io.github.green4j.newa.lang.Scheduler;
 import io.github.green4j.newa.lang.Sender;
 import io.github.green4j.newa.lang.WallClock;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
@@ -27,6 +28,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -195,13 +197,40 @@ public class ClientSession implements Sender, Closeable {
         writeAndFlush(new TextWebSocketFrame(frame));
     }
 
+    /**
+     * Encodes the text into a buffer of the channel's allocator, the one the transport writes as it is, and
+     * sends it as one text frame.
+     *
+     * @param frame to send.
+     * @param charset to encode it with - UTF-8 is the only one a peer is obliged to read.
+     */
     public void sendText(final CharSequence frame,
                          final Charset charset) {
-        sendText(Unpooled.copiedBuffer(frame, charset));
+        if (DEFAULT_CHARSET.equals(charset)) {
+            sendText(frame);
+            return;
+        }
+        sendText(ByteBufUtil.encodeString(context.channel().alloc(), CharBuffer.wrap(frame), charset));
     }
 
+    /**
+     * Encodes the text in UTF-8 into a buffer of the channel's allocator, the one the transport writes as it
+     * is, and sends it as one text frame. The text is read once to count its bytes and once to write them, so
+     * the buffer is exactly the size of the frame.
+     *
+     * @param frame to send.
+     */
     public void sendText(final CharSequence frame) {
-        sendText(frame, DEFAULT_CHARSET);
+        final int bytes = ByteBufUtil.utf8Bytes(frame);
+        final ByteBuf buffer = context.channel().alloc().buffer(bytes);
+        try {
+            ByteBufUtil.reserveAndWriteUtf8(buffer, frame, bytes);
+        } catch (final RuntimeException failed) {
+            // a text of the caller's may throw when it is read again, and the buffer is nobody else's yet
+            buffer.release();
+            throw failed;
+        }
+        sendText(buffer);
     }
 
     /**

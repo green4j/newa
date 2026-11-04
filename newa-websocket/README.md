@@ -270,7 +270,7 @@ A `ClientSession` appears when the handshake completes and lives until the chann
 everything else is expressed in terms of:
 
 ```java
-session.sendText("text");                     // encoded UTF-8, one frame
+session.sendText("text");                     // encoded UTF-8 into a pooled buffer, one frame
 session.sendText(text, StandardCharsets.UTF_8);
 session.sendText(byteBuf);                    // the session takes the buffer over
 session.sendBinary(byteBuf);                  // the same, as a binary frame
@@ -298,7 +298,11 @@ the session ends once the frame has left, without waiting for the close the peer
 on that session's event loop, one call per frame; ping, pong and close are answered by Netty underneath, and
 a frame of a type the api was given no receiver for is answered with a `1003` and the session ends. What is
 handed over is valid for the call and no longer - the decoder releases the frame the moment the call
-returns, so a `ByteBuf` which has to outlive it needs a `retain()` and a `CharSequence` needs a copy.
+returns, so a `ByteBuf` which has to outlive it needs a `retain()` and a `CharSequence` needs a copy. The
+text is not a `String` but a buffer of the thread the next frame is decoded into, so once it has grown to fit
+frames of that size a frame costs no allocation, and `toString()` is the copy. A frame of more than 64 KiB,
+or one decoded while a receiver of the same thread is still being called, gets a buffer of its own. Bytes which are not
+UTF-8 never get that far: the pipeline answers them with a `1007` and the session ends.
 
 `last` is what a message which arrives in pieces looks like: `false` says it goes on in the frames which
 follow, `true` closes it. Nothing here holds the pieces - the frame limit of the pipeline bounds one frame,
@@ -326,32 +330,6 @@ send rather than on time; without the ping a perfectly healthy subscriber which 
 disconnected as dead, and that is most of a fan-out's clients. They default to 30 s and 90 s - three missed
 pings - and either takes 0 to turn it off, which is what to do when the protocol above already carries a
 heartbeat.
-
-## Upgrading from an earlier version
-
-**The keep-alive is new and it is on.** Sessions now carry a timer, and a peer silent for 90 s is
-disconnected. `withPingIntervalMs(0).withReadTimeoutMs(0)` is the old behaviour.
-
-**Text and binary are named.** Binary frames used to reach nothing at all - they were discarded in silence at
-the end of the pipeline - and every call which sent a buffer made a text frame of it without saying so. Both
-are named now, which is a break rather than an addition:
-
-| was | is |
-|---|---|
-| `Receiver.receive(session, message)`, one lambda | `Receiver.Text.text(session, message, last)` and `Receiver.Binary.binary(session, payload, last)`, a lambda each, set with `withTextReceiver` / `withBinaryReceiver` |
-| `session.send(ByteBuf)` / `send(CharSequence, Charset)` | `session.sendText(...)`, and `session.sendBinary(ByteBuf)` |
-| `api.broadcast(...)` / `broadcastAndRelease(ByteBuf)` | `broadcastText(...)` / `broadcastTextAndRelease(ByteBuf)`, plus the `Binary` twins |
-| `entity.publish(ByteBuf)` / `publishAndRelease(ByteBuf)` | `publishText(...)` / `publishTextAndRelease(...)`, plus the `Binary` twins |
-| `entity.forEachSession(ByteBuf)` / `forEachSessionAndRelease(ByteBuf)` | `forEachSessionText(...)` / `forEachSessionTextAndRelease(...)`, plus the `Binary` twins |
-
-`send(CharSequence)`, `publish(Consumer)` and `forEachSession(Consumer)` keep their names: the first is the
-`Sender` interface's, and the other two never knew the type of the frame in the first place.
-
-Two behaviours changed with them. A frame of a type the api was given no receiver for, and any frame at all
-when it was given neither, is answered with a `1003` and the session ends - where before it was dropped in
-silence. And a message which arrives in several frames is now handed over piece by piece, with `last` saying
-which piece ends it; before, the first fragment of a text message was handed over as if it were the whole of
-it and the rest was lost.
 
 ## Broadcasting
 

@@ -42,6 +42,12 @@ public interface Receiver {
          * A text message, or one piece of it, as the peer sent it. A piece is decoded whole: a character
          * split across two frames is put back together before it gets here, so what arrives is never a
          * broken one.
+         * <p>
+         * The text is not a {@link String}: it is a buffer of the thread the next frame is decoded into, so
+         * once the buffer has grown to fit frames of that size a frame costs no allocation, and
+         * {@code toString()} is the copy for what has to outlive the call. A frame of more than 64 KiB, or
+         * one decoded while a receiver of the same thread is still being called, is decoded into a buffer of
+         * its own.
          *
          * @param session it came from.
          * @param message the text, valid for this call only - copy what outlives it.
