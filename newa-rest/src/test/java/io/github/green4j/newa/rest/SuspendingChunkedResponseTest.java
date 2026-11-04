@@ -52,6 +52,10 @@ class SuspendingChunkedResponseTest {
             pending.add(line);
         }
 
+        private void finish() {
+            end();
+        }
+
         @Override
         protected ByteBuf next(final ByteBufAllocator allocator) {
             if (pending.isEmpty()) {
@@ -103,7 +107,10 @@ class SuspendingChunkedResponseTest {
             if (outbound instanceof LastHttpContent) {
                 written.add("<end>");
             } else if (outbound instanceof HttpContent) {
-                written.add(((HttpContent) outbound).content().toString(StandardCharsets.US_ASCII));
+                final ByteBuf content = ((HttpContent) outbound).content();
+                if (content.isReadable()) { // an empty chunk is nothing on the wire
+                    written.add(content.toString(StandardCharsets.US_ASCII));
+                }
             } else if (outbound instanceof HttpResponse) {
                 final HttpResponse head = (HttpResponse) outbound;
                 written.add("<head " + head.status().code() + " "
@@ -170,6 +177,48 @@ class SuspendingChunkedResponseTest {
                 written);
         Assertions.assertFalse(written.contains("<end>"),
                 "nothing ended it, so it must not have ended");
+    }
+
+    @Test
+    public void testWhatIsOfferedBeforeTheEndGoesOutBeforeIt() {
+        request();
+        drain();
+
+        body.offer("tick-1");
+        body.offer("tick-2");
+        body.finish();
+        channel.flush();
+
+        Assertions.assertEquals(List.of("tick-1", "tick-2", "<end>"), drain());
+        Assertions.assertTrue(body.closed, "An ended response kept its source open");
+        Assertions.assertTrue(channel.isOpen(), "An ended response closed a keep-alive connection");
+    }
+
+    @Test
+    public void testAnEndAfterEverythingWasTakenEndsTheResponse() {
+        request();
+        drain();
+
+        body.offer("tick-1");
+        channel.flush();
+        drain();
+
+        body.finish();
+        channel.flush();
+
+        Assertions.assertEquals(List.of("<end>"), drain());
+        Assertions.assertTrue(body.closed, "An ended response kept its source open");
+    }
+
+    @Test
+    public void testAnEndWhichIsNotFlushedEndsNothingYet() {
+        request();
+        drain();
+
+        body.finish();
+
+        Assertions.assertEquals(List.of(), drain(), "The end went out before anything asked for it");
+        Assertions.assertFalse(body.closed, "The source was closed before the response ended");
     }
 
     @Test

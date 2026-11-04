@@ -374,6 +374,9 @@ One thing stays yours, because it is not a `Life`'s business:
 - **Typed access**: `NamedValues` and `NamedMultiValues` offer `valueRequiredAsInt(name)`,
   `valueAsInt(name, default)` and the same for `byte`, `short`, `long`, `float`, `double`, `BigDecimal` and
   `boolean` (`true/yes/y/1`, case-insensitive). An unparseable value throws `BadRequestException` - HTTP 400.
+- **Several values under one name**: `NamedMultiValues` reads the one at an index with the same forms -
+  `valueRequiredAsInt(name, index)` - and `values(name)` is all of them, `?mic=XLON&mic=XPAR` as a list:
+  a view rather than a copy, empty when the name is not there.
 
 ## RestContext
 
@@ -1196,7 +1199,7 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
 - **`chunked.ChunkedRestServer`** - pull: JSON and text rows, a gzipped download, the cursor limit, the
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
-  events.
+  events, and a countdown produced on a thread of its own which ends with `end()`.
 - **`errors.ErrorsRestServer`** - both halves of an error: a page of your own for every status, an exception
   of your own carrying a `409`, and a `500` whose cause reaches the observer while the client is told the
   status and no more. `curl` lines to try are printed at startup.
