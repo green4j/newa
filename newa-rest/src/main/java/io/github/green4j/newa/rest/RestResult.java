@@ -27,8 +27,10 @@ import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.stream.ChunkedInput;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.AsciiString;
+import io.netty.util.concurrent.ScheduledFuture;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.TimeUnit;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_ENCODING;
@@ -57,6 +59,9 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     private boolean routed;
     private RestApiObserver restObserver;
     private boolean responded;
+    private ScheduledFuture<?> deadline;
+    private ChannelFutureListener abandonOnClose;
+    private boolean expired;
 
     RestResult(final ChannelHandlerContext ctx,
                final HttpRequest request,
@@ -94,6 +99,63 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
     void routed(final RestApiObserver restObserver) {
         routed = true;
         this.restObserver = restObserver;
+    }
+
+    /**
+     * @return whether this request has been answered
+     */
+    boolean responded() {
+        return responded;
+    }
+
+    /**
+     * Answers {@code 503} once the delay has passed, unless the handler has answered by then. What the
+     * handler says after that is dropped like any second answer, but as a late one rather than a mistake:
+     * nothing is reported. A channel which closes first takes the timer with it, and there is nothing left
+     * to answer.
+     *
+     * @param delayNanos left until the deadline, 0 or less when it has passed already
+     */
+    void expireAfter(final long delayNanos) {
+        deadline = ctx.executor().schedule(this::expire, delayNanos, TimeUnit.NANOSECONDS);
+        abandonOnClose = closed -> abandon();
+        ctx.channel().closeFuture().addListener(abandonOnClose); // called at once if it has closed already
+    }
+
+    private void expire() {
+        stopTimer();
+        if (responded) {
+            return;
+        }
+        expired = true; // before the answer: writing it may let the next request in, and a late answer to
+        // this one along with it
+        try {
+            error(new HttpException(HttpResponseStatus.SERVICE_UNAVAILABLE,
+                    "The request was not answered in time"));
+        } catch (final RuntimeException failed) {
+            // a task of the executor rather than a read of the pipeline, so nothing would catch this: the
+            // same report and close a failure of the read gets, with nothing left for the handle to answer
+            abandon();
+            handler.exceptionCaught(ctx, failed);
+        }
+    }
+
+    private void abandon() {
+        stopTimer();
+        expired = true;
+        responded = true; // nobody is left to read an answer, the handler's or ours
+        releaseResponse(); // a response begun through Content and never sent
+    }
+
+    private void stopTimer() {
+        if (deadline != null) {
+            deadline.cancel(false);
+            deadline = null;
+        }
+        if (abandonOnClose != null) {
+            ctx.channel().closeFuture().removeListener(abandonOnClose);
+            abandonOnClose = null;
+        }
     }
 
     /**
@@ -303,8 +365,8 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
             return;
         }
 
-        responded = true; // said before the pipeline is touched: a write which completes at once must not
-        // find this response still unsent
+        answered(); // said before the pipeline is touched: a write which completes at once must not find
+        // this response still unsent
 
         final HttpResponse head = new DefaultHttpResponse(httpVersion, statusCode);
         final HttpHeaders headers = head.headers();
@@ -620,7 +682,15 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
      * @param misuse of this result, carrying the stack of the call which was dropped
      */
     private void dropped(final IllegalStateException misuse) {
+        if (expired) {
+            return; // a handler which answers after its deadline is late, not mistaken
+        }
         handler.report(ctx.channel(), misuse);
+    }
+
+    private void answered() {
+        responded = true;
+        stopTimer();
     }
 
     private void releaseResponse() {
@@ -649,7 +719,7 @@ class RestResult implements RestHandle.Result, RestHandle.Result.Content {
         // must not release it a second time
         final FullHttpResponse written = response;
         response = null;
-        responded = true;
+        answered();
 
         // read off the response before it is written: the encoder consumes the content buffer, so by the
         // time the write completes there is nothing readable left to measure

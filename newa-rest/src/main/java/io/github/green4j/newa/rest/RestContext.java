@@ -7,7 +7,13 @@
 
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.jelly.JsonParserListener;
+import io.github.green4j.jelly.simple.JsonValue;
+import io.github.green4j.jelly.simple.JsonValueException;
+import io.github.green4j.newa.json.MalformedJsonException;
+import io.github.green4j.newa.json.Utf8JsonReader;
 import io.github.green4j.newa.server.ServerMemoryBudget;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -199,6 +205,90 @@ public class RestContext {
         queryParameters = new MappedNamedMultiValues(
                 queryStringDecoder.parameters());
         return queryParameters;
+    }
+
+    /**
+     * Reads the body of the request as a JSON document in UTF-8, right from the bytes it came in, with no
+     * {@link String} of it made first - see {@link Utf8JsonReader}. Nothing is kept: every call reads the body
+     * again.
+     * <p>
+     * A {@code ...Required} accessor of the value which does not find what it asks for throws a
+     * {@code JsonValueException}, which is a failure like any other here and is answered {@code 500}: it is
+     * {@link #jsonBodyAs(JsonBodyReader)} which answers it {@code 400}.
+     *
+     * @return the value of the body
+     * @throws BadRequestException {@code 400} if the body is not a JSON document, or has no value in it: no
+     *                             bytes, or whitespace only
+     * @throws IllegalStateException if the handler has already returned - the body has gone back to the pool
+     *                               by then
+     */
+    public JsonValue jsonBody() throws BadRequestException {
+        final JsonValue value;
+        try {
+            value = Utf8JsonReader.value(jsonBodyBytes());
+        } catch (final MalformedJsonException malformed) {
+            throw new BadRequestException("Malformed JSON in the request body: " + malformed.getMessage());
+        }
+        if (value == null) {
+            throw new BadRequestException("No JSON in the request body");
+        }
+        return value;
+    }
+
+    /**
+     * Reads the body of the request the way {@link #jsonBody()} does, and makes of its value what the reader
+     * says. A {@code JsonValueException} the reader throws - a {@code ...Required} accessor which does not find
+     * what it asks for - is the client's mistake, and is answered {@code 400} with its message, which names the
+     * member or the item and says what is there instead.
+     *
+     * @param reader what makes of the value what the handler needs
+     * @param <T> what the body is read as
+     * @return what the reader has made of the value
+     * @throws BadRequestException {@code 400} as {@link #jsonBody()} throws it, or for a value the body has not
+     *                             got
+     * @throws HttpException what the reader throws
+     * @throws IllegalStateException if the handler has already returned - the body has gone back to the pool
+     *                               by then
+     */
+    public <T> T jsonBodyAs(final JsonBodyReader<T> reader) throws HttpException {
+        final JsonValue body = jsonBody();
+        try {
+            return reader.read(body);
+        } catch (final JsonValueException missed) {
+            throw new BadRequestException(missed.getMessage());
+        }
+    }
+
+    /**
+     * Reads the body of the request as a JSON document in UTF-8 into the listener given, the way
+     * {@link #jsonBody()} reads it into a tree, and with no tree allocated at all. An empty body is not
+     * refused here: the listener is told a document has started and ended with no value in it, and what that
+     * means is the listener's to say. What the listener throws is thrown from here as it is - except a
+     * {@link MalformedJsonException}, which is taken for one of the body: a document the listener reads out of
+     * a value of the body is the client's as well.
+     *
+     * @param listener the listener
+     * @param <L> the type of the listener
+     * @return the listener
+     * @throws BadRequestException {@code 400} if the body is not a JSON document. The listener has been told
+     *                             about the error and about the end of the document by then
+     * @throws IllegalStateException if the handler has already returned - the body has gone back to the pool
+     *                               by then
+     */
+    public <L extends JsonParserListener> L jsonBody(final L listener) throws BadRequestException {
+        try {
+            return Utf8JsonReader.parse(jsonBodyBytes(), listener);
+        } catch (final MalformedJsonException malformed) {
+            throw new BadRequestException("Malformed JSON in the request body: " + malformed.getMessage());
+        }
+    }
+
+    private ByteBuf jsonBodyBytes() {
+        if (handled) {
+            throw new IllegalStateException("The handler has returned, so the body of the request has gone "
+                    + "back to the pool. Read it before the handler returns");
+        }
+        return request.content();
     }
 
     public NamedMultiValues formParameters() {

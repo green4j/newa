@@ -26,7 +26,8 @@ import io.netty.buffer.ByteBuf;
  * in the frames which follow, {@code true} closes it. Nothing here bounds the message as a whole - the frame
  * limit of the pipeline bounds one frame, not what several of them add up to - so a receiver which
  * assembles them owes itself a limit of its own, and a receiver which does not want them at all may end the
- * session as soon as it is handed a piece which is not the last.
+ * session as soon as it is handed a piece which is not the last. {@link WholeTextReceiver} is the one which
+ * assembles text, with a limit, at no cost to a message which comes in one frame.
  * <p>
  * Anything thrown here is reported to the observer of the session and ends it with a {@code 1011}, the way
  * {@link ClientSession#receiveFailed(Throwable)} describes.
@@ -42,6 +43,12 @@ public interface Receiver {
          * A text message, or one piece of it, as the peer sent it. A piece is decoded whole: a character
          * split across two frames is put back together before it gets here, so what arrives is never a
          * broken one.
+         * <p>
+         * The text is not a {@link String}: it is a buffer of the thread the next frame is decoded into, so
+         * once the buffer has grown to fit frames of that size a frame costs no allocation, and
+         * {@code toString()} is the copy for what has to outlive the call. A frame of more than 64 KiB, or
+         * one decoded while a receiver of the same thread is still being called, is decoded into a buffer of
+         * its own.
          *
          * @param session it came from.
          * @param message the text, valid for this call only - copy what outlives it.

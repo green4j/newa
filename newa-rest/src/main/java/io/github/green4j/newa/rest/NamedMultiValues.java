@@ -8,6 +8,10 @@
 package io.github.green4j.newa.rest;
 
 import java.math.BigDecimal;
+import java.util.AbstractList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 
 /**
  * {@link NamedValues} where one name may carry several values - a query string or a form, where
@@ -24,6 +28,37 @@ public interface NamedMultiValues extends NamedValues {
 
     String value(String name,
                  int valueIndex);
+
+    /**
+     * @param nameIndex of the name
+     * @return all the values of the name in the order they came, empty if there is no such name: a view of
+     *         these values rather than a copy, which can not be changed
+     */
+    default List<String> values(final int nameIndex) {
+        if (nameIndex < 0 || nameIndex >= numberOfNames()) {
+            return Collections.emptyList();
+        }
+        return new AbstractList<>() {
+            @Override
+            public String get(final int index) {
+                return value(nameIndex, Objects.checkIndex(index, size()));
+            }
+
+            @Override
+            public int size() {
+                return numberOfValues(nameIndex);
+            }
+        };
+    }
+
+    /**
+     * @param name of the values
+     * @return all the values of the name in the order they came, empty if there is no such name: a view of
+     *         these values rather than a copy, which can not be changed
+     */
+    default List<String> values(final String name) {
+        return values(nameToIndex(name));
+    }
 
     default String value(final int nameIndex,
                          final int valueIndex,

@@ -98,6 +98,7 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
 
     private ResponseChunks responseChunks = ResponseChunks.defaults();
     private int maxResponseSizeEstimate;
+    private int handlingDeadlineMs;
 
     private RestServer(final RestRouter api) {
         this.api = api;
@@ -110,6 +111,32 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
      */
     public RestServer withResponseChunks(final ResponseChunks responseChunks) {
         this.responseChunks = responseChunks;
+        return this;
+    }
+
+    /**
+     * Sets how long a handle has to answer, counted from the start of the handling - the bound on a handle
+     * which keeps its {@link RestHandle.Result} to answer later and never does: a database which does not
+     * reply, a remote call with no timeout of its own, a callback which is lost. Past it the request is
+     * answered {@code 503} and the connection serves the next one; what the handle says afterwards is
+     * dropped. Only a handle which returned without answering is timed, so a handle which answers in the
+     * call - a {@link JsonRestHandle}, a {@link TxtRestHandle}, a chunked one - costs no timer.
+     *
+     * <p>It is the gap between the other two deadlines: {@link #withRequestDeadlineMs(int)} ends once the
+     * request has arrived and {@link #withResponseDeadlineMs(int)} starts on the first write, and in between
+     * only this one runs. Nothing moves on the connection meanwhile, so the idle timeout runs as well: keep
+     * this below {@link #withIdleTimeoutMs(int)}, or the connection is closed with nothing said before this
+     * gets to answer.
+     *
+     * @param handlingDeadlineMs a handle has to answer within, 0 by default to wait as long as it takes.
+     * @return this builder.
+     */
+    public RestServer withHandlingDeadlineMs(final int handlingDeadlineMs) {
+        if (handlingDeadlineMs < 0) {
+            throw new IllegalArgumentException(
+                    "A handling deadline must not be negative: " + handlingDeadlineMs);
+        }
+        this.handlingDeadlineMs = handlingDeadlineMs;
         return this;
     }
 
@@ -168,7 +195,8 @@ public final class RestServer extends AbstractHttpServer<RestServer> {
                         channelErrorHandler(),
                         responseChunks,
                         observers(),
-                        memoryBudget()
+                        memoryBudget(),
+                        handlingDeadlineMs
                 )
         );
     }

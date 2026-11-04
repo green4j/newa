@@ -9,6 +9,7 @@ package io.github.green4j.newa.example.rest.chunked;
 
 import io.github.green4j.newa.example.rest.StdOutRestApiObserver;
 import io.github.green4j.newa.lang.Life;
+import io.github.green4j.newa.rest.BadRequestException;
 import io.github.green4j.newa.rest.PushedResponseBody;
 import io.github.green4j.newa.rest.RestApi;
 import io.github.green4j.newa.rest.RestApiBuilder;
@@ -28,7 +29,10 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CACHE_CONTROL;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A response which is never finished and is not pulled from anything: a clock, one line a second, for as long
@@ -41,10 +45,14 @@ import java.util.concurrent.TimeUnit;
  * connection costs a scheduled task and no thread at all, so ten thousand open tabs are ten thousand tasks on
  * a handful of threads.
  * <p>
+ * The countdown is the same shape for a source which runs out and which must not run on an event loop: its
+ * pieces are made on a thread of their own, and the last one is followed by {@link PushedResponseBody#end()}.
+ * <p>
  * Try it:
  * <pre>
- *   open http://127.0.0.1:9011/v1/clock.html   # the clock, in a browser
- *   curl -N 'http://127.0.0.1:9011/v1/clock'   # the same stream, as it arrives
+ *   open http://127.0.0.1:9011/v1/clock.html       # the clock, in a browser
+ *   curl -N 'http://127.0.0.1:9011/v1/clock'       # the same stream, as it arrives
+ *   curl -N 'http://127.0.0.1:9011/v1/countdown/5' # five lines from another thread, then the end
  * </pre>
  * Close the tab and the observer prints the response ending: the scheduled tick is cancelled with it, which
  * is the whole point of {@link ChunkedInput#close()} being called however a response ends.
@@ -129,6 +137,76 @@ public class ScheduledChunkedRestServer {
         }
     }
 
+    /**
+     * Stands in for a source which blocks - a file being decoded, an object store being read - and so must not
+     * run on an event loop.
+     */
+    private static final ScheduledExecutorService PRODUCER = Executors.newSingleThreadScheduledExecutor(r -> {
+        final Thread thread = new Thread(r, "countdown-producer");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /**
+     * A pushed response which does run out: each piece is produced on {@link #PRODUCER}, one at a time, the
+     * next only once the event loop has taken the previous one, and the last one is followed by
+     * {@link #end()}.
+     */
+    private static final class CountdownBody extends PushedResponseBody {
+        private final Channel channel;
+        private final AtomicReference<ByteBuf> ready = new AtomicReference<>();
+
+        private volatile boolean closed;
+
+        private int left; // the producer's alone: one piece is in flight at a time
+
+        private CountdownBody(final RestContext context,
+                              final int from) {
+            this.channel = context.channel();
+            this.left = from;
+            produce();
+        }
+
+        private void produce() {
+            PRODUCER.schedule(() -> {
+                if (closed || left == 0) {
+                    return;
+                }
+                final byte[] line = ("data: " + left + "\n\n").getBytes(StandardCharsets.US_ASCII);
+                ready.set(channel.alloc().buffer(line.length).writeBytes(line));
+                if (--left == 0) {
+                    end(); // what is ready still goes out first
+                }
+                if (closed) { // the peer went away while this piece was being made
+                    release(ready.getAndSet(null));
+                    return;
+                }
+                channel.flush();
+            }, 1, TimeUnit.SECONDS);
+        }
+
+        @Override
+        protected ByteBuf next(final ByteBufAllocator allocator) {
+            final ByteBuf piece = ready.getAndSet(null);
+            if (piece != null) {
+                produce();
+            }
+            return piece;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            release(ready.getAndSet(null));
+        }
+
+        private static void release(final ByteBuf piece) {
+            if (piece != null) {
+                piece.release();
+            }
+        }
+    }
+
     private static RestApi buildApi() {
         final RestApiBuilder apiBuilder = new RestApiBuilder(
                 API_NAME,
@@ -142,6 +220,16 @@ public class ScheduledChunkedRestServer {
             context.responseHeaders().set(CACHE_CONTROL, NO_STORE);
             result.ok(TEXT_EVENT_STREAM, new ClockBody(context));
         }).withDescription("The current time, one line a second, until the peer goes away.");
+
+        apiBuilder.get("/countdown/{from}", (context, result) -> {
+            final int from = context.pathParameters().valueRequiredAsInt("from");
+            if (from < 1 || from > 60) {
+                throw new BadRequestException("'from' must be in [1, 60], got " + from);
+            }
+            context.responseHeaders().set(CACHE_CONTROL, NO_STORE);
+            result.ok(TEXT_EVENT_STREAM, new CountdownBody(context, from));
+        }).withDescription("Counts down from the given number, one line a second, then ends.")
+                .withPathParameterDescriptions("from - Where to count down from, 1 to 60");
 
         apiBuilder.get("/clock.html", new StaticRestHandler(TEXT_HTML, CLOCK_PAGE.getBytes(StandardCharsets.UTF_8)))
                 .withDescription("The same clock, for a browser to render.");
@@ -165,6 +253,8 @@ public class ScheduledChunkedRestServer {
             System.out.printf("  open %s/v1/clock.html   -> the page the events drive%n",
                     LOCAL_SERVER_ADDRESS);
             System.out.printf("  curl -N %s/v1/clock     -> the same stream, as it arrives%n",
+                    LOCAL_SERVER_ADDRESS);
+            System.out.printf("  curl -N %s/v1/countdown/5 -> five lines from another thread, then the end%n",
                     LOCAL_SERVER_ADDRESS);
 
             return server;

@@ -78,7 +78,8 @@ RestServer rest = RestServer.of(api)
         // when a connection is given up on
         .withIdleTimeoutMs(60_000)               // on by default, see Idle connections
         .withRequestDeadlineMs(30_000)           // on by default, see Deadlines
-        .withResponseDeadlineMs(30_000);         // on by default, see Deadlines
+        .withResponseDeadlineMs(30_000)          // on by default, see Deadlines
+        .withHandlingDeadlineMs(10_000);         // off by default, see Deadlines
 ```
 
 **Two: the socket.** The transport, the threads, the port and every channel option:
@@ -215,6 +216,25 @@ and in front of a decoder every read looks the same.
 
 Both close silently, and both report to a `ConnectionObserver` first. For the request half that is the only
 report there can be: no request arrived, so no observer of requests has anything to be told about.
+
+Between the two there is a third wait, and it is this server's own: a `RestHandle` which keeps its `Result`
+to answer later - after a database, a remote call - may never answer at all. **`withHandlingDeadlineMs`**
+bounds that, off by default:
+
+```java
+RestServer.of(api)
+        .withHandlingDeadlineMs(10_000)   // off by default; keep it below withIdleTimeoutMs
+        .start(9009);
+```
+
+Past it the request is answered `503`, an observer is told `onResponseFailed`, and the connection serves the
+next request; what the handle says afterwards is dropped, as a late answer rather than a mistake, so the
+`ChannelErrorHandler` is not told. Only a handle which returned without answering is put on a timer - one
+which answers in the call, which is every `JsonRestHandle`, `TxtRestHandle` and chunked one, costs no timer.
+A connection which closes while the handle is still working takes its timer with it.
+Nothing moves on the connection while it waits, so the idle timeout runs too: set above it, this never gets
+to answer, and the connection is closed with nothing said. A `RestApiHandler` assembled by hand - beside a
+`WsServer` or a `FileServer` - takes the same deadline as its last constructor argument.
 
 ### Cross-origin requests
 
@@ -354,17 +374,43 @@ One thing stays yours, because it is not a `Life`'s business:
 - **Typed access**: `NamedValues` and `NamedMultiValues` offer `valueRequiredAsInt(name)`,
   `valueAsInt(name, default)` and the same for `byte`, `short`, `long`, `float`, `double`, `BigDecimal` and
   `boolean` (`true/yes/y/1`, case-insensitive). An unparseable value throws `BadRequestException` - HTTP 400.
+- **Several values under one name**: `NamedMultiValues` reads the one at an index with the same forms -
+  `valueRequiredAsInt(name, index)` - and `values(name)` is all of them, `?mic=XLON&mic=XPAR` as a list:
+  a view rather than a copy, empty when the name is not there.
 
 ## RestContext
 
 Every handler is given one: `channel()`, `executor()`, `request()`, `pathExpression()`, `method()`, `uri()`,
-`pathParameters()`, `queryParameters()`, `formParameters()`, `headers()`, `responseHeaders()`. Query
-parameters, form parameters and headers are parsed on first access.
+`pathParameters()`, `queryParameters()`, `formParameters()`, `jsonBody()`, `jsonBodyAs()`, `headers()`,
+`responseHeaders()`. Query parameters, form parameters and headers are parsed on first access.
 
-Two of these do not outlive the handler. The request's body goes back to the pool when `handle` returns, and
-`pathParameters()` is a matcher flyweight the next request on that thread overwrites - it throws
-`IllegalStateException` rather than answering with somebody else's values. Everything else, including
-`pathExpression()`, stays valid.
+`jsonBody()` reads the body as a JSON document in UTF-8 right from its buffer, with no `String` of it made
+first, into a green-jelly `JsonValue`; `jsonBody(listener)` reads it into a `JsonParserListener` and builds
+no tree at all. A body which is not JSON in UTF-8 is a `400` saying where it broke. An empty one is a `400`
+for `jsonBody()` and a document with no value for a listener, which is the judge of what that means.
+
+`jsonBodyAs(reader)` is the tree read into what the handler needs. A value the reader requires and the body
+has not got - the `JsonValueException` of a `...Required` accessor - is a `400` there, naming the member or
+the item and what is there instead. The same exception anywhere else is a `500` like any other failure,
+since a tree of the handler's own - a file, the response of another service - is not the client's to be told
+about:
+
+```java
+builder.postJson("/instruments", (context, output) -> {
+    final String symbol = context.jsonBodyAs(body -> body
+            .asObjectRequired()             // 400 if it's not an object
+            .getStringRequired("symbol"));  // 400 if there's no string
+    // ...
+});
+```
+
+The same reading outside a handler - a `ByteBuf` of your own, or the `InputStream` of a response a client
+got - is `Utf8JsonReader`.
+
+Two of these do not outlive the handler. The request's body goes back to the pool when `handle` returns -
+`jsonBody()` throws `IllegalStateException` after that - and `pathParameters()` is a matcher flyweight the
+next request on that thread overwrites - it throws `IllegalStateException` rather than answering with
+somebody else's values. Everything else, including `pathExpression()`, stays valid.
 
 ## Response headers
 
@@ -607,15 +653,15 @@ are in flight.
 
 Two shapes, differing in who decides that the next piece exists:
 
-|                             | **Pull**                                                               | **Push**                                  |
-|-----------------------------|------------------------------------------------------------------------|-------------------------------------------|
-| The source                  | always has more                                                        | has nothing until something happens       |
-| Next piece                  | the framework asks, the cursor answers                                 | the source produces it, then flushes      |
-| Ends when                   | the cursor says so                                                     | the peer goes away                        |
-| Paced by                    | the channel's write watermark                                          | whatever produces the content             |
-| Counted by `maxOpenCursors` | yes                                                                    | no                                        |
-| Written as                  | `ChunkedJsonRestHandler`, `ChunkedTxtRestHandler`, `ChunkedRestHandler` | `PushedResponseBody` given to `Result.ok` |
-| Typically                   | rows from a database, a report                                         | a clock, a queue, a feed                  |
+|                             | **Pull**                                                                | **Push**                                        |
+|-----------------------------|-------------------------------------------------------------------------|-------------------------------------------------|
+| The source                  | always has more                                                         | has nothing until something happens             |
+| Next piece                  | the framework asks, the cursor answers                                  | the source produces it, then flushes            |
+| Ends when                   | the cursor says so                                                      | the source calls `end()`, or the peer goes away |
+| Paced by                    | the channel's write watermark                                           | whatever produces the content                   |
+| Counted by `maxOpenCursors` | yes                                                                     | no                                              |
+| Written as                  | `ChunkedJsonRestHandler`, `ChunkedTxtRestHandler`, `ChunkedRestHandler` | `PushedResponseBody` given to `Result.ok`       |
+| Typically                   | rows from a database, a report                                          | a clock, a queue, a feed, a decoder             |
 
 `ChunkedWriteHandler` is put in front of `RestApiHandler` by the first chunked response on a channel: nothing
 to add to the pipeline, nothing to forget.
@@ -684,8 +730,38 @@ final class ClockBody extends PushedResponseBody {
 builder.get("/clock", (context, result) -> result.ok(TEXT_EVENT_STREAM, new ClockBody(context)));
 ```
 
-`PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, the end which never comes by
-itself, and the progress an observer is told.
+A source which does run out - rows decoded from a file on a thread of its own, say - calls `end()` once the
+last piece is produced, from any thread, and flushes as after any other piece. What `next` still gives out
+goes first; the response ends when it answers `null` after that.
+
+The decoder below keeps one piece in flight: it decodes the next only once `next` has taken this one, so a
+piece is never put where another still waits, and a source faster than the peer does not pile its pieces up
+in memory - it waits for the peer instead:
+
+```java
+private void onDecoded(ByteBuf piece, boolean last) {   // on the decoder's thread
+    ready.set(piece);                                     // the slot is empty: next() has taken the last one
+    if (last) {
+        end();
+    }
+    channel.flush();
+}
+
+@Override
+protected ByteBuf next(ByteBufAllocator allocator) {
+    final ByteBuf piece = ready.getAndSet(null);
+    if (piece != null) {
+        decodeNext();                                     // only now: one piece in flight
+    }
+    return piece;
+}
+```
+
+The full source, with the close which releases a piece nobody took, is `ScheduledChunkedRestServer` in
+`newa-example`.
+
+`PushedResponseBody` answers the rest of `ChunkedInput`: the length nobody knows, whether it has ended, and
+the progress an observer is told.
 
 One difference from pull: `maxOpenCursors` does not count these - it counts what `ChunkedRestHandler` and its
 siblings open, not what you hand to `Result.ok`. The gap between two ticks needs no thought at all, however
@@ -828,7 +904,9 @@ all declare `throws HttpException`. The four this library throws itself are ordi
 `InternalServerErrorException` (500).
 
 Anything thrown which is *not* an `HttpException` is a failure: it is wrapped, answered `500`, and nothing of
-it is said. The safe answer is what the type system gives you, not what you remembered to do.
+it is said. The safe answer is what the type system gives you, not what you remembered to do. A
+`JsonValueException` is no exception to it: the one place it is a `400` is the reader of
+[`jsonBodyAs`](#restcontext), which says the tree is the request's.
 
 ### What is reported, and where
 
@@ -1121,7 +1199,7 @@ In `newa-example`, package `io.github.green4j.newa.example.rest`:
 - **`chunked.ChunkedRestServer`** - pull: JSON and text rows, a gzipped download, the cursor limit, the
   observer.
 - **`chunked.ScheduledChunkedRestServer`** - push: a clock sending the time once a second over server-sent
-  events.
+  events, and a countdown produced on a thread of its own which ends with `end()`.
 - **`errors.ErrorsRestServer`** - both halves of an error: a page of your own for every status, an exception
   of your own carrying a `409`, and a `500` whose cause reaches the observer while the client is told the
   status and no more. `curl` lines to try are printed at startup.

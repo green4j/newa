@@ -15,6 +15,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.FullHttpRequest;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * The last handler of a REST pipeline: resolves every request against the {@link RestRouter} it was built
  * with, runs the handle which answers it, and renders what went wrong through the {@link HttpErrorHandler}.
@@ -35,6 +37,7 @@ public class RestApiHandler
     private final HttpObserverFactory observers;
     private final RestApiObserverFactory restObservers;
     private final ServerMemoryBudget memoryBudget;
+    private final long handlingDeadlineNanos;
 
     private ChunkedResponseBody stalling;
 
@@ -88,6 +91,40 @@ public class RestApiHandler
                           final ResponseChunks responseChunks,
                           final HttpObserverFactory observers,
                           final ServerMemoryBudget memoryBudget) {
+        this(
+                restApi,
+                errorHandler,
+                channelErrorHandler,
+                responseChunks,
+                observers,
+                memoryBudget,
+                0
+        );
+    }
+
+    /**
+     * @param restApi to route requests with
+     * @param errorHandler to render error responses with
+     * @param channelErrorHandler to report channel failures to
+     * @param responseChunks policy and accounting shared by every channel of this server, so build it once
+     * @param observers asked for an observer per request, or null to observe nothing. A
+     *                  {@link RestApiObserverFactory} additionally gets the stages after routing
+     * @param memoryBudget what {@link RestContext#reserveMemory(long, long)} reserves from, or null for none
+     * @param handlingDeadlineMs a handle has to answer within, counted from the start of the handling, or 0
+     *                           to wait for an answer as long as it takes - see
+     *                           {@link RestServer#withHandlingDeadlineMs(int)}
+     */
+    public RestApiHandler(final RestRouter restApi,
+                          final HttpErrorHandler errorHandler,
+                          final ChannelErrorHandler channelErrorHandler,
+                          final ResponseChunks responseChunks,
+                          final HttpObserverFactory observers,
+                          final ServerMemoryBudget memoryBudget,
+                          final int handlingDeadlineMs) {
+        if (handlingDeadlineMs < 0) {
+            throw new IllegalArgumentException(
+                    "A handling deadline must not be negative: " + handlingDeadlineMs);
+        }
         this.api = restApi;
         this.errorHandler = errorHandler;
         this.channelErrorHandler = channelErrorHandler;
@@ -98,6 +135,7 @@ public class RestApiHandler
                 ? (RestApiObserverFactory) observers
                 : null;
         this.memoryBudget = memoryBudget;
+        this.handlingDeadlineNanos = TimeUnit.MILLISECONDS.toNanos(handlingDeadlineMs);
     }
 
     /**
@@ -196,6 +234,8 @@ public class RestApiHandler
             restObserver.onHandlingStarted(context);
         }
 
+        // the clock is not read at all without a deadline to count it against
+        final long handlingStartedAt = handlingDeadlineNanos > 0 ? System.nanoTime() : 0;
         try {
             handling.handle().handle(
                     context,
@@ -206,6 +246,12 @@ public class RestApiHandler
         } finally {
             // the matcher flyweight the path parameters come from belongs to the next request on this thread
             context.handled();
+        }
+
+        if (handlingDeadlineNanos > 0 && !result.responded()) {
+            // only a handle which returned without answering is timed: one which answered in the call - every
+            // rendering handle - costs no timer at all
+            result.expireAfter(handlingDeadlineNanos - (System.nanoTime() - handlingStartedAt));
         }
     }
 
