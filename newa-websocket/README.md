@@ -311,6 +311,17 @@ one which does not want them may end the session as soon as it is handed a piece
 one thing which is put back together is a character cut in two by a frame boundary: a text piece always
 arrives as whole characters.
 
+A protocol of commands has no use for half of one, and `WholeTextReceiver` is the receiver which puts the
+pieces together, up to a limit, and hands the receiver it wraps whole messages only:
+
+```java
+.withTextReceiver(new WholeTextReceiver(64 * 1024, (session, message, last) -> onCommand(session, message)))
+```
+
+A message which comes in one frame is handed on as it came - the same text, nothing copied, nothing
+allocated. Only a message in pieces is copied, into a buffer of its session which goes once the message has
+been handed on, and one past the limit is answered with a `1009`.
+
 Everything that touches a session must end up on its event loop. `session.executor()` hops back onto it and
 `session.scheduler()` repeats work on it; never block either. `channel()`, `isClosed()`, `createTimeMs()`,
 `lastReadTimeMs()` and `lastWriteTimeMs()` answer from any thread. `lastReadTimeMs()` is stamped by any
@@ -716,8 +727,9 @@ further number: the frame limit bounds the inflated frame too, so the estimate c
 and the buffer it inflates into, plus the outbound source and a conservative encoded-size bound.
 
 A message costs one frame however many frames it is - nothing here collects the fragments. Collecting them
-yourself, staging added by custom handlers, retained frames and session state belong in
-`withAdditionalMemoryEstimate`.
+yourself or with `WholeTextReceiver` (its limit is in chars, two bytes each, and the buffer it grows may
+reach twice the limit, plus the old array while it grows), staging added by custom handlers, retained frames
+and session state belong in `withAdditionalMemoryEstimate`.
 
 ### Where the WebSocket estimate can be exceeded
 

@@ -26,7 +26,8 @@ import io.netty.buffer.ByteBuf;
  * in the frames which follow, {@code true} closes it. Nothing here bounds the message as a whole - the frame
  * limit of the pipeline bounds one frame, not what several of them add up to - so a receiver which
  * assembles them owes itself a limit of its own, and a receiver which does not want them at all may end the
- * session as soon as it is handed a piece which is not the last.
+ * session as soon as it is handed a piece which is not the last. {@link WholeTextReceiver} is the one which
+ * assembles text, with a limit, at no cost to a message which comes in one frame.
  * <p>
  * Anything thrown here is reported to the observer of the session and ends it with a {@code 1011}, the way
  * {@link ClientSession#receiveFailed(Throwable)} describes.
