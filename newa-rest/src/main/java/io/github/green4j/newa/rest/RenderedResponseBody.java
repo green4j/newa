@@ -7,63 +7,36 @@
 
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.ClearableByteArrayBufferingWriter;
+import io.github.green4j.newa.lang.Charset;
+import io.github.green4j.newa.text.ByteBufWriter;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
-import io.netty.buffer.Unpooled;
-
-import java.util.concurrent.TimeUnit;
-import java.util.function.IntConsumer;
 
 /**
  * A {@link ChunkedResponseBody} whose cursor writes characters rather than bytes - JSON or plain text - and
- * so has to go through one of green-jelly's byte-array writers before the bytes can be handed to the channel.
+ * so goes through a {@link ByteBufWriter}: a chunk is written into buffers of the allocator the way a whole
+ * response is, through the thread's array of at most 256 KiB. A step of the cursor which writes more than that
+ * goes into more buffers, never into a larger array.
  * <p>
- * That writer is the thread's, shared by every such response the thread serves: a chunk is rendered and
- * copied out within one call, so two responses can never be in it at once. Whatever is per-document - the
- * JSON generator's open scopes, the cursor - belongs to the subclass.
+ * The writer is taken for one chunk and given back, so the thread's writer serves every response the thread
+ * serves. Whatever is per-document - the JSON generator's open scopes, the cursor - belongs to the subclass.
  */
 abstract class RenderedResponseBody extends ChunkedResponseBody {
-    /**
-     * A chunk buffer floors at {@link ResponseChunks#DEFAULT_SIZE} rather than at the size ordinary responses
-     * are rendered in: that is about the size a chunk is filled to, so anything smaller would only be grown
-     * back. A server configured with larger chunks simply grows it, and the window policy keeps it there for
-     * as long as that load lasts.
-     *
-     * @param writer the buffer renders into
-     * @param resize replaces the array behind it, the one operation the writer interface does not expose
-     * @return the buffer, sized to the load like every other one here
-     */
-    static RetainedBuffer<ClearableByteArrayBufferingWriter> newBuffer(
-            final ClearableByteArrayBufferingWriter writer,
-            final IntConsumer resize) {
-        return new RetainedBuffer<>(
-                writer,
-                w -> w.array() == null ? 0 : w.array().length,
-                ClearableByteArrayBufferingWriter::length,
-                resize,
-                ResponseChunks.DEFAULT_SIZE,
-                TimeUnit.MILLISECONDS.toNanos(ResponseBuffers.observationWindowMillis()),
-                System::nanoTime
-        );
-    }
-
-    private final RetainedBuffer<ClearableByteArrayBufferingWriter> buffer;
+    private final Charset charset;
 
     RenderedResponseBody(final RestContext context,
-                         final RetainedBuffer<ClearableByteArrayBufferingWriter> buffer) {
+                         final Charset charset) {
         super(context);
-        this.buffer = buffer;
+        this.charset = charset;
     }
 
     /**
-     * Points whatever the cursor writes through at this chunk's writer. The writer is the same instance every
-     * time, but the binding is redone per chunk because the thread may have served another response in
-     * between.
+     * Points whatever the cursor writes through at this chunk's writer: the thread may have served another
+     * response since the last chunk, or have given a writer of its own to this one.
      *
-     * @param writer to render this chunk into
+     * @param writer to write this chunk into
      */
-    abstract void bind(ClearableByteArrayBufferingWriter writer);
+    abstract void bind(ByteBufWriter writer);
 
     /**
      * Steps the cursor once.
@@ -80,25 +53,25 @@ abstract class RenderedResponseBody extends ChunkedResponseBody {
     @Override
     final ByteBuf renderChunk(final ByteBufAllocator allocator) {
         final int chunkSize = chunks().size();
-        final ClearableByteArrayBufferingWriter writer = buffer.buffer();
-        writer.clear();
-        bind(writer);
-
-        while (writer.length() < chunkSize) {
-            if (!writeNext()) {
-                finish();
-                markExhausted();
-                break;
+        final ByteBufWriter writer = ByteBufWriter.start(charset, allocator);
+        try {
+            bind(writer);
+            boolean last = false;
+            while (writer.length() < chunkSize) {
+                if (!writeNext()) {
+                    finish();
+                    last = true;
+                    break;
+                }
             }
+            final ByteBuf chunk = writer.finish(); // empty if the document ended exactly on a chunk boundary
+            if (last) {
+                // only once the last chunk exists: one which could not be allocated is not a completed response
+                markExhausted();
+            }
+            return chunk;
+        } finally {
+            writer.abort(); // a cursor or an allocation which threw: the buffers taken so far go back
         }
-
-        final int length = writer.length();
-        buffer.onRendered();
-
-        if (length == 0) {
-            return Unpooled.EMPTY_BUFFER;
-        }
-        return allocator.buffer(length)
-                .writeBytes(writer.array(), writer.start(), length);
     }
 }

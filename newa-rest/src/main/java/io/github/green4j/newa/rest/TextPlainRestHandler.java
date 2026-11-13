@@ -11,8 +11,9 @@ import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.lang.Charset;
 
 /**
- * A {@link RestHandle} which renders {@code text/plain} into the thread's buffer and answers with it inside
- * {@code handle} - the {@link ApplicationJsonRestHandler} of the text side.
+ * A {@link RestHandle} answering with {@code text/plain} a subclass has rendered whole and hands over as a
+ * {@link ByteArray} - the {@link ApplicationJsonRestHandler} of the text side, and, like it, the dearer shape
+ * next to {@link TxtRestHandler}.
  */
 public abstract class TextPlainRestHandler
         extends AbstractTextPlainHandler implements RestHandle {

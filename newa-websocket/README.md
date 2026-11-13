@@ -782,9 +782,11 @@ ByteBuf encoded = allocator.buffer();
 entity.publishTextAndRelease(encoded);   // rendered once, a duplicate per session, released here
 ```
 
-A JSON frame is rendered with `Utf8JsonWriter`: into a buffer of the thread, then into a buffer of the
-allocator exactly its size, with no `String` and no heap buffer of its own. A rendering which captures
-nothing is one object for all the frames:
+A JSON frame is rendered with `Utf8JsonWriter`, through the same `ByteBufWriter` as a REST response: into an
+array of the thread, then into a buffer of the allocator exactly its size - or, for a frame larger than the
+array, into a buffer per array-full - with no `String` and no heap buffer of its own. The array starts at
+1 KB and grows with the frames the thread writes, up to 256 KB, so a publisher thread of small frames keeps a
+small one. A rendering which captures nothing is one object for all the frames:
 
 ```java
 entity.publishTextAndRelease(Utf8JsonWriter.write(ByteBufAllocator.DEFAULT, update, Updates::render));

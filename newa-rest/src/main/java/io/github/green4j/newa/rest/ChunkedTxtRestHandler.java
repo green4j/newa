@@ -7,11 +7,9 @@
 
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.AsciiByteArrayWriter;
-import io.github.green4j.jelly.ClearableByteArrayBufferingWriter;
-import io.github.green4j.jelly.Utf8ByteArrayWriter;
 import io.github.green4j.newa.lang.Charset;
 import io.github.green4j.newa.text.ByteArrayLineBuilder;
+import io.github.green4j.newa.text.ByteBufWriter;
 
 /**
  * Serves a {@link ChunkedTxtRestHandle} as a chunked response. See {@link ResponseChunks} for what bounds the
@@ -19,17 +17,6 @@ import io.github.green4j.newa.text.ByteArrayLineBuilder;
  */
 public class ChunkedTxtRestHandler
         extends AbstractTextPlainHandler implements RestHandle {
-
-    private static final ThreadLocal<RetainedBuffer<ClearableByteArrayBufferingWriter>> ASCII_CHUNK =
-            ThreadLocal.withInitial(() -> {
-                final AsciiByteArrayWriter writer = new AsciiByteArrayWriter(ResponseChunks.DEFAULT_SIZE);
-                return RenderedResponseBody.newBuffer(writer, size -> writer.set(new byte[size]));
-            });
-    private static final ThreadLocal<RetainedBuffer<ClearableByteArrayBufferingWriter>> UTF8_CHUNK =
-            ThreadLocal.withInitial(() -> {
-                final Utf8ByteArrayWriter writer = new Utf8ByteArrayWriter(ResponseChunks.DEFAULT_SIZE);
-                return RenderedResponseBody.newBuffer(writer, size -> writer.set(new byte[size]));
-            });
 
     private final ChunkedTxtRestHandle handle;
 
@@ -60,7 +47,7 @@ public class ChunkedTxtRestHandler
             return;
         }
 
-        final ChunkedResponseBody body = new Body(context, chunkBuffer(), cursor);
+        final ChunkedResponseBody body = new Body(context, responseCharset, cursor);
         ChunkedResponses.cursorOpened(context);
 
         try {
@@ -72,36 +59,21 @@ public class ChunkedTxtRestHandler
         }
     }
 
-    final RetainedBuffer<ClearableByteArrayBufferingWriter> chunkBuffer() {
-        switch (responseCharset) {
-            case US_ASCII:
-                return ASCII_CHUNK.get();
-            case UTF8:
-                return UTF8_CHUNK.get();
-            default:
-                throw new IllegalStateException();
-        }
-    }
-
     private static final class Body extends RenderedResponseBody {
         private final ChunkedTxtRestHandle.Cursor cursor;
 
         private ByteArrayLineBuilder lineBuilder;
 
         private Body(final RestContext context,
-                     final RetainedBuffer<ClearableByteArrayBufferingWriter> buffer,
+                     final Charset charset,
                      final ChunkedTxtRestHandle.Cursor cursor) {
-            super(context, buffer);
+            super(context, charset);
             this.cursor = cursor;
         }
 
         @Override
-        void bind(final ClearableByteArrayBufferingWriter writer) {
-            if (lineBuilder == null) {
-                // the writer is the same instance for every chunk of every response this thread serves, so
-                // one builder per response is all it takes
-                lineBuilder = new ByteArrayLineBuilder(writer);
-            }
+        void bind(final ByteBufWriter writer) {
+            lineBuilder = writer.lines(); // plain text keeps nothing between chunks
         }
 
         @Override

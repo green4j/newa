@@ -140,13 +140,13 @@ public class RestContext {
      *
      * @param heapBytes estimated heap the work holds
      * @param directMemoryBytes estimated direct memory the work holds
-     * @return the lease to close, {@link ServerMemoryBudget.Lease#EMPTY} when the server has no budget
+     * @return the lease to close, {@link ServerMemoryBudget.Lease#NO_BUDGET} when the server has no budget
      * @throws HttpException {@code 503} when the budget has no room for it
      */
     public ServerMemoryBudget.Lease reserveMemory(final long heapBytes,
                                                   final long directMemoryBytes) throws HttpException {
         if (memoryBudget == null) {
-            return ServerMemoryBudget.Lease.EMPTY;
+            return ServerMemoryBudget.Lease.NO_BUDGET;
         }
         final ServerMemoryBudget.Lease lease = memoryBudget.tryReserve(heapBytes, directMemoryBytes);
         if (lease == null) {
@@ -156,6 +156,30 @@ public class RestContext {
             );
         }
         return lease;
+    }
+
+    /**
+     * {@link #reserveMemory(long, long)} for work which holds heap only; the direct-memory capacity is not
+     * consulted.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @return the lease to close, {@link ServerMemoryBudget.Lease#NO_BUDGET} when the server has no budget
+     * @throws HttpException {@code 503} when the heap capacity has no room for it
+     */
+    public ServerMemoryBudget.Lease reserveHeap(final long heapBytes) throws HttpException {
+        return reserveMemory(heapBytes, 0);
+    }
+
+    /**
+     * {@link #reserveMemory(long, long)} for work which holds direct memory only; the heap capacity is not
+     * consulted.
+     *
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return the lease to close, {@link ServerMemoryBudget.Lease#NO_BUDGET} when the server has no budget
+     * @throws HttpException {@code 503} when the direct-memory capacity has no room for it
+     */
+    public ServerMemoryBudget.Lease reserveDirectMemory(final long directMemoryBytes) throws HttpException {
+        return reserveMemory(0, directMemoryBytes);
     }
 
     /**

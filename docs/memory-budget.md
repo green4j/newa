@@ -50,8 +50,9 @@ allocations may use different paths.
 
 The container or service-manager limit is the hard bound on the whole process. It must cover the heap, every
 direct/native pool, metaspace, code cache, thread stacks and allocator slack. In particular, `-Xmx` does not
-cover the off-heap copies and transport backlog of responses, and a container sized as heap plus one nominal
-direct limit can still be killed for RSS.
+cover responses - `getJson` and `getTxt` write theirs straight into direct memory, and so does
+`Utf8JsonWriter` a frame - nor their transport backlog, and a container sized as heap plus one nominal direct
+limit can still be killed for RSS.
 
 The JVM and Netty read these limits at startup. `ServerMemoryBudget.builder()` captures their two maximums,
 then `build()` applies `heapPercentage` and `directMemoryPercentage` (70% each by default). Changing process
@@ -107,7 +108,7 @@ The protocol guides show how those estimates are derived and where they can be e
 ### Floors and ceilings
 
 `minConnections` and `maxConnections` are independent and optional; `0` leaves that bound unset. A minimum
-reserves `minConnections × estimate` when the server registers. It guarantees those admissions, but keeps
+reserves `minConnections * estimate` when the server registers. It guarantees those admissions, but keeps
 the unused reservation from other servers, and registration fails if the floor does not fit the capacity
 remaining at that moment.
 
@@ -124,7 +125,7 @@ leave room for them outside the budget percentages.
 Work which is heavy only on some requests is better reserved for as long as it runs.
 `tryReserve(heap, direct)` draws on the same capacity as connections, cannot spend a floor, and returns `null`
 when there is no room. A REST handle reserves through its context instead, which answers `503` for it and,
-on a server without a budget, returns `Lease.EMPTY`:
+on a server without a budget, returns `Lease.NO_BUDGET`:
 
 ```java
 builder.getJson("/rows", (context, output) -> {
@@ -139,10 +140,22 @@ observer is not told about a reservation; its bytes show in snapshots and event 
 request is reported to the request observer as its `503`. A `RestApiHandler` added by hand, to a `WsServer`
 for example, reserves from the budget given to its constructor.
 
+Work on threads of its own, a batch loader or a worker pool, waits for room instead of polling:
+`reserve(heap, direct)` waits until both sizes fit at the same moment, and `tryReserve(heap, direct, timeout,
+unit)` waits at most the timeout and returns `null` after it. Nothing is held while waiting, and a zero size
+never waits for its capacity. Both throw `InterruptedException`, with nothing reserved, when the thread is
+interrupted before or while waiting. There is no fairness: connections and immediate reservations may take
+freed bytes ahead of a waiter, so the timeout bounds a wait without guaranteeing progress. Never wait on a
+Netty event loop - connections are released there, so the loop would stall the releases it waits for.
+
+Work which holds one kind of memory names it: `tryReserveHeap`, `reserveHeap` and the timed `tryReserveHeap`,
+and the same three for `DirectMemory`, take one size and never consult the other capacity. A REST context
+has the same pair beside `reserveMemory`: `reserveHeap(bytes)` and `reserveDirectMemory(bytes)`.
+
 ## Guarantee and known limits
 
 In one `ServerMemoryBudget`, the sum of active-connection estimates, unused guaranteed floors and open
-`tryReserve` leases never exceeds its heap or direct-memory capacity. It does **not** guarantee that
+application reservations never exceeds its heap or direct-memory capacity. It does **not** guarantee that
 actual heap, direct memory or RSS stays below a JVM or container limit:
 
 - Admission uses configured per-connection estimates, not current allocation. Memory already in use is not

@@ -8,7 +8,10 @@
 package io.github.green4j.newa.rest;
 
 /**
- * Policy for the thread-local buffers the JSON and plain-text handlers render responses into.
+ * Policy for the thread-local buffers a response is rendered into whole before it is copied out: by a subclass
+ * of {@link ApplicationJsonRestHandler} or {@link TextPlainRestHandler}, the lazy static handlers and the error
+ * handlers. {@code getJson}, {@code getTxt} and chunked responses keep no such buffer - they write through
+ * {@link io.github.green4j.newa.text.ByteBufWriter}, whose array is bounded at 256 KiB.
  * <p>
  * Those buffers are reused between requests, which is what keeps responses allocation-free, but they grow to
  * the size of the largest response ever rendered on the thread. One rare multi-megabyte response would

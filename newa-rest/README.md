@@ -458,19 +458,29 @@ Nothing is thrown: the response which did go out is the correct one.
 
 ## Response memory
 
-JSON and text handlers render into a thread-local buffer, which is what keeps responses allocation-free. Such
-a buffer grows to the largest response the thread ever rendered, so one rare multi-megabyte response would
-otherwise leave every event loop thread holding a buffer that size for the life of the process.
+`getJson` and `getTxt` write a response through `ByteBufWriter`, and so do the chunked handlers, a chunk at a
+time: into an array of the thread, which goes into a buffer of the channel's allocator whenever it is full.
+The array starts at 1 KB and doubles each time a response fills it, up to 256 KB, where it stays. The
+response is sent as those buffers are - one which fits the array as a single buffer exactly its size, a
+larger one as a composite of a buffer per array-full, never merged. So on the heap a response costs that
+array, at most 256 KB per worker, whatever its size; each byte is copied once, from the array into a buffer;
+and the response itself is in the allocator's memory, which is direct memory with the default allocator -
+see [Large responses](#large-responses) for sizing that. A handle which throws, an `Error` included, gives
+back every buffer it has filled.
 
-So the buffer is sized to the load: never dropped, never below `ResponseBuffers.baseSize()` (64 KB, and where
+A handler which renders a response whole and hands it over as a `ByteArray` - a subclass of
+`ApplicationJsonRestHandler` or `TextPlainRestHandler`, the lazy static handlers, the error handlers - renders
+into a thread-local buffer instead. Such a buffer grows to the largest response the thread ever rendered, so
+one rare multi-megabyte response would otherwise leave every event loop thread holding a buffer that size for
+the life of the process.
+
+So that buffer is sized to the load: never dropped, never below `ResponseBuffers.baseSize()` (64 KB, and where
 it starts, so ordinary responses never grow it), and above that it follows the largest response of the last
 `ResponseBuffers.observationWindowMillis()` (5 s) plus half again. Nothing counts requests - a thread serves
 hundreds a second, and a per-request counter would release and re-grow the buffer constantly, turning a memory
 problem into a GC one. Both are overridable: `newa.rest.baseBufferSize`,
-`newa.rest.bufferObservationWindowMillis`.
-
-The rendered content is then copied once into a buffer from the channel's allocator - direct, so the transport
-writes it as is.
+`newa.rest.bufferObservationWindowMillis`. The rendered content is then copied once into a buffer from the
+channel's allocator.
 
 ## Memory budget
 
@@ -484,16 +494,18 @@ largest exchange you are willing to serve, and refuse what does not fit:
 direct / connection  ~  2 x largest request + largest ordinary response
                         or the larger configured chunked-response backlog
 heap / connection    ~  2 x (request line + headers) + response estimate + application state
-render-buffer heap   ~  workers x max(64 KB, recently rendered response x 1.5)
+render-buffer heap   ~  workers x (256 KB + max(64 KB, response recently rendered whole x 1.5))
 N                    <= min(heap capacity / heap estimate, direct capacity / direct estimate)
 ```
 
 At 2 MB of request and 8 MB of ordinary response, with neither compression nor a larger chunked backlog, one
 connection is charged about 12 MB of direct memory. A 358 MB direct admission capacity (70% of a 512 MB
-Netty maximum) therefore admits about 29 before the heap side is considered. Four workers may meanwhile
-retain about 4 x 12 MB = 48 MB of heap in their render buffers after responses of that size. The estimator
-charges a rendered response to every admitted connection deliberately conservatively, but the per-worker
-residue can outlive those leases and still needs process headroom. What enforces the terms:
+Netty maximum) therefore admits about 29 before the heap side is considered. Served by `getJson`, those
+responses leave four workers holding 4 x 256 KB of heap between them; rendered whole by an
+`ApplicationJsonRestHandler`, about 4 x 12 MB = 48 MB. The estimator charges the response to the heap of
+every admitted connection either way - for `getJson` and `getTxt` that is conservative, for a response
+rendered whole it is what it costs - but the per-worker residue can outlive those leases and still needs
+process headroom. What enforces the terms:
 
 ### The request body
 
@@ -609,10 +621,10 @@ allocation limits. In particular:
 - Custom handlers, observers, asynchronous work, retained buffers and application objects are invisible.
   Put their worst per-connection heap and direct cost in `withAdditionalMemoryEstimate`. Global caches and
   other process state are not per-connection and instead need room outside the budget percentages.
-- JSON and text render buffers are per worker, not per connection. They can hold 1.5 times a recently
-  rendered large response until their observation window expires and never shrink below the configured
-  base. `newa.rest.baseBufferSize` and `newa.rest.bufferObservationWindowMillis` control that residue, not
-  the peak of a response being rendered.
+- Render buffers are per worker, not per connection. The array of a `ByteBufWriter` is at most 256 KB; the
+  buffer of a handler which renders a response whole can hold 1.5 times a recently rendered large response until its
+  observation window expires and never shrinks below the configured base. `newa.rest.baseBufferSize` and
+  `newa.rest.bufferObservationWindowMillis` control that residue, not the peak of a response being rendered.
 - Direct allocations use a pooled allocator whose chunks, arenas and fragmentation do not follow connection
   leases byte for byte. The file estimate covers the built-in watermark, read-ahead chunks and compression
   staging, but allocator slack and any custom file pipeline still need headroom.
@@ -631,9 +643,10 @@ holds for the incremental `Result.Content` too - `append(...)` fills the respons
 response of hundreds of megabytes costs that much memory per request in flight, and a slow client keeps it
 there until the socket drains.
 
-The library keeps that at its floor rather than a multiple of it - the buffer policy above, one copy instead
-of two, and `ok(contentType, contentLength)` allocating the declared length up front instead of doubling and
-copying. Keeping it *low* is yours:
+The library keeps that at its floor rather than a multiple of it - `getJson` and `getTxt` writing the response
+into the channel's buffers as it is rendered, never whole on the heap and never copied whole, the buffer
+policy above for a response rendered whole, and `ok(contentType, contentLength)` allocating the declared
+length up front instead of doubling and copying. Keeping it *low* is yours:
 
 - **Page.** A response worth hundreds of megabytes is usually a missing `limit`/`cursor` on the endpoint. The
   client has to hold it too.
@@ -641,7 +654,9 @@ copying. Keeping it *low* is yours:
 - **Size the container for direct memory, not just the heap.** Response buffers live off-heap, where `-Xmx`
   does not bound them and the cgroup limit does, so a container sized from the heap alone is killed for its
   RSS instead of failing with `OutOfMemoryError` - see
-  [Set the process limits first](../docs/memory-budget.md#set-the-process-limits-first).
+  [Set the process limits first](../docs/memory-budget.md#set-the-process-limits-first). The direct limit
+  defaults to `-Xmx`, and a response larger than what is left of it fails with
+  `Cannot reserve direct memory`: set `-XX:MaxDirectMemorySize` for the largest responses in flight at once.
 
 When none of that is enough, do not build the response at all.
 
