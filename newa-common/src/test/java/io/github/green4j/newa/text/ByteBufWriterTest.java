@@ -245,11 +245,21 @@ class ByteBufWriterTest {
         final StringBuilder text = new StringBuilder();
         while (text.length() < length) {
             switch (random.nextInt(5)) {
-                case 0 -> text.append((char) ('a' + random.nextInt(26)));
-                case 1 -> text.append((char) ('\u0430' + random.nextInt(32)));
-                case 2 -> text.append("\u20ac\"\\\n");
-                case 3 -> text.appendCodePoint(0x1F600 + random.nextInt(50)); // a surrogate pair
-                default -> text.append(' ');
+                case 0:
+                    text.append((char) ('a' + random.nextInt(26)));
+                    break;
+                case 1:
+                    text.append((char) ('\u0430' + random.nextInt(32)));
+                    break;
+                case 2:
+                    text.append("\u20ac\"\\\n");
+                    break;
+                case 3:
+                    text.appendCodePoint(0x1F600 + random.nextInt(50)); // a surrogate pair
+                    break;
+                default:
+                    text.append(' ');
+                    break;
             }
         }
         return text.toString();
@@ -269,8 +279,8 @@ class ByteBufWriterTest {
                         throw new OutOfMemoryError("Cannot reserve direct memory");
                     }
                     final Object result = method.invoke(delegate, args);
-                    if (result instanceof ByteBuf buffer) {
-                        taken.add(buffer);
+                    if (result instanceof ByteBuf) {
+                        taken.add((ByteBuf) result);
                     }
                     return result;
                 });

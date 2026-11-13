@@ -208,6 +208,8 @@ configure([commonProject,
     }
 
     compileTestJava {
+        // the tests are held to the same language level as the sources: CI builds on Java 11 too
+        options.release = newaSrcJavaVersion.majorVersion as Integer
         options.encoding = newaSourceEncoding
     }
 

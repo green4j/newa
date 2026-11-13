@@ -209,8 +209,8 @@ class RenderingFailureTest {
                         throw new OutOfMemoryError("Cannot reserve direct memory");
                     }
                     final Object result = method.invoke(delegate, args);
-                    if (result instanceof ByteBuf buffer) {
-                        taken.add(buffer);
+                    if (result instanceof ByteBuf) {
+                        taken.add((ByteBuf) result);
                     }
                     return result;
                 });
