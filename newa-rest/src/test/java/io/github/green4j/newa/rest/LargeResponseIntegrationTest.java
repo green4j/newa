@@ -24,7 +24,6 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -36,8 +35,9 @@ import java.net.http.HttpResponse;
 
 /**
  * Large responses over a real socket. The point of the size used here is not the size itself but that it is
- * comfortably past {@link ResponseBuffers#baseSize()}: the response must arrive intact, and the buffer it was
- * rendered in must be kept at that size while such responses keep coming.
+ * comfortably past {@link ResponseBuffers#baseSize()} and the array of a
+ * {@link io.github.green4j.newa.text.ByteBufWriter}: the response must arrive intact, written into many of the
+ * channel's buffers, and no thread-local buffer may grow for it.
  * <p>
  * The server runs a single event loop thread so that the probe endpoints, which report the sizes of the
  * thread-local buffers, observe the very same thread that rendered the large response.
@@ -89,8 +89,6 @@ class LargeResponseIntegrationTest {
         builder.getTxt("/large/txt", (context, output) ->
                 output.append(
                         contentOf(context.queryParameters().valueRequiredAsInt("size"))));
-        builder.getJson("/small/json", (context, output) -> output.stringValue("small"));
-        builder.getTxt("/small/txt", (context, output) -> output.append("small"));
         // each probe is rendered by the other content type's buffer, so reading a size never disturbs it
         builder.getTxt("/probe/json-buffer", (context, output) ->
                 output.append(Integer.toString(jsonProbe.current().capacity())));
@@ -173,14 +171,6 @@ class LargeResponseIntegrationTest {
         return response.body();
     }
 
-    private int retainedJsonBufferSize() throws Exception {
-        return Integer.parseInt(get("/v1/probe/json-buffer"));
-    }
-
-    private int retainedTxtBufferSize() throws Exception {
-        return Integer.parseInt(get("/v1/probe/txt-buffer"));
-    }
-
     /**
      * @param path   of the endpoint which renders the content.
      * @param quoted whether the content arrives inside the two quotes of a JSON string.
@@ -201,42 +191,16 @@ class LargeResponseIntegrationTest {
         }
     }
 
-    @Test
-    public void testRepeatedLargeResponsesStayIntactAndKeepTheirBuffer() throws Exception {
-        final String expected = contentOf(LARGE_CONTENT_SIZE);
-
-        for (int i = 0; i < 5; i++) {
-            Assertions.assertEquals(expected,
-                    get("/v1/large/txt?size=" + LARGE_CONTENT_SIZE),
-                    "response " + i + " is damaged");
+    @ParameterizedTest
+    @CsvSource({"/v1/large/json, /v1/probe/json-buffer", "/v1/large/txt, /v1/probe/txt-buffer"})
+    public void aLargeResponseGrowsNoBuffer(final String path,
+                                            final String probe) throws Exception {
+        final int before = Integer.parseInt(get(probe));
+        for (int i = 0; i < 3; i++) {
+            get(path + "?size=" + LARGE_CONTENT_SIZE);
         }
 
-        // still serving them at that size, so the buffer must be held rather than re-grown per request
-        Assertions.assertTrue(retainedTxtBufferSize() > ResponseBuffers.baseSize());
-    }
-
-    @Test
-    public void testLargeJsonResponseGrowsItsBufferAndKeepsIt() throws Exception {
-        get("/v1/large/json?size=" + LARGE_CONTENT_SIZE);
-
-        final int grown = retainedJsonBufferSize();
-        Assertions.assertTrue(grown > ResponseBuffers.baseSize());
-
-        // small responses do not undo it by themselves: only the observation window passing does, which
-        // RetainedBufferTest covers on a clock it can move
-        for (int i = 0; i < 50; i++) {
-            get("/v1/small/json");
-        }
-
-        Assertions.assertEquals(grown, retainedJsonBufferSize());
-    }
-
-    @Test
-    public void testOrdinaryResponsesNeverGrowTheBufferAtAll() throws Exception {
-        for (int i = 0; i < 50; i++) {
-            get("/v1/small/txt");
-        }
-
-        Assertions.assertEquals(ResponseBuffers.baseSize(), retainedTxtBufferSize());
+        // written into the channel's buffers: the thread-local buffer is what it was
+        Assertions.assertEquals(before, Integer.parseInt(get(probe)));
     }
 }

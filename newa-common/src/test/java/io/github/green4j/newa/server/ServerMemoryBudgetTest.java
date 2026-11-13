@@ -9,12 +9,16 @@ package io.github.green4j.newa.server;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 class ServerMemoryBudgetTest {
     @Test
@@ -424,7 +428,250 @@ class ServerMemoryBudgetTest {
     }
 
     @Test
-    void invalidConfigurationIsRefused() {
+    void aWaitingReservationWithRoomReturnsAtOnce() throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+
+        final ServerMemoryBudget.Lease blocking = budget.reserve(30, 40);
+        final ServerMemoryBudget.Lease timed = budget.tryReserve(30, 40, 0, TimeUnit.SECONDS);
+
+        Assertions.assertNotNull(blocking);
+        Assertions.assertNotNull(timed);
+        Assertions.assertEquals(60, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(80, budget.snapshot().reservedDirectMemoryBytes());
+        blocking.close();
+        timed.close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @ParameterizedTest(name = "{0} returned, timed={1}")
+    @CsvSource({
+            "lease,      false",
+            "connection, false",
+            "floor,      false",
+            "lease,      true"
+    })
+    void aWaitingReservationWakesWhenTheCapacityIsReturned(final String returned,
+                                                           final boolean timed) throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final AutoCloseable occupant;
+        switch (returned) {
+            case "lease":
+                occupant = budget.tryReserve(100, 0);
+                break;
+            case "connection":
+                occupant = budget.register("rest", ServerMemoryEstimate.of(100, 1), 0).tryAcquire();
+                break;
+            case "floor":
+                occupant = budget.register("rest", ServerMemoryEstimate.of(50, 1), 2, 0);
+                break;
+            default:
+                throw new IllegalArgumentException(returned);
+        }
+        Assertions.assertNotNull(occupant);
+
+        final Waiter waiter = new Waiter("budget-waiter", timed
+                ? () -> budget.tryReserve(100, 0, 1, TimeUnit.MINUTES)
+                : () -> budget.reserve(100, 0));
+        waiter.awaitWaiting();
+        Assertions.assertEquals(100, budget.snapshot().reservedHeapBytes());
+
+        occupant.close();
+        final ServerMemoryBudget.Lease lease = waiter.join();
+
+        Assertions.assertNotNull(lease);
+        Assertions.assertEquals(100, budget.snapshot().reservedHeapBytes());
+        lease.close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+    }
+
+    @ParameterizedTest(name = "full heap={0}, full direct={1}: reserve({2}, {3})")
+    @CsvSource({
+            "100, 0,   0,  50",
+            "0,   100, 50, 0"
+    })
+    void aZeroSizeNeverWaitsForItsCapacity(final long fullHeap,
+                                           final long fullDirect,
+                                           final long heap,
+                                           final long direct) throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease full = budget.tryReserve(fullHeap, fullDirect);
+        Assertions.assertNotNull(full);
+
+        final ServerMemoryBudget.Lease blocking =
+                new Waiter("budget-zero", () -> budget.reserve(heap, direct)).join();
+        final ServerMemoryBudget.Lease timed = budget.tryReserve(heap, direct, 0, TimeUnit.SECONDS);
+
+        Assertions.assertNotNull(blocking);
+        Assertions.assertNotNull(timed);
+        Assertions.assertEquals(fullHeap + 2 * heap, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(fullDirect + 2 * direct, budget.snapshot().reservedDirectMemoryBytes());
+        blocking.close();
+        timed.close();
+        full.close();
+    }
+
+    @Test
+    void aWaiterTakesBothSizesTogetherAndHoldsNothingWhileWaiting() throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease direct = budget.tryReserve(0, 100);
+        final ServerMemoryBudget.Lease heap = budget.tryReserve(60, 0);
+
+        final Waiter waiter = new Waiter("budget-both", () -> budget.reserve(40, 50));
+        waiter.awaitWaiting();
+        Assertions.assertEquals(60, budget.snapshot().reservedHeapBytes(), "The waiter holds heap");
+
+        final ServerMemoryBudget.Lease meanwhile = budget.tryReserve(40, 0);
+        Assertions.assertNotNull(meanwhile, "The heap the waiter needs was taken from others");
+        meanwhile.close();
+
+        heap.close();
+        waiter.awaitWaiting();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes(), "The waiter took the heap alone");
+
+        direct.close();
+        final ServerMemoryBudget.Lease lease = waiter.join();
+
+        Assertions.assertNotNull(lease);
+        Assertions.assertEquals(40, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(50, budget.snapshot().reservedDirectMemoryBytes());
+        lease.close();
+    }
+
+    @Test
+    void twoWaitersNeverSplitTheCapacityWhichFitsOne() throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease occupant = budget.tryReserve(100, 100);
+        final Waiter first = new Waiter("budget-first", () -> budget.reserve(60, 60));
+        final Waiter second = new Waiter("budget-second", () -> budget.reserve(60, 60));
+        first.awaitWaiting();
+        second.awaitWaiting();
+
+        occupant.close();
+        awaitTrue(() -> first.lease.get() != null || second.lease.get() != null,
+                "Neither waiter took the returned capacity");
+        final Waiter served = first.lease.get() != null ? first : second;
+        final Waiter waiting = served == first ? second : first;
+        waiting.awaitWaiting();
+
+        Assertions.assertNull(waiting.lease.get());
+        Assertions.assertEquals(60, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(60, budget.snapshot().reservedDirectMemoryBytes());
+
+        served.join().close();
+        waiting.join().close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @Test
+    void aTimedReservationGivesUpAfterItsTimeout() throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease occupant = budget.tryReserve(100, 0);
+
+        final long start = System.nanoTime();
+        Assertions.assertNull(budget.tryReserve(1, 0, 20, TimeUnit.MILLISECONDS));
+
+        Assertions.assertTrue(System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(20));
+        Assertions.assertEquals(100, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+        occupant.close();
+    }
+
+    @ParameterizedTest(name = "reserve({0}, {1})")
+    @CsvSource({
+            "101, 0",
+            "0,   101"
+    })
+    void whatNoWaitCanFitIsRefusedWithoutWaiting(final long heap,
+                                                 final long direct) throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserve(heap, direct));
+        Assertions.assertNull(
+                new Waiter("budget-oversized", () -> budget.tryReserve(heap, direct, 1, TimeUnit.HOURS)).join());
+        Assertions.assertNull(budget.tryReserve(heap, direct));
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @ParameterizedTest(name = "timed={0}")
+    @CsvSource({"false", "true"})
+    void anInterruptedWaiterReservesNothing(final boolean timed) throws Exception {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease occupant = budget.tryReserve(100, 100);
+        final Waiter waiter = new Waiter("budget-interrupted", timed
+                ? () -> budget.tryReserve(50, 50, 1, TimeUnit.MINUTES)
+                : () -> budget.reserve(50, 50));
+        waiter.awaitWaiting();
+
+        waiter.thread.interrupt();
+        Assertions.assertNull(waiter.join());
+
+        Assertions.assertInstanceOf(InterruptedException.class, waiter.failure.get());
+        Assertions.assertEquals(100, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(100, budget.snapshot().reservedDirectMemoryBytes());
+        occupant.close();
+        budget.reserve(100, 100).close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+    }
+
+    @Test
+    void anInterruptBeforeTheCallReservesNothingEvenWithRoom() {
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        try {
+            Thread.currentThread().interrupt();
+            Assertions.assertThrows(InterruptedException.class, () -> budget.reserve(1, 1));
+            Thread.currentThread().interrupt();
+            Assertions.assertThrows(InterruptedException.class,
+                    () -> budget.tryReserve(1, 1, 1, TimeUnit.SECONDS));
+        } finally {
+            Thread.interrupted();
+        }
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @ParameterizedTest(name = "{0}, {1}")
+    @CsvSource({
+            "heap,   immediate",
+            "heap,   blocking",
+            "heap,   timed",
+            "direct, immediate",
+            "direct, blocking",
+            "direct, timed"
+    })
+    void aSingleKindReservationTakesAndWaitsForItsOwnCapacityOnly(final String kind,
+                                                                  final String form) throws Exception {
+        final boolean heap = kind.equals("heap");
+        final ServerMemoryBudget budget = budgetOf(100, 100).build();
+        final ServerMemoryBudget.Lease otherKindFull = heap ? budget.tryReserve(0, 100) : budget.tryReserve(100, 0);
+
+        final ServerMemoryBudget.Lease first = reserveOneKind(budget, heap, form, 40);
+        Assertions.assertNotNull(first, "The full capacity of the other kind was consulted");
+        Assertions.assertEquals(heap ? 40 : 100, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(heap ? 100 : 40, budget.snapshot().reservedDirectMemoryBytes());
+
+        if (form.equals("immediate")) {
+            Assertions.assertNull(reserveOneKind(budget, heap, form, 61));
+        } else {
+            final Waiter waiter = new Waiter("budget-" + kind, () -> reserveOneKind(budget, heap, form, 61));
+            waiter.awaitWaiting();
+            first.close();
+            final ServerMemoryBudget.Lease second = waiter.join();
+            Assertions.assertNotNull(second);
+            Assertions.assertEquals(heap ? 61 : 100, budget.snapshot().reservedHeapBytes());
+            Assertions.assertEquals(heap ? 100 : 61, budget.snapshot().reservedDirectMemoryBytes());
+            second.close();
+        }
+        first.close();
+        otherKindFull.close();
+        Assertions.assertEquals(0, budget.snapshot().reservedHeapBytes());
+        Assertions.assertEquals(0, budget.snapshot().reservedDirectMemoryBytes());
+    }
+
+    @Test
+    void invalidConfigurationIsRefused() throws Exception {
         Assertions.assertThrows(IllegalArgumentException.class,
                 () -> ServerMemoryBudget.builder(1, 1).heapPercentage(0));
         Assertions.assertThrows(IllegalArgumentException.class,
@@ -436,6 +683,22 @@ class ServerMemoryBudgetTest {
         final ServerMemoryBudget budget = ServerMemoryBudget.builder(Long.MAX_VALUE, 10).build();
         Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserve(-1, 0));
         Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserve(0, -1));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserve(-1, 0));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserve(0, -1));
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> budget.tryReserve(-1, 0, 1, TimeUnit.SECONDS));
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> budget.tryReserve(0, -1, 1, TimeUnit.SECONDS));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserveHeap(-1));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserveHeap(-1));
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> budget.tryReserveHeap(-1, 1, TimeUnit.SECONDS));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.tryReserveDirectMemory(-1));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserveDirectMemory(-1));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> budget.reserveDirectMemory(8));
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> budget.tryReserveDirectMemory(-1, 1, TimeUnit.SECONDS));
+        Assertions.assertNull(budget.tryReserveDirectMemory(8, 1, TimeUnit.SECONDS));
         Assertions.assertThrows(
                 IllegalArgumentException.class,
                 () -> budget.register(
@@ -487,6 +750,81 @@ class ServerMemoryBudgetTest {
         } catch (final InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting to contend for the budget", interrupted);
+        }
+    }
+
+    private static ServerMemoryBudget.Lease reserveOneKind(final ServerMemoryBudget budget,
+                                                           final boolean heap,
+                                                           final String form,
+                                                           final long bytes) throws InterruptedException {
+        switch (form) {
+            case "immediate":
+                return heap ? budget.tryReserveHeap(bytes) : budget.tryReserveDirectMemory(bytes);
+            case "blocking":
+                return heap ? budget.reserveHeap(bytes) : budget.reserveDirectMemory(bytes);
+            case "timed":
+                return heap
+                        ? budget.tryReserveHeap(bytes, 1, TimeUnit.MINUTES)
+                        : budget.tryReserveDirectMemory(bytes, 1, TimeUnit.MINUTES);
+            default:
+                throw new IllegalArgumentException(form);
+        }
+    }
+
+    private static void awaitTrue(final BooleanSupplier condition,
+                                  final String failure) {
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() - deadline > 0) {
+                Assertions.fail(failure);
+            }
+            Thread.yield();
+        }
+    }
+
+    private interface Reservation {
+        ServerMemoryBudget.Lease reserve() throws InterruptedException;
+    }
+
+    /**
+     * A thread which makes one reservation and keeps what it ended with: the lease, or the failure.
+     */
+    private static final class Waiter {
+        private final AtomicReference<ServerMemoryBudget.Lease> lease = new AtomicReference<>();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final Thread thread;
+
+        private Waiter(final String name,
+                       final Reservation reservation) {
+            thread = new Thread(() -> {
+                try {
+                    lease.set(reservation.reserve());
+                } catch (final Throwable t) {
+                    failure.set(t);
+                }
+            }, name);
+            thread.start();
+        }
+
+        /**
+         * Returns once the thread is parked in the budget's monitor, so that a test acts on a real waiter
+         * rather than on one which has not reached the wait yet.
+         */
+        private void awaitWaiting() {
+            awaitTrue(() -> {
+                final Thread.State state = thread.getState();
+                return state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING;
+            }, thread.getName() + " never waited, it is " + thread.getState());
+        }
+
+        private ServerMemoryBudget.Lease join() throws InterruptedException {
+            thread.join(TimeUnit.SECONDS.toMillis(10));
+            Assertions.assertFalse(thread.isAlive(), thread.getName() + " is still waiting");
+            final Throwable t = failure.get();
+            if (t != null && !(t instanceof InterruptedException)) {
+                throw new AssertionError(thread.getName() + " failed", t);
+            }
+            return lease.get();
         }
     }
 }

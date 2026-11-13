@@ -11,9 +11,12 @@ import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.lang.Charset;
 
 /**
- * A {@link RestHandle} which renders {@code application/json} into the thread's buffer and answers with it
- * inside {@code handle} - the shape every JSON endpoint of an api ends up in. A subclass renders and may
- * throw; what it throws becomes the error response.
+ * A {@link RestHandle} answering with {@code application/json} a subclass has rendered whole, into the thread's
+ * growing buffer or anywhere else, and hands over as a {@link ByteArray}, which is copied into the response.
+ * A subclass renders and may throw; what it throws becomes the error response.
+ * <p>
+ * For a document rendered per request, {@link JsonRestHandler} is the cheaper shape: it writes the document
+ * into the channel's buffers as it goes, so no thread keeps a buffer the size of the largest document.
  */
 public abstract class ApplicationJsonRestHandler
         extends AbstractApplicationJsonHandler implements RestHandle {

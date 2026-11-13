@@ -18,9 +18,13 @@ import io.netty.util.AsciiString;
 import java.util.function.IntConsumer;
 
 /**
- * The rendering half every {@code application/json} handler shares: the thread-local generator responses are
- * written into, the content type carrying the charset, and the accounting which lets an oversized buffer
- * shrink back once a response has been copied out of it - see {@link ResponseBuffers}.
+ * The rendering half every {@code application/json} handler shares: the content type carrying the charset,
+ * and, for the handlers which render a document whole before it is copied out -
+ * {@link ApplicationJsonRestHandler}, {@link LazyStaticJsonRestHandler}, {@link JsonErrorHandler} - the
+ * thread-local generator and the accounting which lets an oversized buffer shrink back once a response has
+ * been copied out of it, see {@link ResponseBuffers}. {@link JsonRestHandler} and
+ * {@link ChunkedJsonRestHandler} write through {@link io.github.green4j.newa.text.ByteBufWriter} instead and
+ * take the content type only.
  * <p>
  * A subclass renders and says nothing about how the response is sent, which is what lets the same rendering
  * serve a {@link RestHandle} and a file handler alike.

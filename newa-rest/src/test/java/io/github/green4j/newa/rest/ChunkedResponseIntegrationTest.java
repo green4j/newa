@@ -296,6 +296,13 @@ class ChunkedResponseIntegrationTest {
     }
 
     @Test
+    public void testAStepWhichWritesMoreThanTheWritersArrayArrivesIntact() throws Exception {
+        // the whole collection in one step: megabytes, written into buffer after buffer of one chunk
+        Assertions.assertEquals(expectedJson(LARGE_ITEM_COUNT),
+                get("/v1/chunked/json?items=" + LARGE_ITEM_COUNT + "&batch=" + LARGE_ITEM_COUNT));
+    }
+
+    @Test
     public void testLargeTxtCollectionArrivesIntact() throws Exception {
         Assertions.assertEquals(expectedTxt(LARGE_ITEM_COUNT),
                 get("/v1/chunked/txt?items=" + LARGE_ITEM_COUNT));

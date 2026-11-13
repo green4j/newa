@@ -11,14 +11,16 @@ import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * An admission budget shared by any number of servers in one process. Each accepted connection reserves the
  * estimate of its server and gives it back when the channel closes. A server may reserve a guaranteed
  * connection floor when it registers, and application work may reserve its own bytes with
- * {@link #tryReserve(long, long)}. In this instance, the sum of active estimates, unused guaranteed floors
- * and those reservations never crosses either capacity.
+ * {@link #tryReserve(long, long)}, or wait for them with {@link #reserve(long, long)} and
+ * {@link #tryReserve(long, long, long, TimeUnit)}. In this instance, the sum of active estimates, unused
+ * guaranteed floors and those reservations never crosses either capacity.
  * <p>
  * {@link #builder()} captures the maxima visible at that call: {@link Runtime#maxMemory()} for heap and
  * {@link PlatformDependent#maxDirectMemory()} for Netty direct memory. The former follows an explicit
@@ -159,7 +161,7 @@ public final class ServerMemoryBudget {
      * Receives point-in-time views of every change a server makes to the budget. Calls happen after the
      * accounting lock has been released and may arrive concurrently from the event loops of different
      * servers. Gauge values in an event do not change; its registration reference is the live identity of the
-     * server concerned. A {@link ServerMemoryBudget#tryReserve(long, long)} is not reported: its caller has
+     * server concerned. An application reservation, immediate or waiting, is not reported: its caller has
      * the answer, and its bytes show in the gauges.
      */
     public interface Observer {
@@ -264,8 +266,7 @@ public final class ServerMemoryBudget {
 
     /**
      * An immutable process-wide view of the accounting. Reserved bytes include active connections, capacity
-     * held for guaranteed connection floors which has not been used yet, and open
-     * {@link ServerMemoryBudget#tryReserve(long, long)} reservations.
+     * held for guaranteed connection floors which has not been used yet, and open application reservations.
      */
     public static final class Snapshot {
         private final long maximumHeapBytes;
@@ -361,14 +362,15 @@ public final class ServerMemoryBudget {
     }
 
     /**
-     * The reservation held by one connection or taken by {@link ServerMemoryBudget#tryReserve(long, long)}.
-     * It may be closed from any thread, and only the first close returns it.
+     * The reservation held by one connection or taken by one application reservation. It may be closed from
+     * any thread, and only the first close returns it.
      */
     public static final class Lease implements AutoCloseable {
         /**
          * Reserves nothing: what code which reserves memory is given where there is no budget to reserve from.
+         * A budget never returns it; a budget without room returns null.
          */
-        public static final Lease EMPTY = new Lease(() -> {
+        public static final Lease NO_BUDGET = new Lease(() -> {
         });
 
         private final Runnable release;
@@ -547,22 +549,174 @@ public final class ServerMemoryBudget {
      */
     public Lease tryReserve(final long heapBytes,
                             final long directMemoryBytes) {
-        if (heapBytes < 0) {
-            throw new IllegalArgumentException("heapBytes must not be negative: " + heapBytes);
-        }
-        if (directMemoryBytes < 0) {
-            throw new IllegalArgumentException(
-                    "directMemoryBytes must not be negative: " + directMemoryBytes);
-        }
+        checkSizes(heapBytes, directMemoryBytes);
         synchronized (this) {
-            if (heapBytes > heapCapacityBytes - reservedHeapBytes
-                    || directMemoryBytes > directMemoryCapacityBytes - reservedDirectMemoryBytes) {
+            if (!fits(heapBytes, directMemoryBytes)) {
                 return null;
             }
-            reservedHeapBytes += heapBytes;
-            reservedDirectMemoryBytes += directMemoryBytes;
+            add(heapBytes, directMemoryBytes);
         }
-        return new Lease(() -> unreserve(heapBytes, directMemoryBytes));
+        return lease(heapBytes, directMemoryBytes);
+    }
+
+    /**
+     * Reserves memory for one piece of application work as {@link #tryReserve(long, long)} does, waiting until
+     * both capacities have room for it at the same moment. Nothing is held while waiting, and a zero size
+     * never waits for its capacity. There is no fairness: connections and immediate reservations may take
+     * freed bytes ahead of a waiter, so under sustained load a large reservation may wait indefinitely, as
+     * does one which fits the capacity but not what floors of open registrations and leases never closed
+     * leave of it. Connections are released on Netty event loops, so it must not be called on one: the loop
+     * would stall the releases it waits for, and every channel it carries.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return a lease to close when the work has ended
+     * @throws IllegalArgumentException when a size is negative or exceeds its capacity, which no wait can fit
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease reserve(final long heapBytes,
+                         final long directMemoryBytes) throws InterruptedException {
+        checkSizes(heapBytes, directMemoryBytes);
+        if (exceedsCapacity(heapBytes, directMemoryBytes)) {
+            throw new IllegalArgumentException(
+                    "The reservation exceeds the budget capacity: " + heapBytes + " heap of "
+                            + heapCapacityBytes + ", " + directMemoryBytes + " direct memory of "
+                            + directMemoryCapacityBytes);
+        }
+        if (Thread.interrupted()) {
+            throw new InterruptedException();
+        }
+        synchronized (this) {
+            while (!fits(heapBytes, directMemoryBytes)) {
+                wait();
+            }
+            add(heapBytes, directMemoryBytes);
+        }
+        return lease(heapBytes, directMemoryBytes);
+    }
+
+    /**
+     * Reserves memory for one piece of application work as {@link #reserve(long, long)} does, waiting at most
+     * the timeout. The timeout bounds the wait; it does not guarantee progress. A size which exceeds its
+     * capacity is answered at once, and a timeout of zero or less answers as {@link #tryReserve(long, long)}.
+     * It must not be called on a Netty event loop, for the reason {@link #reserve(long, long)} gives.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @param timeout the longest wait
+     * @param unit of the timeout
+     * @return a lease to close when the work has ended, or null when the timeout elapsed first or a size
+     *         exceeds its capacity
+     * @throws IllegalArgumentException when a size is negative
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease tryReserve(final long heapBytes,
+                            final long directMemoryBytes,
+                            final long timeout,
+                            final TimeUnit unit) throws InterruptedException {
+        checkSizes(heapBytes, directMemoryBytes);
+        if (exceedsCapacity(heapBytes, directMemoryBytes)) {
+            return null;
+        }
+        if (Thread.interrupted()) {
+            throw new InterruptedException();
+        }
+        final long deadline = System.nanoTime() + unit.toNanos(timeout);
+        synchronized (this) {
+            while (!fits(heapBytes, directMemoryBytes)) {
+                final long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    return null;
+                }
+                TimeUnit.NANOSECONDS.timedWait(this, remaining);
+            }
+            add(heapBytes, directMemoryBytes);
+        }
+        return lease(heapBytes, directMemoryBytes);
+    }
+
+    /**
+     * {@link #tryReserve(long, long)} for work which holds heap only; the direct-memory capacity is not
+     * consulted.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @return a lease to close when the work has ended, or null when the heap capacity has no room for it
+     */
+    public Lease tryReserveHeap(final long heapBytes) {
+        return tryReserve(heapBytes, 0);
+    }
+
+    /**
+     * {@link #reserve(long, long)} for work which holds heap only: it waits for the heap capacity alone.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @return a lease to close when the work has ended
+     * @throws IllegalArgumentException when the size is negative or exceeds the heap capacity
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease reserveHeap(final long heapBytes) throws InterruptedException {
+        return reserve(heapBytes, 0);
+    }
+
+    /**
+     * {@link #tryReserve(long, long, long, TimeUnit)} for work which holds heap only: it waits for the heap
+     * capacity alone.
+     *
+     * @param heapBytes estimated heap the work holds
+     * @param timeout the longest wait
+     * @param unit of the timeout
+     * @return a lease to close when the work has ended, or null when the timeout elapsed first or the size
+     *         exceeds the heap capacity
+     * @throws IllegalArgumentException when the size is negative
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease tryReserveHeap(final long heapBytes,
+                                final long timeout,
+                                final TimeUnit unit) throws InterruptedException {
+        return tryReserve(heapBytes, 0, timeout, unit);
+    }
+
+    /**
+     * {@link #tryReserve(long, long)} for work which holds direct memory only; the heap capacity is not
+     * consulted.
+     *
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return a lease to close when the work has ended, or null when the direct-memory capacity has no room
+     *         for it
+     */
+    public Lease tryReserveDirectMemory(final long directMemoryBytes) {
+        return tryReserve(0, directMemoryBytes);
+    }
+
+    /**
+     * {@link #reserve(long, long)} for work which holds direct memory only: it waits for the direct-memory
+     * capacity alone.
+     *
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @return a lease to close when the work has ended
+     * @throws IllegalArgumentException when the size is negative or exceeds the direct-memory capacity
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease reserveDirectMemory(final long directMemoryBytes) throws InterruptedException {
+        return reserve(0, directMemoryBytes);
+    }
+
+    /**
+     * {@link #tryReserve(long, long, long, TimeUnit)} for work which holds direct memory only: it waits for
+     * the direct-memory capacity alone.
+     *
+     * @param directMemoryBytes estimated direct memory the work holds
+     * @param timeout the longest wait
+     * @param unit of the timeout
+     * @return a lease to close when the work has ended, or null when the timeout elapsed first or the size
+     *         exceeds the direct-memory capacity
+     * @throws IllegalArgumentException when the size is negative
+     * @throws InterruptedException when interrupted before or while waiting; nothing is reserved then
+     */
+    public Lease tryReserveDirectMemory(final long directMemoryBytes,
+                                        final long timeout,
+                                        final TimeUnit unit) throws InterruptedException {
+        return tryReserve(0, directMemoryBytes, timeout, unit);
     }
 
     public synchronized Snapshot snapshot() {
@@ -633,14 +787,39 @@ public final class ServerMemoryBudget {
             connections--;
             registration.connections--;
             event = event(registration, null);
+            // Unconditional: a release within the floor frees nothing, and a woken waiter waits again.
+            notifyAll();
         }
         notifyConnectionReleased(event);
+    }
+
+    private boolean fits(final long heapBytes,
+                         final long directMemoryBytes) {
+        return heapBytes <= heapCapacityBytes - reservedHeapBytes
+                && directMemoryBytes <= directMemoryCapacityBytes - reservedDirectMemoryBytes;
+    }
+
+    private boolean exceedsCapacity(final long heapBytes,
+                                    final long directMemoryBytes) {
+        return heapBytes > heapCapacityBytes || directMemoryBytes > directMemoryCapacityBytes;
+    }
+
+    private void add(final long heapBytes,
+                     final long directMemoryBytes) {
+        reservedHeapBytes += heapBytes;
+        reservedDirectMemoryBytes += directMemoryBytes;
+    }
+
+    private Lease lease(final long heapBytes,
+                        final long directMemoryBytes) {
+        return new Lease(() -> unreserve(heapBytes, directMemoryBytes));
     }
 
     private synchronized void unreserve(final long heapBytes,
                                         final long directMemoryBytes) {
         reservedHeapBytes -= heapBytes;
         reservedDirectMemoryBytes -= directMemoryBytes;
+        notifyAll();
     }
 
     private synchronized RegistrationSnapshot snapshot(final Registration registration) {
@@ -661,6 +840,7 @@ public final class ServerMemoryBudget {
                     registration.estimate.directMemoryBytesPerConnection() * unusedGuarantees;
             registration.closed = true;
             event = event(registration, null);
+            notifyAll();
         }
         notifyServerClosed(event);
     }
@@ -710,6 +890,17 @@ public final class ServerMemoryBudget {
             // this is a breadcrumb on a path taken by every admission, and the contract already says an
             // observer cannot change what the budget decided.
             LOGGER.debug("A server memory budget observer failed", reported);
+        }
+    }
+
+    private static void checkSizes(final long heapBytes,
+                                   final long directMemoryBytes) {
+        if (heapBytes < 0) {
+            throw new IllegalArgumentException("heapBytes must not be negative: " + heapBytes);
+        }
+        if (directMemoryBytes < 0) {
+            throw new IllegalArgumentException(
+                    "directMemoryBytes must not be negative: " + directMemoryBytes);
         }
     }
 

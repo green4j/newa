@@ -7,11 +7,9 @@
 
 package io.github.green4j.newa.rest;
 
-import io.github.green4j.jelly.AsciiByteArrayWriter;
-import io.github.green4j.jelly.ClearableByteArrayBufferingWriter;
 import io.github.green4j.jelly.JsonGenerator;
-import io.github.green4j.jelly.Utf8ByteArrayWriter;
 import io.github.green4j.newa.lang.Charset;
+import io.github.green4j.newa.text.ByteBufWriter;
 
 /**
  * Serves a {@link ChunkedJsonRestHandle} as a chunked response. Register it with the plain {@code get} /
@@ -22,17 +20,6 @@ import io.github.green4j.newa.lang.Charset;
  */
 public class ChunkedJsonRestHandler
         extends AbstractApplicationJsonHandler implements RestHandle {
-
-    private static final ThreadLocal<RetainedBuffer<ClearableByteArrayBufferingWriter>> ASCII_CHUNK =
-            ThreadLocal.withInitial(() -> {
-                final AsciiByteArrayWriter writer = new AsciiByteArrayWriter(ResponseChunks.DEFAULT_SIZE);
-                return RenderedResponseBody.newBuffer(writer, size -> writer.set(new byte[size]));
-            });
-    private static final ThreadLocal<RetainedBuffer<ClearableByteArrayBufferingWriter>> UTF8_CHUNK =
-            ThreadLocal.withInitial(() -> {
-                final Utf8ByteArrayWriter writer = new Utf8ByteArrayWriter(ResponseChunks.DEFAULT_SIZE);
-                return RenderedResponseBody.newBuffer(writer, size -> writer.set(new byte[size]));
-            });
 
     private final ChunkedJsonRestHandle handle;
 
@@ -63,7 +50,7 @@ public class ChunkedJsonRestHandler
             return;
         }
 
-        final ChunkedResponseBody body = new Body(context, chunkBuffer(), cursor);
+        final ChunkedResponseBody body = new Body(context, responseCharset, cursor);
         ChunkedResponses.cursorOpened(context);
 
         try {
@@ -75,34 +62,23 @@ public class ChunkedJsonRestHandler
         }
     }
 
-    final RetainedBuffer<ClearableByteArrayBufferingWriter> chunkBuffer() {
-        switch (responseCharset) {
-            case US_ASCII:
-                return ASCII_CHUNK.get();
-            case UTF8:
-                return UTF8_CHUNK.get();
-            default:
-                throw new IllegalStateException();
-        }
-    }
-
     private static final class Body extends RenderedResponseBody {
         // compact, as everywhere else newa generates JSON
         private final JsonGenerator generator = new JsonGenerator(false);
         private final ChunkedJsonRestHandle.Cursor cursor;
 
         private Body(final RestContext context,
-                     final RetainedBuffer<ClearableByteArrayBufferingWriter> buffer,
+                     final Charset charset,
                      final ChunkedJsonRestHandle.Cursor cursor) {
-            super(context, buffer);
+            super(context, charset);
             this.cursor = cursor;
         }
 
         @Override
-        void bind(final ClearableByteArrayBufferingWriter writer) {
+        void bind(final ByteBufWriter writer) {
             // the generator survives between chunks, which is what lets an array opened in the first one be
-            // closed in the last; only its output has to be pointed at the buffer again
-            generator.setOutput(writer);
+            // closed in the last; only its output has to be pointed at the writer again
+            generator.setOutput(writer.output());
         }
 
         @Override

@@ -18,9 +18,11 @@ import io.netty.util.AsciiString;
 import java.util.function.IntConsumer;
 
 /**
- * What {@link AbstractApplicationJsonHandler} is for JSON, for {@code text/plain}: the thread-local
- * {@link io.github.green4j.newa.text.ByteArrayLineBuilder} responses are written into, the content type, and
- * the buffer accounting.
+ * What {@link AbstractApplicationJsonHandler} is for JSON, for {@code text/plain}: the content type, and, for
+ * the handlers which render a text whole before it is copied out - {@link TextPlainRestHandler},
+ * {@link LazyStaticTxtRestHandler}, {@link TextErrorHandler} - the thread-local
+ * {@link io.github.green4j.newa.text.ByteArrayLineBuilder} and the buffer accounting. {@link TxtRestHandler} and
+ * {@link ChunkedTxtRestHandler} write through {@link io.github.green4j.newa.text.ByteBufWriter} instead.
  */
 public abstract class AbstractTextPlainHandler {
     private static final ThreadLocal<RetainedBuffer<ByteArrayLineBuilder>> ASCII_LINE_BUILDER =

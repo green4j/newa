@@ -7,6 +7,7 @@
 
 package io.github.green4j.newa.rest;
 
+import io.github.green4j.jelly.ByteArray;
 import io.github.green4j.newa.json.ByteArrayJsonGenerator;
 import io.github.green4j.newa.text.ByteArrayLineBuilder;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -23,9 +24,11 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 
 /**
- * The JSON generators and line builders the handlers render into are thread-local and reused between
- * requests: that is what keeps responses allocation-free. These tests pin what that reuse means through the
- * real pipeline - the same instance serves every response, it starts out big enough for ordinary ones, and it
+ * The JSON generators and line builders a response is rendered into whole, before it is copied out - by a
+ * subclass of {@link ApplicationJsonRestHandler} or {@link TextPlainRestHandler} - are thread-local and reused
+ * between requests: that is what keeps those responses allocation-free. ({@code getJson} and {@code getTxt}
+ * keep no such buffer: see {@link LargeResponseIntegrationTest}.) These tests pin what that reuse means through
+ * the real pipeline - the same instance serves every response, it starts out big enough for ordinary ones, and it
  * is kept at whatever size the current load needs. When that size stops being needed is a matter of elapsed
  * time, so it is {@link RetainedBufferTest} which covers it, on a clock it can move.
  */
@@ -114,13 +117,33 @@ class ResponseBufferRetentionTest {
                 1,
                 "test-build"
         );
-        builder.getJson("/json/small", (context, output) -> output.stringValue("small"));
-        builder.getJson("/json/large", (context, output) ->
-                output.stringValue(contentOf(LARGE_CONTENT_SIZE)));
-        builder.getTxt("/txt/small", (context, output) -> output.append("small"));
-        builder.getTxt("/txt/large", (context, output) ->
-                output.append(contentOf(LARGE_CONTENT_SIZE)));
+        builder.get("/json/small", json("small"));
+        builder.get("/json/large", json(contentOf(LARGE_CONTENT_SIZE)));
+        builder.get("/txt/small", txt("small"));
+        builder.get("/txt/large", txt(contentOf(LARGE_CONTENT_SIZE)));
         return builder.build();
+    }
+
+    private static RestHandle json(final String content) {
+        return new ApplicationJsonRestHandler() {
+            @Override
+            protected ByteArray doHandle(final RestContext context) {
+                final ByteArrayJsonGenerator generator = jsonGenerator();
+                generator.start().stringValue(content);
+                return generator.finish();
+            }
+        };
+    }
+
+    private static RestHandle txt(final String content) {
+        return new TextPlainRestHandler() {
+            @Override
+            protected ByteArray doHandle(final RestContext context) {
+                final ByteArrayLineBuilder text = lineBuilder();
+                text.append(content);
+                return text.array();
+            }
+        };
     }
 
     @BeforeEach

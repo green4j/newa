@@ -19,8 +19,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * {@link Utf8JsonWriter}: a document is generated compact, in UTF-8, into a buffer of the allocator exactly
- * its size, nothing is taken from the allocator for a rendering which throws, and the generator of the
- * thread is reused, except after a large document or from the rendering of a write in progress.
+ * its size if it fits the thread's array and into several if it does not, a rendering which throws leaves
+ * nothing behind, and a write from the rendering of a write in progress is written apart.
  */
 class Utf8JsonWriterTest {
     private static final String TEXT = "\u0436\u0435\u043b\u0435 \u6570\u636e \ud83d\ude00";
@@ -76,7 +76,7 @@ class Utf8JsonWriterTest {
     }
 
     @Test
-    void aRenderingWhichThrowsTakesNothingFromTheAllocator() {
+    void aRenderingWhichThrowsLeavesNothingBehind() {
         final int[] allocated = new int[1];
         final AbstractByteBufAllocator counting = new AbstractByteBufAllocator(false) {
             @Override
@@ -124,20 +124,9 @@ class Utf8JsonWriterTest {
     }
 
     @Test
-    void theGeneratorIsKeptByTheThreadUnlessTheBufferGrewLarge() {
-        final Object generator = Utf8JsonWriter.retainedGenerator();
-        utf8(Utf8JsonWriter.write(UnpooledByteBufAllocator.DEFAULT, "small",
-                Utf8JsonWriterTest::renderTheDocument));
-        Assertions.assertSame(generator, Utf8JsonWriter.retainedGenerator());
-
-        final String large = "x".repeat(Utf8JsonWriter.RETAINED_BUFFER_BYTES);
-        utf8(Utf8JsonWriter.write(UnpooledByteBufAllocator.DEFAULT, large,
-                Utf8JsonWriterTest::renderTheDocument));
-        final Object afterLarge = Utf8JsonWriter.retainedGenerator();
-        Assertions.assertNotSame(generator, afterLarge, "The generator which grew a large buffer was kept");
-
-        utf8(Utf8JsonWriter.write(UnpooledByteBufAllocator.DEFAULT, "small",
-                Utf8JsonWriterTest::renderTheDocument));
-        Assertions.assertSame(afterLarge, Utf8JsonWriter.retainedGenerator());
+    void aDocumentLargerThanTheArrayOfTheThreadIsWrittenWhole() {
+        final String large = (TEXT + "x".repeat(1000)).repeat(1000); // megabytes, Cyrillic across the buffers
+        Assertions.assertEquals(expected(large), utf8(Utf8JsonWriter.write(
+                UnpooledByteBufAllocator.DEFAULT, large, Utf8JsonWriterTest::renderTheDocument)));
     }
 }

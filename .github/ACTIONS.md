@@ -113,7 +113,7 @@ git push
 ```
 git tag v0.4.0                                                                                                                                                                                                        
 git push origin v0.4.0
-```
+``` 
 3. Increment version to next snapshot
 ```
 echo 0.4.1-SNAPSHOT > version.txt                                                                                                                                                                                     
